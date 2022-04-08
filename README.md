@@ -28,4 +28,4 @@ Steps:
     - Mount `{minikube}/kg_service` to `/home/tapis/service` in the `kg-main` pod. Meaning you can work with persistent changes in the repo. Mounts with minikube require users first mount their volumes to the minikube internal mounts, do that with:
       - `minikube mount ~/kg_service/service:/kg_service`
       - You will have to keep the command running, no daemon mode.
-  - Jupyter Lab gets started. Use locally with `$(minikube ip):(k get services kg-main-jupyter port here)`.
+  - Jupyter Lab auto started within main. Link should be in Make stdout under the up target.

@@ -88,7 +88,7 @@ up: vars build
 	@echo "  🔥 : Running burnup."
 ifeq ($(DEV_TOOLS),true)
 	@sed -i 's/#DEV//g' *
-	echo "  🔗 : Jupyter Lab URL: http://$$(minikube ip):$$(kubectl get service $(SERVICE_NAME)-main-jupyter | grep -o -P '(?<=8888:).*(?=/TCP)')"
+	echo "  🔗 : Jupyter Lab URL: $(LCYAN)http://$$(minikube ip):$$(kubectl get service $(SERVICE_NAME)-main-jupyter | grep -o -P '(?<=8888:).*(?=/TCP)')$(NC)"
 endif
 	@echo ""
 	./burnup
