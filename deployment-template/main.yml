@@ -45,13 +45,20 @@ spec:
         - name: MAKEFILE_SERVICE_NAME-config
           mountPath: /home/tapis/config.json
           subPath: config.json
-#DEV        - name: devfolder
-#DEV          mountPath: /home/tapis
+#DEV        - name: dev-service
+#DEV          mountPath: /home/tapis/service
+#DEV        - name: dev-entry
+#DEV          mountPath: /home/tapis/entry.sh
+
       volumes:
       - name: MAKEFILE_SERVICE_NAME-config
         configMap: 
           name: MAKEFILE_SERVICE_NAME-config 
-#DEV      - name: devfolder
+#DEV      - name: dev-service
 #DEV        hostPath:
-#DEV          path: /kg_service #NOTE FOR MINIKUBE: Minikube is a vm, you have to minikube mount for hostpath to work
+#DEV          path: /kg_service/service #NOTE FOR MINIKUBE: Minikube is a vm, you have to minikube mount for hostpath to work
 #DEV          type: Directory
+#DEV      - name: dev-entry
+#DEV        hostPath:
+#DEV          path: /kg_service/entry.sh #NOTE FOR MINIKUBE: Minikube is a vm, you have to minikube mount for hostpath to work
+#DEV          type: File
