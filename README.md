@@ -19,12 +19,8 @@ Generally devs would use `make clean up` over and over again. This will clean up
 Everything here assumes minikube.
 
 Minikube setup:
-- Install Minikube with: https://minikube.sigs.k8s.io/docs/start/
-- Install kubectl with: https://kubernetes.io/docs/tasks/tools/install-kubectl-linux/
-  - I believe kubectl will automatically link to minikube, please let me know if that's not the case though and what you had to do.
-- `minikube start`
-- Test with `kubectl get pods`.
-
+- Go through this setup guide: https://minikube.sigs.k8s.io/docs/start/
+  - Makesure you get kubectl installed in step 3.
 
 ### Dev Container
 You can use dev containers with Minikube with the Makefile!
