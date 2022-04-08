@@ -85,10 +85,11 @@ up: vars build
 	@sed -i 's/MAKEFILE_SERVICE_NAME/$(SERVICE_NAME)/g' *
 	@sed -i 's/MAKEFILE_SERVICE_PASS/$(SERVICE_PASS)/g' *
 	@sed -i 's/MAKEFILE_TAG/$(TAG)/g' *
+	@echo "  🔥 : Running burnup."
 ifeq ($(DEV_TOOLS),true)
 	@sed -i 's/#DEV//g' *
+	echo "  🔗 : Jupyter Lab URL: http://$$(minikube ip):$$(kubectl get service $(SERVICE_NAME)-main-jupyter | grep -o -P '(?<=8888:).*(?=/TCP)')"
 endif
-	@echo "  🔥 : Running burnup."
 	@echo ""
 	./burnup
 	echo ""

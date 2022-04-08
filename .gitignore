@@ -127,3 +127,9 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+
+
+####CUSTOM FOR KGSERVICE
+# Don't need tmp deployment folder ever
+deployment

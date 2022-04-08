@@ -15,7 +15,7 @@ spec:
       - name: MAKEFILE_SERVICE_NAME-main
         imagePullPolicy: Never
         image: MAKEFILE_SERVICE_NAME/core:MAKEFILE_TAG
-#DEV        command: ["jupyter", "notebook", "--port=8888", "--no-browser", "--ip=0.0.0.0", "--allow-root"]
+#DEV        command: ["jupyter", "lab", "service", "--ip=0.0.0.0", "--no-browser", "--ServerApp.token=''"]
         resources:
           limits:
             cpu: "2"
