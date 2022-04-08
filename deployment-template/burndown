@@ -1,0 +1,19 @@
+# Secrets
+kubectl apply -f secrets.yml
+
+# Services
+#kubectl delete -f services.yml
+
+# Security/Role
+kubectl delete -f security.yml
+
+# Configs
+kubectl delete configmap MAKEFILE_SERVICE_NAME-config
+
+# PVC
+
+# Deploy
+kubectl delete -f rabbit.yml
+kubectl delete -f neo.yml
+kubectl delete -f main.yml
+kubectl delete -f spawner.yml

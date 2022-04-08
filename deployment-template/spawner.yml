@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: MAKEFILE_SERVICE_NAME-spawner
+spec:
+  selector:
+    matchLabels:
+      app: MAKEFILE_SERVICE_NAME-spawner
+  template:
+    metadata:
+      labels:
+        app: MAKEFILE_SERVICE_NAME-spawner
+    spec:
+      serviceAccountName: MAKEFILE_SERVICE_NAME-serviceaccount
+      containers:
+      - name: MAKEFILE_SERVICE_NAME-spawner
+        imagePullPolicy: Never
+        image: MAKEFILE_SERVICE_NAME/core:MAKEFILE_TAG
+        command: ["python3","-u","/home/tapis/service/spawner.py"]
+        resources:
+          limits:
+            cpu: "2"
+            memory: "2G"
+        env:
+        - name: SERVICE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: tapis-MAKEFILE_SERVICE_NAME-secrets
+              key: service-password
+        - name: NEO_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: tapis-MAKEFILE_SERVICE_NAME-secrets
+              key: neo-password
+        - name: RABBIT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: tapis-MAKEFILE_SERVICE_NAME-secrets
+              key: rabbit-password
+        volumeMounts:
+        - name: MAKEFILE_SERVICE_NAME-config
+          mountPath: /home/tapis/config.json
+          subPath: config.json
+      volumes:
+      - name: MAKEFILE_SERVICE_NAME-config
+        configMap: 
+          name: MAKEFILE_SERVICE_NAME-config 

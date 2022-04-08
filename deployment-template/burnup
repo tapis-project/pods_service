@@ -1,0 +1,19 @@
+# Secrets
+kubectl apply -f secrets.yml
+
+# Services
+kubectl apply -f services.yml
+
+# Security/Role
+kubectl apply -f security.yml
+
+# Configs
+kubectl create configmap MAKEFILE_SERVICE_NAME-config --from-file=config.json
+
+# PVC
+
+# Deploy
+kubectl apply -f rabbit.yml
+kubectl apply -f neo.yml
+kubectl apply -f main.yml
+kubectl apply -f spawner.yml

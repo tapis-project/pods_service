@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: MAKEFILE_SERVICE_NAME-neo
+spec:
+  selector:
+    matchLabels:
+      app: MAKEFILE_SERVICE_NAME-neo
+  template:
+    metadata:
+      labels:
+        app: MAKEFILE_SERVICE_NAME-neo
+    spec:
+      containers:
+      - name: MAKEFILE_SERVICE_NAME-neo
+        image: neo4j
+        imagePullPolicy: Always
+        resources:
+          limits:
+            memory: "8G"
+            cpu: "2"
+        env:
+        - name: NEO4JLABS_PLUGINS
+          value: '["apoc", "n10s"]'
+        - name: NEO4J_USERNAME
+          value: "neo4j"
+        - name: NEO4J_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: tapis-MAKEFILE_SERVICE_NAME-secrets
+              key: neo-password
+        - name: NEO4J_causalClustering_initialDiscoveryMembers
+          value: "neo4j-core-0.neo4j.default.svc.cluster.local:5000,neo4j-core-1.neo4j.default.svc.cluster.local:5000,neo4j-core-2.neo4j.default.svc.cluster.local:5000"
+        - name: NEO4J_dbms_security_auth__enabled
+          value: "false"
+        - name: NEO4J_dbms_mode
+          value: CORE
+        - name: NEO4J_dbms_memory_heap_max__size #dbms.memory.heap.max_size
+          value: "6g"
+        - name: NEO4J_dbms_memory_heap_initial__size #dbms.memory.heap.initial_size
+          value: "2g"
+        - name: NEO4J_apoc_import_file_enabled
+          value: "true"
+        - name: NEO4J_apoc_export_file_enabled
+          value: "true"
+#        - name: NEO4J_dbms_directories_import
+#          value: "/kgservice"
+        command: ["/bin/bash", "-c", 'export NEO4J_dbms_default__advertised__address=$(hostname -f) &&
+                                      export NEO4J_causalClustering_discoveryAdvertisedAddress=$(hostname -f)::5000 &&
+                                      export NEO4J_causalClustering_transactionAdvertisedAddress=$(hostname -f):6000 &&
+                                      export NEO4J_causalClustering_raftAdvertisedAddress=$(hostname -f):7000 &&
+                                      exec /docker-entrypoint.sh "neo4j"']
+        ports:
+        - containerPort: 5000
+          name: discovery
+        - containerPort: 6000
+          name: tx
+        - containerPort: 7000
+          name: raft
+        - containerPort: 7474
+          name: browser
+        - containerPort: 7687
+          name: bolt
+        volumeMounts:
+        - name: importfolder
+          mountPath: /var/lib/neo4j/import
+      volumes:
+      - name: importfolder
+        hostPath:
+          path: /import #NOTE FOR MINIKUBE: Minikube is a vm, you have to minikube mount for hostpath to work
+          type: Directory

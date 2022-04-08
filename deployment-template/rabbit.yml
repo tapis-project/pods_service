@@ -1,0 +1,38 @@
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: MAKEFILE_SERVICE_NAME-rabbit
+spec:
+  selector:
+    matchLabels:
+      app: MAKEFILE_SERVICE_NAME-rabbit
+  template:
+    metadata:
+      labels:
+        app: MAKEFILE_SERVICE_NAME-rabbit
+    spec:
+      containers:
+      - name: MAKEFILE_SERVICE_NAME-rabbit
+        image: rabbitmq:3.6.12-management
+        resources:
+          limits:
+            cpu: "2"
+            memory: "2G"
+        ports:
+        - name: rabbit
+          containerPort: 5672
+        - name: rabbit-dash
+          containerPort: 15672
+        env:
+        - name: RABBITMQ_NODENAME
+          value: "MAKEFILE_SERVICE_NAME-rabbit"
+        - name: RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS
+          value: "+A 128"
+        - name: RABBITMQ_DEFAULT_USER
+          value: "admin"
+        - name: RABBITMQ_DEFAULT_PASS
+          valueFrom:
+            secretKeyRef:
+              name: tapis-MAKEFILE_SERVICE_NAME-secrets
+              key: rabbit-password
