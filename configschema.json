@@ -2,27 +2,21 @@
     "$schema": "http://json-schema.org/schema#",
     "$id": "http://github.com/tapis-project/tapisflask/schemas/configschema.json",
     "type": "object",
-    "additionalProperties": false,
+    "additionalProperties": true,
     "required":[
       "service_name",
       "version",
       "log_level",
-      "mongo_host",
-      "mongo_port",
       "rabbit_uri",
       "global_tenant_object",
-      "worker_socket_paths",
+      "global_site_object",
       "spawner_host_id",
-      "worker_fifo_paths",
-      "web_encryption_key",
-      "spawner_max_cmd_length",
-      "spawner_max_workers_per_host",
-      "spawner_max_workers_per_actor"
+      "spawner_max_cmd_length"
     ],
     "properties": {
       "python_framework_type": {
         "type": "string",
-        "default": "flask",
+        "default": "fastapi",
         "description": "The framework this service will use. e.g. Flask, Django, FastApi, etc."
       },
       "kubernetes_namespace": {
@@ -35,22 +29,6 @@
         "default": "docker",
         "description": "Container backend to use when creating workers/execs."
       },
-      "mongo_host": {
-        "type": "string",
-        "description": "The url for the mongo instance."
-      },
-      "mongo_port": {
-        "type": "integer",
-        "description": "The port to access the mongo instance."
-      },
-      "store_mongo_user": {
-        "type": "string",
-        "description": "The username for the mongo instance if authentication is active."
-      },
-      "store_mongo_password": {
-        "type": "string",
-        "description": "The password for the mongo instance if authentication is active."
-      },
       "rabbit_uri": {
         "type": "string",
         "description": "URI for rabbitMQ."
@@ -58,10 +36,6 @@
       "spawner_host_id": {
         "type": "integer",
         "description": "Unique host_id for worker host. Each host should have at least one spawner and health check worker."
-      },
-      "spawner_host_queues": {
-        "type": "array",
-        "description": "List of queues that spawners on this host will subscribe to."
       },
       "spawner_host_ip": {
         "type": "string",
@@ -72,88 +46,9 @@
         "description": "Maximum number of messages that the autoscaler should put on the default command channel.",
         "default": 10
       },
-      "spawner_max_workers_per_host": {
-        "type": "integer",
-        "description": "Maximum number of workers that are allowed to simultaneously be running on a given compute host."
-      },
-      "spawner_max_workers_per_actor": {
-        "type": "integer",
-        "description": "Maximum number of workers that a given actor can have at one time."
-      },
-      "spawner_docker_network": {
-        "type": "string",
-        "description": "Sets worker and spawner network. Otherwise uses default network for host",
-        "default": null
-      },
       "spawner_abaco_conf_host_path": {
         "type": "string",
         "description": "Sets abaco conf host path if it is not set by environment variable"
-      },
-      "docker_dd": {
-        "type": "string",
-        "description": "url to use for docker daemon by spawners and workers."
-      },
-      "worker_init_count": {
-        "type": "integer",
-        "description": "Number of worker containers to initially start when an actor is created.",
-        "default": 1
-      },
-      "worker_autoscaling": {
-        "type": "boolean",
-        "description": "Set whether or not autoscaling is enabled."
-      },
-      "worker_max_run_time": {
-        "type": "integer",
-        "description": "Max length of time (secs) an actor is allowed to execute before being killed. (-1 = indefinite)",
-        "default": -1
-      },
-      "worker_mem_limit": {
-        "type": "integer",
-        "description": "Maximum amount of memory an Actor container can use. Like --memory flag for Docker. (-1 = unlimited)",
-        "default": -1
-      },
-      "worker_max_cpus": {
-        "type": "integer",
-        "description": "Maximum number of CPUs available to each actor. (Not a guarantee) (-1 = unlimited)",
-        "default": 1000000000
-      },
-      "worker_worker_ttl": {
-        "type": "integer",
-        "description": "Length of time (secs) to keep an idle worker alive. (-1 = indefinite)",
-        "default": -1
-      },
-      "worker_sync_max_idle_time": {
-        "type": "integer",
-        "description": "Length of time (secs) to keep an idle worker alive when actor has the 'sync' hint.",
-        "default":600
-      },
-      "worker_auto_remove": {
-        "type": "boolean",
-        "description": "Whether worker should be scheduled with 'auto_remove' flag. Limited to docker version > 1.25.",
-        "default":true
-      },
-      "worker_privileged_mounts": {
-        "type": "array",
-        "description": "The mounts for a 'privileged' actor containers."
-      },
-      "worker_leave_containers": {
-        "type": "boolean",
-        "description": "Whether to leave the actor containers or remove them. True is helpful for debugging.",
-        "default": false
-      },
-      "worker_socket_paths": {
-        "type": "string",
-        "description": "Where to mount worker sockets on host and in container for results. Formatted as host_path:container_path.",
-        "default": null
-      },
-      "worker_fifo_paths": {
-        "type": "string",
-        "description": "Where to mount worker fifos on host and in container for binary messages. Formatted as host_path:container_path.",
-        "default": null
-      },
-      "web_encryption_key": {
-        "type": "string",
-        "description": "Encryption key for encrypted configs. View dev docs for example on how to create the key."
       },
       "web_access_control": {
         "type": "string",
@@ -168,10 +63,6 @@
         "type": "boolean",
         "description": "Enables use of nonce for auth with API. x-nonce param is only checked in absence of a JWT header."
       },
-      "web_tenant_name": {
-        "type": "string",
-        "description": "The name of the tenant when not using JWT."
-      },
       "web_apim_public_key": {
         "type": "string",
         "description": "Public key for the apim instance when deployed behind apim (jwt access control)"
@@ -181,29 +72,10 @@
         "description": "Whether the web apps return a stacktrace or a nice JSON object on an APIException.",
         "default":false
       },
-      "web_log_ex": {
-        "type": "integer",
-        "description": "Amount of time (secs) to store log data. (-1 = indefinite)",
-        "default": 43200
-      },
-      "web_max_log_length": {
-        "type": "integer",
-        "description": "Max length (bytes) to store an actors exec's logs. Truncated otherwise. Cannot exceed max mongo doc len.",
-        "default":1000000
-      },
       "web_case": {
         "type": "string",
         "description": "Either to use camel or snake case. Changes return responses. Default is snake.",
         "pattern": "camel|snake"
-      },
-      "web_max_content_length": {
-        "type": "integer",
-        "description": "Maximum content length (bytes) allow for raw (binary) data messages.",
-        "default": 500000000
-      },
-      "web_all_queues": {
-        "type": "array",
-        "description": "List of all allowable queues"
       },
       "global_tenant_object": {
         "type": "object",
@@ -212,12 +84,18 @@
         "properties": {
           "log_ex": {
             "type": "integer",
-            "description": "Default amount of time, in seconds, before a log is deleted from Mongo DB."
+            "description": "Default amount of time, in seconds, before a log is deleted from Mongo DB.",
+            "default": 43200
           },
           "log_ex_limit": {
             "type": "integer",
             "description": "Ceiling for custom log_ex able to be set for a tenant."
           },
+          "web_max_log_length": {
+            "type": "integer",
+            "description": "Max length (bytes) to store an actors exec's logs. Truncated otherwise. Cannot exceed max mongo doc len.",
+            "default":1000000
+          },    
           "use_tas_uid": {
             "type": "boolean",
             "description": "Whether or not to use tas for authentication.",

@@ -25,7 +25,7 @@ Steps:
     - This could error out. Read the error, but a lot of the time, you just need to refresh the cluster page because you forgot that you redeployed.
 - Bonus fun:
   - Setting `DEV_TOOLS` to true in the Makefile will:
-    - Mount `{minikube}/kg_service` to `/home/tapis/service` in the `kg-main` pod. Meaning you can work with persistent changes in the repo. Mounts with minikube require users first mount their volumes to the minikube internal mounts, do that with:
-      - `minikube mount ~/kg_service/service:/kg_service`
+    - Mount `{minikube}/kg_service` to `/home/tapis` in the `kg-main` pod. Meaning you can work with persistent changes in the repo. Mounts with minikube require users first mount their volumes to the minikube internal mounts, do that with:
+      - `minikube mount ~/kg_service:/kg_service`
       - You will have to keep the command running, no daemon mode.
   - Jupyter Lab auto started within main. Link should be in Make stdout under the up target.

@@ -10,8 +10,8 @@
         "dev",
         "admin"
     ],
-    "version": "k8",
-    "log_file": "/home/tapis/runtime_files/logs/service.log",
+    "version": "dev",
+    "log_file": "",
     "log_level": "DEBUG",
     "databases": {
         "tacc": {
@@ -31,8 +31,6 @@
     "spawner_host_id": 0,
     "spawner_host_ip": "who knows?",
     "spawner_max_cmd_length": 10,
-    "spawner_max_workers_per_host": 75,
-    "spawner_max_workers_per_actor": 6,
     "web_access_control": "jwt",
     "web_user_role": "Internal/everyone",
     "web_accept_nonce": true,
@@ -40,7 +38,6 @@
     "web_show_traceback": false,
     "web_max_log_length": 1000000,
     "web_case": "snake",
-    "web_max_content_length": 500000000,
     "site_id": "tacc",
     "global_site_object": {
         "site_rabbitmq_pass": "defaultpass"

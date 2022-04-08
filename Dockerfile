@@ -2,9 +2,9 @@
 # Image: kg/core
 
 # inherit from the flaskbase iamge:
-#FROM tapis/flaskbase-plugins:latest
-FROM python:3.10
-RUN useradd tapis -u 4872
+FROM tapis/flaskbase-plugins:latest
+#FROM python:3.10
+#RUN useradd tapis -u 4872
 
 
 # set the name of the api, for use by some of the common modules.

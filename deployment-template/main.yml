@@ -46,7 +46,7 @@ spec:
           mountPath: /home/tapis/config.json
           subPath: config.json
 #DEV        - name: devfolder
-#DEV          mountPath: /home/tapis/service
+#DEV          mountPath: /home/tapis
       volumes:
       - name: MAKEFILE_SERVICE_NAME-config
         configMap: 

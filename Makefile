@@ -75,8 +75,9 @@ help:
 #: Deploy service
 up: vars build
 	@echo "Makefile: $(GREEN)up$(NC)"
+	# We keep config.json in root so mount later is easier. cp to template folder each time.
+	cp config.json deployment-template
 	@echo "  🔍 : Looking to run ./burnup in deployment folder."
-
 	rm -rf deployment; mkdir deployment; cp -r deployment-template/* deployment;
 	cd deployment
 	@echo "  🔨 : Created deployment folder with templates."
@@ -167,6 +168,7 @@ down:
 clean: down
 	@echo "Makefile: $(GREEN)clean$(NC)"
 	echo "  🔍 : Looking to delete deployment folder."
+	rm deployment-template/config.json
 	if [ -d "deployment" ]; then
 		rm -rf deployment
 		echo "  🧹 : Deployment folder deleted."
