@@ -1,7 +1,7 @@
 from functools import partial
 import os
 
-from pymongo import errors, TEXT
+from store import NeoStore
 
 from tapisservice.config import conf
 from __init__ import t
@@ -173,196 +173,76 @@ def neo_initialization():
     """
     # 
     # Getting user/pass of database.
-    try:
-        admin_neo_user = conf.admin_neo_user
-        admin_neo_pass = conf.
+    print("This isn't needed")
+    # try:
+    #     admin_neo_user = conf.admin_neo_user
+    #     admin_neo_pass = conf.
         
-    except Exception as e:
-        msg = f""
-        logger.critical(msg)
-        raise RuntimeError(msg)
+    # except Exception as e:
+    #     msg = f""
+    #     logger.critical(msg)
+    #     raise RuntimeError(msg)
+
+    # # We initialize each database requested.
+    # for database in conf.databases:
 
 
+# def neo_index_initialization():
+#     """
+#     Seperate function to initialize mongo so that he sometimes lengthy process
+#     doesn't slow down stores.py imports as it only needs to be called once.
+#     Initialization consists of creating indexes for Mongo. One-time/deployment
+#     """
+#     for site in SITE_LIST:
+#         # Getting site object with parameters for specific site.
+#         site_object = conf.get(f"{site}_site_object") or {}
 
+#         # Sets an expiry variable 'exp'. So whenever a document gets placed with it
+#         # the doc expires after 0 seconds. BUT! If exp is set as a Mongo Date, the
+#         # Mongo TTL index will wait until that Date and then delete after 0 seconds.
+#         # So we can delete at a specific time if we set expireAfterSeconds to 0
+#         # and set the time to expire on the 'exp' variable.
+#         try:
+#             logs_store[site]._db.create_index("exp", expireAfterSeconds=0)
+#         except errors.OperationFailure:
+#             # this will happen if the index already exists.
+#             pass
 
-
-
-
-
-
-
-def mongo_initialization():
-    """
-    Initial site initialization for mongo using pymongo.
-    Creating database with their site user (abaco_{site}_admin) and
-    giving them readWrite role for their site DB. One-time/deployment.
-
-    Initial user is already root, so they should have permissions to
-    everything already. (Done in docker-compose).
-    """
-    # Getting admin/root credentials to create users.
-    try:
-        admin_mongo_user = conf.admin_mongo_user
-        admin_mongo_pass = conf.admin_mongo_pass
-    except Exception as e:
-        msg = f"MongoDB init requires mongo admin user and password. e: {e}"
-        logger.critical(msg)
-        raise RuntimeError(msg)
-
-    if not isinstance(admin_mongo_user, str) or not isinstance(admin_mongo_pass, str):
-        msg = f"MongoDB creds must be of type 'str'. user: {type(admin_mongo_user)}, pass: {type(admin_mongo_pass)}."
-        logger.critical(msg)
-        raise RuntimeError(msg)
-
-    if not admin_mongo_user or not admin_mongo_pass:
-        msg = f"MongoDB creds were given, but were None or empty. user: {admin_mongo_user}, pass: {admin_mongo_pass}" 
-        logger.critical(msg)
-        raise RuntimeError(msg)
-
-    logger.debug(f"Administrating MongoDB with user: {admin_mongo_user}.")
-    mongo_obj = MongoStore(host=conf.mongo_host,
-                           port=conf.mongo_port,
-                           database="random", # db doesn't matter when just using mongo_client
-                           user=admin_mongo_user,
-                           password=admin_mongo_pass)
-    mongo_client = mongo_obj._mongo_client
-
-
-    try:    
-        for site in SITE_LIST:
-            # Getting site object with parameters for specific site.
-            site_object = conf.get(f"{site}_site_object") or {}
-
-            # Checking for Mongo credentials for each site.
-            site_mongo_user = f"abaco_{site}_user"
-            site_mongo_pass = site_object.get("site_mongo_pass")
-            if not site_mongo_pass:
-                msg = f'No site_mongo_pass found for site: {site}. Using Global.'
-                logger.warning(msg)
-                site_mongo_pass = conf.global_site_object.get("site_mongo_pass")
-                if not site_mongo_pass:
-                    msg = f'No global "site_mongo_pass" to act as default password. Cannot initialize.'
-                    logger.critical(msg)
-                    raise KeyError(msg)
-
-            # Site DB Name
-            site_db_name = f"abaco_{site}"
-            
-            # Getattr gets the database on the mongo_client to create user on
-            site_database = getattr(mongo_client, site_db_name)
-            try:
-                site_database.command("createUser", site_mongo_user, pwd=site_mongo_pass, roles=[{'role': 'readWrite', 'db': site_db_name}])
-            except errors.OperationFailure:
-                msg = f"User {site_mongo_user} already exists, skipping init. (roles could be wrong)."
-                logger.warning(msg)
-            logger.debug(f"MongoDB init complete for site: {site}.")
-            print(f"MongoDB init complete for site: {site}.")
-    except Exception as e:
-        # README. If you get this, lots of things could be wrong.
-        # "OperationFailure" could mean docker-compose lacks MONGO_INITDB_ROOT_USERNAME/PASS vars.
-        # Could also just be Mongo isn't working. Could also mean TLS isn't working.
-        msg = f"Error setting up mongo for site: {site} e: {repr(e)}"
-        logger.critical(msg)
-        raise Exception(msg)
-
-def mongo_index_initialization():
-    """
-    Seperate function to initialize mongo so that he sometimes lengthy process
-    doesn't slow down stores.py imports as it only needs to be called once.
-    Initialization consists of creating indexes for Mongo. One-time/deployment
-    """
-    for site in SITE_LIST:
-        # Getting site object with parameters for specific site.
-        site_object = conf.get(f"{site}_site_object") or {}
-
-        # Sets an expiry variable 'exp'. So whenever a document gets placed with it
-        # the doc expires after 0 seconds. BUT! If exp is set as a Mongo Date, the
-        # Mongo TTL index will wait until that Date and then delete after 0 seconds.
-        # So we can delete at a specific time if we set expireAfterSeconds to 0
-        # and set the time to expire on the 'exp' variable.
-        try:
-            logs_store[site]._db.create_index("exp", expireAfterSeconds=0)
-        except errors.OperationFailure:
-            # this will happen if the index already exists.
-            pass
-
-        # Creating wildcard text indexing for full-text mongo search
-        logs_store[site].create_index([('$**', TEXT)])
-        executions_store[site].create_index([('$**', TEXT)])
-        actors_store[site].create_index([('$**', TEXT)])
-        workers_store[site].create_index([('$**', TEXT)])
+#         # Creating wildcard text indexing for full-text mongo search
+#         logs_store[site].create_index([('$**', TEXT)])
+#         executions_store[site].create_index([('$**', TEXT)])
+#         actors_store[site].create_index([('$**', TEXT)])
+#         workers_store[site].create_index([('$**', TEXT)])
 
 def role_initialization():
     """
     Creating roles at reg startup so that we can insure they always exist and that they're in all tenants from now on.
     """
     tenants = conf.tenants or []
-    for tenant in tenants:
-        t.sk.createRole(roleTenant=tenant, roleName='abaco_admin', description='Admin role in Abaco.', _tapis_set_x_headers_from_service=True)
-        t.sk.createRole(roleTenant=tenant, roleName='abaco_privileged', description='Privileged role in Abaco.', _tapis_set_x_headers_from_service=True)
-        t.sk.grantRole(tenant=tenant, roleName='abaco_admin', user='abaco', _tapis_set_x_headers_from_service=True)
-        t.sk.grantRole(tenant=tenant, roleName='abaco_admin', user='streams', _tapis_set_x_headers_from_service=True)
+    # for tenant in tenants:
+    #     t.sk.createRole(roleTenant=tenant, roleName='abaco_admin', description='Admin role in Abaco.', _tapis_set_x_headers_from_service=True)
+    #     t.sk.createRole(roleTenant=tenant, roleName='abaco_privileged', description='Privileged role in Abaco.', _tapis_set_x_headers_from_service=True)
+    #     t.sk.grantRole(tenant=tenant, roleName='abaco_admin', user='abaco', _tapis_set_x_headers_from_service=True)
+    #     t.sk.grantRole(tenant=tenant, roleName='abaco_admin', user='streams', _tapis_set_x_headers_from_service=True)
+
 
 if __name__ == "__main__":
-    # Rabbit and Mongo only go through init on primary site.
+    # rabbit and neo only go through init on primary site.
     rabbit_initialization()
-    mongo_initialization()
+    #neo_initialization()
+    role_initialization()
 
 # We do this outside of a function because the 'store' objects need to be imported
 # by other scripts. Functionalizing it would create more code and make it harder
 # to read in my opinion.
-# Mongo is used for accounting, permissions and logging data for its scalability.
-logs_store = {}
-permissions_store = {}
-executions_store = {}
-clients_store = {}
-actors_store = {}
-workers_store = {}
-nonce_store = {}
-alias_store = {}
-pregen_clients = {}
-abaco_metrics_store = {}
-configs_store = {}
-configs_permissions_store = {}
+neo_store = {}
 
-# We go through each site, initializing database objects for ones we will use.
+for db_name, db_conf in conf.databases.items():
+    neo_store[db_name] = NeoStore(host=db_conf["host"],
+                                  port=db_conf["bolt"],
+                                  user=db_conf["user"],
+                                  passw=db_conf["pass"])
+
 for site in SITE_LIST:
-    # Getting site object with parameters for specific site.
-    site_object = conf.get(f"{site}_site_object") or {}
-
-    # Checking for Mongo credentials for each site.
-    site_mongo_user = f"abaco_{site}_user"
-    site_mongo_pass = site_object.get("site_mongo_pass") or conf.get("global_site_object").get("site_mongo_pass")
-
-    # Site DB Name
-    site_db_name = f"abaco_{site}"
-
-    # Creating partial stores.
-    site_config_store = partial(MongoStore,
-                                host=conf.mongo_host,
-                                port=conf.mongo_port,
-                                database=site_db_name,
-                                user=site_mongo_user,
-                                password=site_mongo_pass,
-                                auth_db=site_db_name)
-
-    # Adding site stores to a dict for each collection
-    # Note to new people, db here actually refers to mongo collection.
-    logs_store.update({site: site_config_store(db='logs_store')})
-    permissions_store.update({site: site_config_store(db='permissions_store')})
-    executions_store.update({site: site_config_store(db='executions_store')})
-    clients_store.update({site: site_config_store(db='clients_store')})
-    actors_store.update({site: site_config_store(db='actors_store')})
-    workers_store.update({site: site_config_store(db='workers_store')})
-    nonce_store.update({site: site_config_store(db='nonce_store')})
-    alias_store.update({site: site_config_store(db='alias_store')})
-    pregen_clients.update({site: site_config_store(db='pregen_clients')})
-    abaco_metrics_store.update({site: site_config_store(db='abaco_metrics_store')})
-    configs_store.update({site: site_config_store(db='configs_store')})
-    configs_permissions_store.update({site: site_config_store(db='configs_permissions_store')})
-
-if __name__ == "__main__":
-    # Mongo indexes only go through init on primary site.
-    # Needs to be here as it needs to happen after store dictionary creation.
-    mongo_index_initialization()
-    role_initialization()
+    if site not in neo_store.keys():
+        logger.warning(f"No neo config for site `{site}`. Don't attempt to use.")

@@ -5,7 +5,7 @@
 FROM tapis/flaskbase-plugins:latest
 #FROM python:3.10
 #RUN useradd tapis -u 4872
-
+RUN python -m pip install -U setuptools
 
 # set the name of the api, for use by some of the common modules.
 ENV TAPIS_API kg

@@ -17,7 +17,7 @@
         "tacc": {
             "user": "admin",
             "pass": "$env{NEO_PASSWORD}",
-            "host": "tacc_neo4j",
+            "host": "MAKEFILE_SERVICE_NAME-neo",
             "http": 7474,
             "bolt": 7687,
             "tls": "placeholder"
