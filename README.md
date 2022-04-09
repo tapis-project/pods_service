@@ -14,9 +14,16 @@ make help
 
 Generally devs would use `make clean up` over and over again. This will clean up dir and pods, build image, and deploy with minikube.
 
+## Minikube
 
-## Dev Container
-You can use dev containers with Minikube! Yippee.
+Everything here assumes minikube.
+
+Minikube setup:
+- Go through this setup guide: https://minikube.sigs.k8s.io/docs/start/
+  - Makesure you get kubectl installed in step 3.
+
+### Dev Container
+You can use dev containers with Minikube with the Makefile!
 
 Steps:
 - Install minikube, VSCode, Kubernetes VSCode plugin, and Remote-Containers VSCode plugin (0.231.X does NOT work).
