@@ -6,17 +6,17 @@ Service to allow for easy deployment and use of databases. Able to import and ex
 ### FastAPI
 - [X] Get FastAPI server running
 - [X] Get global g object working
-- [] Get auth pre-req working
+- [ ] Get auth pre-req working
 	- [X] Middleware working
 	- [ ] Flesh out the auth bit
 - [X] Add SOME FastAPI exception handling
 - [X] Create main api file and organize how routes will be organized
-- [o] Completely solve exception handling with FastAPI (don't let any errors out)
+- [ ] Completely solve exception handling with FastAPI (don't let any errors out)
 	- [X] Catch Exception and TapisErrors 
  	- [ ] Validation errors should be formatted better https://stackoverflow.com/a/69720977 Seems useful
 - [ ] Finish all endpoints
  	- [ ] /pods
-		- [] Create
+		- [ ] Create
 			- [X] Have models and create messages
 			- [ ] Finish the rest
 		- [ ] Post
@@ -30,7 +30,7 @@ Service to allow for easy deployment and use of databases. Able to import and ex
 		- [ ] Put
 - [ ] 	Validate everything
 ### Backend
-- [] NeoStore
+- [ ] NeoStore
 	- [X] Run function with validation
 	- [ ] More helper fns
 - [X] Channels.py
@@ -41,7 +41,7 @@ Service to allow for easy deployment and use of databases. Able to import and ex
 - [ ] Spawner.py to create/deal with pods
 - [ ] Health.py
 - [ ] Caddy needs correct error message for 400-50X errors.
-- [] Have different pod images for each database type
+- [ ] Have different pod images for each database type
 	- [X] Base Neo4j
 	- [ ] ...
 - [ ] Organize db better
