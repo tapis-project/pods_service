@@ -1,5 +1,59 @@
 # kg_service
-WIP
+Service to allow for easy deployment and use of databases. Able to import and export data from live databases. WIP. Better docs in the future.
+
+
+## Task List
+### FastAPI
+- [X] Get FastAPI server running
+- [X] Get global g object working
+- [] Get auth pre-req working
+	- [X] Middleware working
+	- [ ] Flesh out the auth bit
+- [X] Add SOME FastAPI exception handling
+- [X] Create main api file and organize how routes will be organized
+- [o] Completely solve exception handling with FastAPI (don't let any errors out)
+	- [X] Catch Exception and TapisErrors 
+ 	- [ ] Validation errors should be formatted better https://stackoverflow.com/a/69720977 Seems useful
+- [ ] Finish all endpoints
+ 	- [ ] /pods
+		- [] Create
+			- [X] Have models and create messages
+			- [ ] Finish the rest
+		- [ ] Post
+ 	- [ ] /pods/{pod_id}
+		- [ ] Del
+		- [ ] Put
+ 	- [ ] /pods/{pod_id}/export
+		- [ ] Post
+ 	- [ ] /data/{data_id}
+		- [ ] Del
+		- [ ] Put
+- [ ] 	Validate everything
+### Backend
+- [] NeoStore
+	- [X] Run function with validation
+	- [ ] More helper fns
+- [X] Channels.py
+- [X] Queues.py
+- [X] Request_Utils.py
+- [ ] Kubernetes_utils.py
+	- [ ] Organize file
+- [ ] Spawner.py to create/deal with pods
+- [ ] Health.py
+- [ ] Caddy needs correct error message for 400-50X errors.
+- [] Have different pod images for each database type
+	- [X] Base Neo4j
+	- [ ] ...
+- [ ] Organize db better
+- [ ] Connect S3
+- [ ] Export scripts
+- [ ] Init container for S3 import
+### Nice to have
+- [X] Create the best Makefile ever
+- [ ] Make the README actually good
+- [ ] Get config and entry and more root dir files mounted so they can be edited.
+	- There's some permissions issues, for example, nothing can execute entry.sh when it's mounted. Config things as well.
+
 
 
 ## Makefile
