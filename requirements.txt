@@ -2,3 +2,6 @@ pydantic
 jupyterlab
 neo4j-driver
 pylint
+uvicorn
+fastapi
+tomlkit

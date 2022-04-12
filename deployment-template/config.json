@@ -31,6 +31,7 @@
     "spawner_host_id": 0,
     "spawner_host_ip": "who knows?",
     "spawner_max_cmd_length": 10,
+#DEV    "show_traceback": true,
     "web_access_control": "jwt",
     "web_user_role": "Internal/everyone",
     "web_accept_nonce": true,

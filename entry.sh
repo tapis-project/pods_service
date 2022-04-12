@@ -1,9 +1,9 @@
 #!/bin/bash
 
 
-if [ $api = "reg" ]; then
+if [ $api = "api" ]; then
     # dev
-    cd /home/tapis/service; uvicorn crud:app --reload
+    cd /home/tapis/service; uvicorn api:api --reload
     # prod - https://www.uvicorn.org/deployment/
     # gunicorn uvicorn.worker stuff
     fi

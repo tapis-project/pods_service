@@ -15,17 +15,20 @@ spec:
       - name: MAKEFILE_SERVICE_NAME-main
         imagePullPolicy: Never
         image: MAKEFILE_SERVICE_NAME/core:MAKEFILE_TAG
-#DEV        command: ["jupyter", "lab", "service", "--ip=0.0.0.0", "--no-browser", "--ServerApp.token=''"]
+#DEV        command: ["/bin/sh", "-c"]
+#DEV        args: ["/home/tapis/entry.sh & jupyter lab service --ip=0.0.0.0 --allow-root --no-browser --ServerApp.token=''"]
         resources:
           limits:
-            cpu: "2"
+            cpu: "3"
             memory: "2G"
         ports:
         - name: fastapi
-          containerPort: 5000
+          containerPort: 8000
 #DEV        - name: jupyter
 #DEV          containerPort: 8888
         env:
+        - name: api
+          value: api
         - name: SERVICE_PASSWORD
           valueFrom:
             secretKeyRef:
@@ -47,8 +50,8 @@ spec:
           subPath: config.json
 #DEV        - name: dev-service
 #DEV          mountPath: /home/tapis/service
-#DEV        - name: dev-entry
-#DEV          mountPath: /home/tapis/entry.sh
+#NO        - name: dev-entry
+#NO          mountPath: /home/tapis/entry.sh
 
       volumes:
       - name: MAKEFILE_SERVICE_NAME-config
@@ -58,7 +61,7 @@ spec:
 #DEV        hostPath:
 #DEV          path: /kg_service/service #NOTE FOR MINIKUBE: Minikube is a vm, you have to minikube mount for hostpath to work
 #DEV          type: Directory
-#DEV      - name: dev-entry
-#DEV        hostPath:
-#DEV          path: /kg_service/entry.sh #NOTE FOR MINIKUBE: Minikube is a vm, you have to minikube mount for hostpath to work
-#DEV          type: File
+#NO      - name: dev-entry
+#NO        hostPath:
+#NO          path: /kg_service/entry.sh #NOTE FOR MINIKUBE: Minikube is a vm, you have to minikube mount for hostpath to work
+#NO          type: File
