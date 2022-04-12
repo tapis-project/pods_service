@@ -1,4 +1,4 @@
-# kg_service
+# Knowledge Graph Service
 Service to allow for easy deployment and use of databases. Able to import and export data from live databases. WIP. Better docs in the future.
 
 
