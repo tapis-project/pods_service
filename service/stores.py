@@ -39,7 +39,7 @@ def get_site_rabbitmq_uri(site):
     site_object = conf.get(f'{site}_site_object') or {}
 
     # Checking for RabbitMQ credentials for each site.
-    site_rabbitmq_user = f"kgservice_{site}_user"
+    site_rabbitmq_user = f"kg_{site}_user"
     site_rabbitmq_pass = site_object.get('site_rabbitmq_pass') or conf.get("global_site_object").get("site_rabbitmq_pass")
 
     # Setting up auth string.
@@ -51,7 +51,7 @@ def get_site_rabbitmq_uri(site):
     # Adding auth to rabbit_uri.
     rabbit_uri = rabbit_uri.replace("amqp://", f"amqp://{auth}@")
     # Adding site vhost to rabbit_uri
-    rabbit_uri += f"/kgservice_{site}"
+    rabbit_uri += f"/kg_{site}"
     return rabbit_uri
 
 
@@ -72,8 +72,8 @@ def rabbit_initialization():
         # Get admin credentials from rabbit_uri. Add auth to fn_call.
         # Note: If admin password not set in rabbit env with compose the user and pass
         # or just the pass (if only user is set) will default to "guest".
-        admin_rabbitmq_user = conf.get("admin_rabbitmq_user", "guest")
-        admin_rabbitmq_pass = conf.get("admin_rabbitmq_pass", "guest")
+        admin_rabbitmq_user = conf.get("rabbit_user", "guest")
+        admin_rabbitmq_pass = conf.get("rabbit_pass", "guest")
 
         if not isinstance(admin_rabbitmq_user, str) or not isinstance(admin_rabbitmq_pass, str):
             msg = f"RabbitMQ creds must be of type 'str'. user: {type(admin_rabbitmq_user)}, pass: {type(admin_rabbitmq_pass)}."
@@ -87,7 +87,7 @@ def rabbit_initialization():
 
         if admin_rabbitmq_user == "guest" or admin_rabbitmq_pass == "guest":
             logger.warning(f"RabbitMQ using default admin information. Not secure.")
-        logger.debug(f"Administrating RabbitMQ with user: {admin_rabbitmq_user} with pass.")
+        logger.debug(f"Administrating RabbitMQ with user: {admin_rabbitmq_user} and pass: ***.")
 
         fn_call += (f'-u {admin_rabbitmq_user} ')
         fn_call += (f'-p {admin_rabbitmq_pass} ')
@@ -95,6 +95,7 @@ def rabbit_initialization():
         # We poll to check rabbitmq is operational. Done by trying to list vhosts, arbitrary command.
         # Exit code 0 means rabbitmq is running. Need access to rabbitmq dash/management panel.
         i = 15
+        logger.critical(fn_call)
         while i:
             result = subprocess.run(fn_call + f'list vhosts', shell=True, capture_output=True)
             if result.returncode == 0:
@@ -133,7 +134,7 @@ def rabbit_initialization():
             site_object = conf.get(f'{site}_site_object') or {}
 
             # Checking for RabbitMQ credentials for each site.
-            site_rabbitmq_user = f"kgservice_{site}_user"
+            site_rabbitmq_user = f"kg_{site}_user"
             site_rabbitmq_pass = site_object.get('site_rabbitmq_pass') or ""
             if not site_rabbitmq_pass:
                 msg = f'No site_rabbitmq_pass found for site: {site}. Using Global.'
@@ -145,7 +146,7 @@ def rabbit_initialization():
                     raise KeyError(msg)
 
             # Site DB Name
-            site_db_name = f"kgservice_{site}"
+            site_db_name = f"kg_{site}"
 
             # Initializing site user account.
             subprocess.run(fn_call + f'declare user name={site_rabbitmq_user} password={site_rabbitmq_pass} tags=None', shell=True) # create user/pass

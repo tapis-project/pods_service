@@ -11,6 +11,7 @@ RUN python -m pip install -U setuptools
 ENV TAPIS_API kg
 ENV PYTHONPATH .:*:kg:kg/*
 
+
 ## PACKAGE INITIALIZATION
 COPY requirements.txt /home/tapis/
 
@@ -18,6 +19,10 @@ RUN apt-get update && apt-get install -y
 RUN apt-get install libffi-dev
 RUN pip3 install --upgrade pip
 RUN pip3 install -r /home/tapis/requirements.txt
+
+# rabbitmqadmin download for rabbit init
+RUN wget https://raw.githubusercontent.com/rabbitmq/rabbitmq-management/v3.8.9/bin/rabbitmqadmin
+RUN chmod +x rabbitmqadmin
 
 ## DEV TOOLS
 RUN pip3 install jupyterlab

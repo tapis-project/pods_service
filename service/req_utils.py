@@ -12,6 +12,8 @@ logger = get_logger(__name__)
 TAG = conf.version
 
 async def error_handler(request: Request, exc: Exception):
+    response = None
+    status_code: int = -1
     #if conf.show_traceback:
     if True:
         logger.debug(f"building traceback for exception...")
@@ -29,7 +31,7 @@ async def error_handler(request: Request, exc: Exception):
             except Exception as e:
                 logger.error(f"Got exception trying to format the exception! e: {e}")
 
-    if not response and status_code:
+    if not response and status_code == -1:
         if isinstance(exc, BaseTapisError):
             response = error(msg=exc.msg)
             status_code = exc.code
@@ -169,3 +171,12 @@ class GlobalsMiddleware:
 
 
 g = Globals()
+
+class TapisMiddleware:
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        g.tapis_user='cgarcia'
+        g.request_tenant_id='tacc'
+        await self.app(scope, receive, send)

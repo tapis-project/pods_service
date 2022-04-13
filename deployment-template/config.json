@@ -3,7 +3,7 @@
     "primary_site_admin_tenant_base_url": "https://admin.develop.tapis.io",
     "service_tenant_id": "admin",
     "service_site_id": "tacc",
-    "service_name": "MAKEFILE_SERVICE_NAME",
+    "service_name": "abaco",
     "service_password": "$env{SERVICE_PASSWORD}",
     "tenants": [
         "tacc",
@@ -23,14 +23,17 @@
             "tls": "placeholder"
         }
     },
-    "rabbit_uri": "amqp://rabbit:5672",
-    "rabbit_dash_host": "rabbit",
+    "rabbit_uri": "amqp://kg-rabbit:5672",
+    "rabbit_dash_host": "kg-rabbit-dash",
     "rabbit_user": "admin",
     "rabbit_pass": "$env{RABBIT_PASSWORD}",
     "spawner_abaco_conf_host_path": "$env{abaco_host_path}/config-local.json",
     "spawner_host_id": 0,
     "spawner_host_ip": "who knows?",
     "spawner_max_cmd_length": 10,
+    "spawner_host_queues": [
+        "tacc"
+    ],
 #DEV    "show_traceback": true,
     "web_access_control": "jwt",
     "web_user_role": "Internal/everyone",

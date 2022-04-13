@@ -20,7 +20,6 @@ import encrypt_utils
 import globals
 from models import Actor, Execution, get_current_utc_time, display_time, site, ActorConfig
 from stores import workers_store, alias_store, configs_store
-import encrypt_utils
 
 
 # k8 client creation

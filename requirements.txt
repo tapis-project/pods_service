@@ -5,3 +5,5 @@ pylint
 uvicorn
 fastapi
 tomlkit
+kubernetes
+rabbitpy

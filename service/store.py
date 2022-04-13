@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from attr import validate
 from neo4j import GraphDatabase
 from pydantic import validate_arguments
+from typing import Literal, Any
 from enum import Enum
 
 import json
@@ -90,14 +91,10 @@ class NeoStore(AbstractStore):
     :return:
     """
 
-
-    class neoSchemas(Enum):
-        bolt = "bolt"
-        neo4j = "neo4j"
-
     # Most of this described here: neo4j.com/docs/api/python-driver/current/api.html#driver
+    @validate_arguments
     def __init__(self,
-                 scheme: neoSchemas = "neo4j",
+                 scheme: Literal['neo4j', 'bolt'] = 'neo4j',
                  host: str | None = None,
                  port: int | None = None,
                  user: str | None = None,
@@ -134,7 +131,7 @@ class NeoStore(AbstractStore):
     @validate_arguments
     def run(self,
             query: str,
-            parameters: dict[str, str] | None = None,
+            parameters: dict[str, Any] | None = None,
             res_fn: resultFns = "data",
             res_key: str | int | list | None = None,
             kwparameters: dict[str, str] = {}
