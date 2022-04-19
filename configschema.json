@@ -7,7 +7,7 @@
       "service_name",
       "version",
       "log_level",
-      "rabbit_uri",
+      "rabbitmq_uri",
       "global_tenant_object",
       "global_site_object",
       "spawner_host_id",
@@ -29,7 +29,7 @@
         "default": "docker",
         "description": "Container backend to use when creating workers/execs."
       },
-      "rabbit_uri": {
+      "rabbitmq_uri": {
         "type": "string",
         "description": "URI for rabbitMQ."
       },

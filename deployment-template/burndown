@@ -13,7 +13,7 @@ kubectl delete configmap MAKEFILE_SERVICE_NAME-config
 # PVC
 
 # Deploy
-kubectl delete -f rabbit.yml
-kubectl delete -f neo.yml
+kubectl delete -f rabbitmq.yml
+kubectl delete -f postgres.yml
 kubectl delete -f main.yml
 kubectl delete -f spawner.yml

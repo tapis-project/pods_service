@@ -14,8 +14,8 @@ from tapisservice.logs import get_logger
 import kubernetes_utils
 from kubernetes_utils import KubernetesError
 from errors import WorkerException
-from models import Actor, Worker, site
-from stores import actors_store, workers_store
+from routes.pods import NewPod
+from stores import neo_store
 from channels import CommandChannel, WorkerChannel, SpawnerWorkerChannel
 from health import get_worker
 
@@ -34,7 +34,6 @@ class SpawnerException(Exception):
 class Spawner(object):
 
     def __init__(self):
-        self.container_backend = conf.container_backend
         self.queue = os.environ.get('queue', 'tacc')
         self.cmd_ch = CommandChannel(name=self.queue)
         self.host_id = conf.spawner_host_id
@@ -48,7 +47,7 @@ class Spawner(object):
             try:
                 self.process(cmd)
             except Exception as e:
-                logger.error(f"spawner got an exception trying to process cmd: {cmd}. "
+                logger.error(f"Spawner got an exception trying to process cmd: {cmd}. "
                              f"Exception type: {type(e).__name__}. Exception: {e}")
 
     def process(self, cmd):
@@ -58,17 +57,18 @@ class Spawner(object):
         tenant_id = cmd["tenant_id"]
         site_id = cmd["site_id"]
 
-        try:
-            #TODO GET pod data
-            # get database_type
-            # create
+        pod = NewPod.from_db({"name": pod_name})
 
         try:
-            actor = Actor.from_db(actors_store[site()][actor_id])
+            pod = NewPod.from_db({"name": pod_name})
         except Exception as e:
             msg = f"Exception in spawner trying to retrieve actor object from store. Aborting. Exception: {e}"
             logger.error(msg)
             return
+
+
+
+
 
         # if the worker was sent a delete request before spawner received this message to create the worker,
         # the status will be SHUTDOWN_REQUESTED, not REQUESTED. in that case, we simply abort and remove the

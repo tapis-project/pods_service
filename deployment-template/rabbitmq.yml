@@ -2,31 +2,31 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: MAKEFILE_SERVICE_NAME-rabbit
+  name: MAKEFILE_SERVICE_NAME-rabbitmq
 spec:
   selector:
     matchLabels:
-      app: MAKEFILE_SERVICE_NAME-rabbit
+      app: MAKEFILE_SERVICE_NAME-rabbitmq
   template:
     metadata:
       labels:
-        app: MAKEFILE_SERVICE_NAME-rabbit
+        app: MAKEFILE_SERVICE_NAME-rabbitmq
     spec:
       containers:
-      - name: MAKEFILE_SERVICE_NAME-rabbit
+      - name: MAKEFILE_SERVICE_NAME-rabbitmq
         image: rabbitmq:3.6.12-management
         resources:
           limits:
             cpu: "2"
             memory: "2G"
         ports:
-        - name: rabbit
+        - name: rabbitmq
           containerPort: 5672
-        - name: rabbit-dash
+        - name: rabbitmq-dash
           containerPort: 15672
         env:
         - name: RABBITMQ_NODENAME
-          value: "MAKEFILE_SERVICE_NAME-rabbit"
+          value: "MAKEFILE_SERVICE_NAME-rabbitmq"
         - name: RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS
           value: "+A 128"
         - name: RABBITMQ_DEFAULT_USER
@@ -35,4 +35,4 @@ spec:
           valueFrom:
             secretKeyRef:
               name: tapis-MAKEFILE_SERVICE_NAME-secrets
-              key: rabbit-password
+              key: rabbitmq-password

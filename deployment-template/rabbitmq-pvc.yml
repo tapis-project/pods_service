@@ -1,7 +1,7 @@
 kind: PersistentVolumeClaim
 apiVersion: v1
 metadata:
-  name: MAKEFILE_SERVICE_NAME-rabbit-vol
+  name: MAKEFILE_SERVICE_NAME-rabbitmq-vol
 spec:
   accessModes:
     - ReadWriteOnce
@@ -15,24 +15,24 @@ spec:
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: chown-MAKEFILE_SERVICE_NAME-rabbit-pvc
+  name: chown-MAKEFILE_SERVICE_NAME-rabbitmq-pvc
 spec:
   ttlSecondsAfterFinished: 60
   template:
     spec:
       restartPolicy: Never
       containers:
-      - name: chown-MAKEFILE_SERVICE_NAME-rabbit-volume
+      - name: chown-MAKEFILE_SERVICE_NAME-rabbitmq-volume
         image: alpine:latest
         command:
         - chown
         - -R
         - 999:999
-        - /var/lib/rabbit
+        - /var/lib/rabbitmq
         volumeMounts:
-        - name: MAKEFILE_SERVICE_NAME-rabbit-data
-          mountPath: /var/lib/rabbit
+        - name: MAKEFILE_SERVICE_NAME-rabbitmq-data
+          mountPath: /var/lib/rabbitmq
       volumes:
-      - name: MAKEFILE_SERVICE_NAME-rabbit-data
+      - name: MAKEFILE_SERVICE_NAME-rabbitmq-data
         persistentVolumeClaim:
-          claimName: MAKEFILE_SERVICE_NAME-rabbit-vol
+          claimName: MAKEFILE_SERVICE_NAME-rabbitmq-vol

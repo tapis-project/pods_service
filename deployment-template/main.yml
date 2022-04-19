@@ -39,11 +39,16 @@ spec:
             secretKeyRef:
               name: tapis-MAKEFILE_SERVICE_NAME-secrets
               key: neo-password
-        - name: RABBIT_PASSWORD
+        - name: POSTGRES_PASSWORD
           valueFrom:
             secretKeyRef:
               name: tapis-MAKEFILE_SERVICE_NAME-secrets
-              key: rabbit-password
+              key: postgres-password
+        - name: RABBITMQ_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: tapis-MAKEFILE_SERVICE_NAME-secrets
+              key: rabbitmq-password
         volumeMounts:
         - name: MAKEFILE_SERVICE_NAME-config
           mountPath: /home/tapis/config.json

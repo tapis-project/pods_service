@@ -1,7 +1,7 @@
 from functools import partial
 import os
 
-from store import NeoStore
+from store import PostgresStore
 
 from tapisservice.config import conf
 from __init__ import t
@@ -9,30 +9,33 @@ import subprocess
 import re
 import requests as r
 import time
+import psycopg
 
 from tapisservice.logs import get_logger
 logger = get_logger(__name__)
 
-# Figure out which sites this deployment has to manage.
-# Getting current site and checking if we're primary.
-SITE_LIST = []
-tenant_object = t.tenant_cache.get_tenant_config(tenant_id=t.tenant_id)
-if tenant_object.site.primary:
-    for site_object in t.tenants.list_sites(_tapis_set_x_headers_from_service=True):
-        SITE_LIST.append(site_object.site_id)
-else:
-    SITE_LIST.append(tenant_object.site_id)
+# Get all sites and tenants for all sites.
+SITE_TENANT_DICT = {} # {site_id1: [tenant1, tenant2, ...], site_id2: ...}
+for tenant in t.tenant_cache.tenants:
+    if not SITE_TENANT_DICT.get(tenant.site_id):
+        SITE_TENANT_DICT[tenant.site_id] = []
+    SITE_TENANT_DICT[tenant.site_id].append(tenant.tenant_id)
+curr_tenant_obj = t.tenant_cache.get_tenant_config(tenant_id=t.tenant_id)
+# Delete excess sites when current site is not primary. Non-primary sites will never have to manage other sites.
+if not curr_tenant_obj.site.primary:
+    SITE_TENANT_DICT = {curr_tenant_obj.site: SITE_TENANT_DICT[curr_tenant_obj.site]}
+
 
 def get_site_rabbitmq_uri(site):
     """
-    Takes site and gets site specific rabbit uri using correct
+    Takes site and gets site specific rabbitmq uri using correct
     site vhost and site's authentication from config.
     """
     logger.debug(f'Top of get_site_rabbitmq_uri. Using site: {site}')
-    # Get rabbit_uri and check if it's the proper format. "amqp://rabbit:5672"
+    # Get rabbitmq_uri and check if it's the proper format. "amqp://rabbitmq:5672"
     # auth information should NOT be included on conf.
-    rabbit_uri = conf.rabbit_uri
-    if "@" in rabbit_uri:
+    rabbitmq_uri = conf.rabbitmq_uri
+    if "@" in rabbitmq_uri:
         raise KeyError("rabbit_uri in config.json should no longer have auth. Configure with config.")
 
     # Getting site object with parameters for specific site.
@@ -48,32 +51,32 @@ def get_site_rabbitmq_uri(site):
     else:
         auth = site_rabbitmq_user
     
-    # Adding auth to rabbit_uri.
-    rabbit_uri = rabbit_uri.replace("amqp://", f"amqp://{auth}@")
-    # Adding site vhost to rabbit_uri
-    rabbit_uri += f"/kg_{site}"
-    return rabbit_uri
+    # Adding auth to rabbitmq_uri.
+    rabbitmq_uri = rabbitmq_uri.replace("amqp://", f"amqp://{auth}@")
+    # Adding site vhost to rabbitmq_uri
+    rabbitmq_uri += f"/kg_{site}"
+    return rabbitmq_uri
 
 
-def rabbit_initialization():
+def rabbitmq_init():
     """
-    Initial site initialization for RabbitMQ using the RabbitMQ utility.
+    Initial site init for RabbitMQ using the RabbitMQ utility.
     Consists of creating a user/pass and vhost for each site. Each site's user
     gets permissions to it's vhosts. Primary site gets control to each vhost.
     One-time/deployment
     """
     try:
-        rabbit_dash_host = conf.rabbit_dash_host
+        rabbitmq_dash_host = conf.rabbitmq_dash_host
 
         # Creating the subprocess call (Has to be str, list not working due to docker
-        # aliasing of rabbit with it's IP address (Could work? But this works too.).).
-        fn_call = f'/home/tapis/rabbitmqadmin -H {rabbit_dash_host} '
+        # aliasing of rabbitmq with it's IP address (Could work? But this works too.).).
+        fn_call = f'/home/tapis/rabbitmqadmin -H {rabbitmq_dash_host} '
 
         # Get admin credentials from rabbit_uri. Add auth to fn_call.
         # Note: If admin password not set in rabbit env with compose the user and pass
         # or just the pass (if only user is set) will default to "guest".
-        admin_rabbitmq_user = conf.get("rabbit_user", "guest")
-        admin_rabbitmq_pass = conf.get("rabbit_pass", "guest")
+        admin_rabbitmq_user = conf.get("rabbitmq_user", "guest")
+        admin_rabbitmq_pass = conf.get("rabbitmq_pass", "guest")
 
         if not isinstance(admin_rabbitmq_user, str) or not isinstance(admin_rabbitmq_pass, str):
             msg = f"RabbitMQ creds must be of type 'str'. user: {type(admin_rabbitmq_user)}, pass: {type(admin_rabbitmq_pass)}."
@@ -101,20 +104,20 @@ def rabbit_initialization():
             if result.returncode == 0:
                 break
             elif result.stderr:
-                rabbit_error = result.stderr.decode('UTF-8')
-                if "Errno 111" in rabbit_error:
+                rabbitmq_error = result.stderr.decode('UTF-8')
+                if "Errno 111" in rabbitmq_error:
                     msg = "Rabbit still initializing."
                     logger.debug(msg)
-                elif "Access refused" in rabbit_error:
+                elif "Access refused" in rabbitmq_error:
                     msg = "Rabbit admin user or pass misconfigured."
                     logger.critical(msg)
                     raise RuntimeError(msg)
                 else:
-                    msg = f"RabbitMQ has thrown an error. e: {rabbit_error}"
+                    msg = f"RabbitMQ has thrown an error. e: {rabbitmq_error}"
                     logger.critical(msg)
                     raise RuntimeError(msg)
             else:
-                msg = "Rabbit still initializing."
+                msg = "RabbitMQ still initializing."
                 logger.debug(msg)
             time.sleep(2)
             i -= 1
@@ -129,7 +132,7 @@ def rabbit_initialization():
     
     # Creating user/pass, vhost, and assigning permissions for rabbitmq.
     try:
-        for site in SITE_LIST:
+        for site in SITE_TENANT_DICT.keys():
             # Getting site object with parameters for specific site.
             site_object = conf.get(f'{site}_site_object') or {}
 
@@ -164,58 +167,72 @@ def rabbit_initialization():
         raise Exception(msg)
 
 
-def neo_initialization():
+def postgres_init():
     """
-    Initial setup for neo.
-    Database configuration information has to be provided by config-local. The
-    config can give multiple databases, this is so that we can give each site
-    (even tenant if we want) it's own backend.
-    Config'ed user is already root in it's database.
+    Initial site init for RabbitMQ using the RabbitMQ utility.
+    Consists of creating a user/pass and vhost for each site. Each site's user
+    gets permissions to it's vhosts. Primary site gets control to each vhost.
+    One-time/deployment
     """
-    # 
-    # Getting user/pass of database.
-    print("This isn't needed")
-    # try:
-    #     admin_neo_user = conf.admin_neo_user
-    #     admin_neo_pass = conf.
-        
-    # except Exception as e:
-    #     msg = f""
-    #     logger.critical(msg)
-    #     raise RuntimeError(msg)
+    # Getting admin/root credentials to create users.
+    try:
+        admin_postgres_user = conf.postgres_user
+        admin_postgres_pass = conf.postgres_pass
+    except Exception as e:
+        msg = f"Postgres init requires postgres user and password. e: {e}"
+        logger.critical(msg)
+        raise RuntimeError(msg)
 
-    # # We initialize each database requested.
-    # for database in conf.databases:
+    if not isinstance(admin_postgres_user, str) or not isinstance(admin_postgres_pass, str):
+        msg = f"Postgres creds must be of type 'str'. user: {type(admin_postgres_user)}, pass: {type(admin_postgres_pass)}."
+        logger.critical(msg)
+        raise RuntimeError(msg)
 
+    if not admin_postgres_user or not admin_postgres_pass:
+        msg = f"Postgres creds were given, but were None or empty. user: {admin_postgres_user}, pass: {admin_postgres_pass}" 
+        logger.critical(msg)
+        raise RuntimeError(msg)
 
-# def neo_index_initialization():
-#     """
-#     Seperate function to initialize mongo so that he sometimes lengthy process
-#     doesn't slow down stores.py imports as it only needs to be called once.
-#     Initialization consists of creating indexes for Mongo. One-time/deployment
-#     """
-#     for site in SITE_LIST:
-#         # Getting site object with parameters for specific site.
-#         site_object = conf.get(f"{site}_site_object") or {}
+    # Each site is a database. Each tenant is a schema.
+    logger.debug(f"Administrating Postgres with user: {admin_postgres_user}.")
+    pg = PostgresStore(username=admin_postgres_user,
+                       password=admin_postgres_pass,
+                       host=conf.postgres_host,
+                       dbname='')
 
-#         # Sets an expiry variable 'exp'. So whenever a document gets placed with it
-#         # the doc expires after 0 seconds. BUT! If exp is set as a Mongo Date, the
-#         # Mongo TTL index will wait until that Date and then delete after 0 seconds.
-#         # So we can delete at a specific time if we set expireAfterSeconds to 0
-#         # and set the time to expire on the 'exp' variable.
-#         try:
-#             logs_store[site]._db.create_index("exp", expireAfterSeconds=0)
-#         except errors.OperationFailure:
-#             # this will happen if the index already exists.
-#             pass
+    # Create a database for each site.
+    with psycopg.connect(f"postgresql://{admin_postgres_user}:{admin_postgres_pass}@{conf.postgres_host}", autocommit=True) as conn:
+        with conn.cursor() as cur:
+            for site in SITE_TENANT_DICT.keys():
+                try:
+                    cur.execute(f"CREATE DATABASE {site}")
+                except psycopg.errors.DuplicateDatabase:
+                    msg = f"Database for site: {site}, already exists. Skipping."
+                    logger.warning(msg)
+                logger.debug(f"CREATE DB complete for site: {site}.")
 
-#         # Creating wildcard text indexing for full-text mongo search
-#         logs_store[site].create_index([('$**', TEXT)])
-#         executions_store[site].create_index([('$**', TEXT)])
-#         actors_store[site].create_index([('$**', TEXT)])
-#         workers_store[site].create_index([('$**', TEXT)])
+    ## Go into each database and init indexes and tables for each tenant.
+    for site, tenants in SITE_TENANT_DICT.items():
+        pg = PostgresStore(username=admin_postgres_user,
+                           password=admin_postgres_pass,
+                           host=conf.postgres_host,
+                           dbname=site)
+        for tenant in tenants:
+            try:
+                pg.run(
+                    f'CREATE SCHEMA IF NOT EXISTS "{tenant}";'
+                    f'CREATE TABLE IF NOT EXISTS "{tenant}".pods (pod_name text, attached_data text[], roles_required '
+                    'text[], inherited_roles text[], description text);'
+                    f'CREATE TABLE IF NOT EXISTS "{tenant}".exported_data (source_pod text, tag text[], description '
+                    'text, creation_ts timestamp, update_ts timestamp, inherited_roles text[], roles_required text[])'
+                )
+            except Exception as e:
+                msg = f"Error when creating schemas for tenant: {tenant}. e: {e}"
+                logger.warning(msg)
 
-def role_initialization():
+#CREATE CONSTRAINT FOR (p:Pod) REQUIRE p.name IS UNIQUE
+
+def role_init():
     """
     Creating roles at reg startup so that we can insure they always exist and that they're in all tenants from now on.
     """
@@ -228,22 +245,28 @@ def role_initialization():
 
 
 if __name__ == "__main__":
-    # rabbit and neo only go through init on primary site.
-    rabbit_initialization()
-    #neo_initialization()
-    role_initialization()
+    # rabbitmq and neo only go through init on primary site.
+    rabbitmq_init()
+    postgres_init()
+    role_init()
 
 # We do this outside of a function because the 'store' objects need to be imported
 # by other scripts. Functionalizing it would create more code and make it harder
 # to read in my opinion.
-neo_store = {}
+# pg_store = {}
 
-for db_name, db_conf in conf.databases.items():
-    neo_store[db_name] = NeoStore(host=db_conf["host"],
-                                  port=db_conf["bolt"],
-                                  user=db_conf["user"],
-                                  passw=db_conf["pass"])
+admin_postgres_user = conf.postgres_user
+admin_postgres_pass = conf.postgres_pass
 
-for site in SITE_LIST:
-    if site not in neo_store.keys():
-        logger.warning(f"No neo config for site `{site}`. Don't attempt to use.")
+pg_store = {}
+for site, tenants in SITE_TENANT_DICT.items():
+    for tenant in tenants:
+        pg = None
+        pg = PostgresStore(username=admin_postgres_user,
+                           password=admin_postgres_pass,
+                           host=conf.postgres_host,
+                           dbname=site,
+                           dbschema=tenant)
+        if not pg_store.get(site):
+            pg_store[site] = {}
+        pg_store[site][tenant]= pg

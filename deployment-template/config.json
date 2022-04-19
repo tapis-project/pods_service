@@ -13,20 +13,13 @@
     "version": "dev",
     "log_file": "",
     "log_level": "DEBUG",
-    "databases": {
-        "tacc": {
-            "user": "admin",
-            "pass": "$env{NEO_PASSWORD}",
-            "host": "MAKEFILE_SERVICE_NAME-neo",
-            "http": 7474,
-            "bolt": 7687,
-            "tls": "placeholder"
-        }
-    },
-    "rabbit_uri": "amqp://kg-rabbit:5672",
-    "rabbit_dash_host": "kg-rabbit-dash",
-    "rabbit_user": "admin",
-    "rabbit_pass": "$env{RABBIT_PASSWORD}",
+    "postgres_user": "admin",
+    "postgres_pass": "$env{POSTGRES_PASSWORD}",
+    "postgres_host": "MAKEFILE_SERVICE_NAME-postgres",
+    "rabbitmq_uri": "amqp://kg-rabbitmq:5672",
+    "rabbitmq_dash_host": "kg-rabbitmq-dash",
+    "rabbitmq_user": "admin",
+    "rabbitmq_pass": "$env{RABBITMQ_PASSWORD}",
     "spawner_abaco_conf_host_path": "$env{abaco_host_path}/config-local.json",
     "spawner_host_id": 0,
     "spawner_host_ip": "who knows?",

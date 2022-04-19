@@ -37,10 +37,10 @@ export TAG := dev
 # default: "minikube"
 export DAEMON := minikube
 
-# SOURCE to get images from, either locally built or remotely pulled
+# IMG_SOURCE to get images from, either locally built or remotely pulled
 # options: "local" | "remote"
 # default: "local"
-export SOURCE := local
+export IMG_SOURCE := local
 
 # NAMESPACE for minikube instance to use.
 # options: "default" | "whatever"
@@ -192,11 +192,11 @@ else
 	echo "  ℹ️  daemon:         $(LCYAN)$(DAEMON)$(NC)"
 endif
 
-ifeq ($(filter $(SOURCE),local remote),)
-	echo "  ❌ source:         $(RED)SOURCE must be one of ['local', 'remote']$(NC)"
+ifeq ($(filter $(IMG_SOURCE),local remote),)
+	echo "  ❌ img_source:      $(RED)IMG_SOURCE must be one of ['local', 'remote']$(NC)"
 	exit 1
 else
-	echo "  ℹ️  source:         $(LCYAN)$(SOURCE)$(NC)"
+	echo "  ℹ️  img_source:     $(LCYAN)$(IMG_SOURCE)$(NC)"
 endif
 
 ifeq ($(filter $(DEV_TOOLS),true false),)

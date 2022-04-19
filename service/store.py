@@ -4,8 +4,10 @@ from datetime import datetime, timedelta
 from attr import validate
 from neo4j import GraphDatabase
 from pydantic import validate_arguments
-from typing import Literal, Any
+from typing import Literal, Any, Dict
 from enum import Enum
+from psycopg_pool import ConnectionPool
+from psycopg import ProgrammingError, DatabaseError
 
 import json
 import os
@@ -74,119 +76,93 @@ class AbstractStore(MutableMapping):
         self[key] = False
 
 
-class NeoStore(AbstractStore):
+class PostgresStore(AbstractStore):
     """
-    Note: pop_fromlist, append_tolist, and within_transaction were removed from the Redis
-    store functions as they weren't necessary, don't work, or don't work in Mongo.
-    Creates an abaco `store` which maps to a single mongo
-    collection within some database.
-    :param host: the IP address of the mongo server.
-    :param port: port of the mongo server.
-    :param database: the mongo database to use for abaco.
-    :param db: an integer mapping to a mongo collection within the
-    :param auth_db: For sites. This is where we should check auth. Should be abaco_{site}. 
-        Default is usually admin, but Mongo will take care of that for us.
-    mongo database.
-
-    :return:
+    Postgres Store object
     """
-
-    # Most of this described here: neo4j.com/docs/api/python-driver/current/api.html#driver
     @validate_arguments
     def __init__(self,
-                 scheme: Literal['neo4j', 'bolt'] = 'neo4j',
-                 host: str | None = None,
-                 port: int | None = None,
-                 user: str | None = None,
-                 passw: str | None = None,
-                 config: dict[str, str] = {}):
+                 username: str,
+                 password: str,
+                 host: str,
+                 dbname: str | None = None,
+                 dbschema: str | None = None,
+                 port: int | None = None, # not currently used
+                 kwargs: dict[str, str] = {}):
         
-        logger.info(f"Top of NeoStore __init__().")
+        logger.info(f"Top of PgStore __init__().")
 
-        if user and passw:
-            logger.info(f"Using user {user} and pass: ***")
-            auth = (urllib.parse.quote_plus(user), urllib.parse.quote_plus(passw))
-        elif user or passw:
-            logger.info("Got user or pass. Using no auth with neo.")
-            auth = None
-        else:
-            logger.info("Did not get user or pass. Using no auth with neo")
-            auth = None
+        try:
+            username = urllib.parse.quote_plus(username)
+            password = urllib.parse.quote_plus(password)
+        except Exception as e:
+            msg = "PostgresStore.__init__ - Error parsing user/pass with urllib.parse"
+            logger.critical(msg)
+            raise ValueError(msg)
+        logger.info(f"Using username {username} and password: ***")
 
-        neo_uri = f'{scheme}://{host}:{port}'
-        logger.info(f"Using neo_uri: {neo_uri}, with config: {config}")
+        #postgresql://[userspec@][hostspec][/dbname][?paramspec]
+        conninfo = f"postgresql://{username}:{password}@{host}"
+        if dbname:
+            conninfo += f"/{dbname}"
+        if dbschema:
+            conninfo += f"?options=-csearch_path%3Ddbo,{dbschema}"
+        logger.info(f"Using conninfo: {conninfo}, with kwargs: {kwargs}")
 
-        self.neo = GraphDatabase.driver(neo_uri, auth=auth, **config)
-
-    class resultFns(Enum):
-        keys = "keys"
-        consume = "consume"
-        single = "single"
-        peek = "peek"
-        graph = "graph"
-        value = "value"
-        values = "values"
-        data = "data"
+        self.pool = ConnectionPool(conninfo, **kwargs)
 
     @validate_arguments
     def run(self,
-            query: str,
-            parameters: dict[str, Any] | None = None,
-            res_fn: resultFns = "data",
-            res_key: str | int | list | None = None,
-            kwparameters: dict[str, str] = {}
-            ) -> dict[str, str] | str:
+            command: str,
+            params: Dict[str, str] | None = None):
 
-        logger.info("Top of NeoStore run().")
-        logger.debug(f"NeoStore.run() using res_fn: {res_fn}")
-
-        if res_key is not None:
-            res_fns_with_keys = ["value", "values", "data"]
-            if res_fn not in res_fns_with_keys:
-                msg = (f"NeoStore: res_key: {res_key}; result_fn: {res_fn}; res_key only used by {res_fns_with_keys}")
-                logger.warning(msg)
-                raise ValueError(msg)
-            if isinstance(res_key, list) and res_fn in "value":
-                msg = (f"NeoStore: type(res_key) = list. res_fn, value, accepts str or int only")
-                logger.warning(msg)
-                raise ValueError(msg)
-            if res_fn in ["values", "data"]:
-                # Put single ints and strs into a list so later code gets the expected list.
-                if not isinstance(res_key, list):
-                    res_key = [res_key]
-        elif res_fn in ["values", "data"]:
-            res_key = []
+        # Withs will take care of closing cur and conn in the event of error.
+        with self.pool.connection() as conn:
+            with conn.cursor() as cur:
+                # Attempt execute. psycopg3 uses server side bindings. So we can't print full command.
+                # Attempt to mogrify (add params to command) command and execute command.
+                try:
+                    logger.info(f"PgCommand: {command}; Params: {params}")
+                    cur.execute(command, params)
+                except DatabaseError as e:
+                    msg = f"Error accessing database: {e}"
+                    # Check to see if this is actually a unique constraint collision.
+                    try:
+                        if "relation" in e.args[0] and "already exists" in e.args[0]:
+                            msg = f"Constraints names must be unique. {e}" 
+                    except:
+                        pass
+                    logger.error(msg)
+                    raise Exception(msg)
+                except Exception as e:
+                    msg = f"Error executing command: {command}; e: {e}"
+                    logger.error(msg)
+                    raise Exception(msg)
                 
-        # Now run the actual session and get the result
-        with self.neo.session() as session:
-            result = session.run(query, parameters, **kwparameters)
+                try:
+                    # Get amount of rows affected. (-1 means that query doesn't return anything relevant for .rowcount)
+                    affected_rows = cur.rowcount
+                    
+                    # Try and get object description, also data. Only gets return data, so usually just return an empty array.
+                    obj_description = cur.description
 
-            if res_fn == 'single':
-                return result.single()
+                    # Try and get data back, note we use a custom psycopg row_factor to format returns.
+                    try:
+                        obj_unparsed_data = cur.fetchall()
+                    except ProgrammingError:
+                        # Got here because there's no results to fetch
+                        obj_unparsed_data = []
+                except Exception as e:
+                    msg = f"Error parsing data from command: {command}; e: {e}"
+                    logger.error(msg)
+                    raise Exception(msg)
 
-            if res_fn == 'keys':
-                return result.keys()
+        logger.info(f'PgStore.run: object_description: {obj_description}, unparsed_data: {obj_unparsed_data}, '
+                    f'affected_rows: {affected_rows}')
+        return obj_description, obj_unparsed_data, affected_rows
 
-            if res_fn == 'consume':
-                return result.consume()
+    
 
-            if res_fn == 'peek':
-                return result.peek()
-
-            if res_fn == 'graph':
-                return result.graph()
-
-            if res_fn == 'value':
-                return result.value(key=res_key)
-
-            if res_fn == 'values':
-                return result.values(*res_key)
-
-            if res_fn == 'data':
-                return result.data(*res_key)
-
-        raise KeyError("Something has gone very bad.")
-            
     # def __getitem__(self, fields):
     #     """
     #     Simple match
@@ -201,10 +177,6 @@ class NeoStore(AbstractStore):
     #     except Exception as e:
     #         print(e)
         
-
-
-
-        
     #     key, _, subscripts = self._process_inputs(fields)
     #     result = self._db.find_one(
     #         {'_id': key},
@@ -215,7 +187,6 @@ class NeoStore(AbstractStore):
     #         return eval('result' + subscripts)
     #     except KeyError:
     #         raise KeyError(f"Subscript of {subscripts} does not exists in document of '_id' {key}")
-
 
     # def __setitem__(self, fields, value):
     #     """

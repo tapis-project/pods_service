@@ -13,7 +13,7 @@ kubectl create configmap MAKEFILE_SERVICE_NAME-config --from-file=config.json
 # PVC
 
 # Deploy
-kubectl apply -f rabbit.yml
-kubectl apply -f neo.yml
+kubectl apply -f rabbitmq.yml
+kubectl apply -f postgres.yml
 kubectl apply -f main.yml
-kubectl apply -f spawner.yml
+#kubectl apply -f spawner.yml
