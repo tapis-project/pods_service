@@ -1,8 +1,8 @@
 """init
 
-Revision ID: 57858839ba27
+Revision ID: 8d2f17bb9a83
 Revises: 
-Create Date: 2022-05-02 16:21:37.147305
+Create Date: 2022-05-02 19:39:49.254834
 
 """
 from alembic import op
@@ -11,7 +11,7 @@ import sqlmodel              ##### Required when using sqlmodel and not use sqla
 
 
 # revision identifiers, used by Alembic.
-revision = '57858839ba27'
+revision = '8d2f17bb9a83'
 down_revision = None
 branch_labels = None
 depends_on = None

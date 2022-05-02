@@ -1,3 +1,5 @@
+import sys
+sys.path.append('/home/tapis/service')
 
 import logging
 from logging.config import fileConfig

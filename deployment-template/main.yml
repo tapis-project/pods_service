@@ -56,8 +56,8 @@ spec:
           subPath: config.json
 #DEV        - name: dev-service
 #DEV          mountPath: /home/tapis/service
-#NO        - name: dev-entry
-#NO          mountPath: /home/tapis/entry.sh
+#2DEV        - name: dev-alembic
+#2DEV          mountPath: /home/tapis/alembic
 
       volumes:
       - name: MAKEFILE_SERVICE_NAME-config
@@ -67,7 +67,7 @@ spec:
 #DEV        hostPath:
 #DEV          path: /kg_service/service #NOTE FOR MINIKUBE: Minikube is a vm, you have to minikube mount for hostpath to work
 #DEV          type: Directory
-#NO      - name: dev-entry
-#NO        hostPath:
-#NO          path: /kg_service/entry.sh #NOTE FOR MINIKUBE: Minikube is a vm, you have to minikube mount for hostpath to work
-#NO          type: File
+#2DEV      - name: dev-alembic
+#2DEV        hostPath:
+#2DEV          path: /kg_service/alembic #NOTE FOR MINIKUBE: Minikube is a vm, you have to minikube mount for hostpath to work
+#2DEV          type: Directory

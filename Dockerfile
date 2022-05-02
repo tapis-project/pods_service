@@ -32,7 +32,8 @@ RUN pip3 install jupyterlab
 RUN touch /home/tapis/config.json
 # Copy files
 COPY service /home/tapis/service
-COPY configschema.json entry.sh /home/tapis/
+COPY alembic /home/tapis/alembic
+COPY configschema.json entry.sh alembic.ini /home/tapis/
 RUN chmod +x /home/tapis/entry.sh
 # We overwrite sqlmodel package because it's buggy, but we still want the features.
 COPY SQLMODEL/main.py /usr/local/lib/python3.10/site-packages/sqlmodel/main.py
