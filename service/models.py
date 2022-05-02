@@ -6,7 +6,6 @@ from typing import List, Dict, Literal, Any, Set
 from pydantic import BaseModel, Field, PrivateAttr, validator, root_validator
 from tomlkit import table
 
-from utils import parse_object_data
 from stores import pg_store
 from req_utils import g
 from tapisservice.errors import DAOError
