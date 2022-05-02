@@ -11,6 +11,7 @@ spec:
       labels:
         app: MAKEFILE_SERVICE_NAME-main
     spec:
+      serviceAccountName: MAKEFILE_SERVICE_NAME-serviceaccount
       containers:
       - name: MAKEFILE_SERVICE_NAME-main
         imagePullPolicy: Never

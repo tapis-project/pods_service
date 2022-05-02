@@ -2,6 +2,8 @@ import traceback
 from typing import List, Dict
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+from pydantic import ValidationError
 
 from tapisservice.config import conf
 from tapisservice.errors import BaseTapisError
@@ -11,13 +13,13 @@ logger = get_logger(__name__)
 
 TAG = conf.version
 
-async def error_handler(request: Request, exc: Exception):
+async def error_handler(request: Request, exc):
     response = None
     status_code: int = -1
     #if conf.show_traceback:
-    if True:
+    if False:
         logger.debug(f"building traceback for exception...")
-        logger.debug(f"the type of exc is: {type(exc)}")
+        logger.debug(f"error type is: {type(exc).__name__}")
         try:
             raise exc
         except Exception:
@@ -29,14 +31,21 @@ async def error_handler(request: Request, exc: Exception):
                 response = error(msg=f'conf.show_traceback = True; only for development:\n {trace}')
                 status_code = 500
             except Exception as e:
-                logger.error(f"Got exception trying to format the exception! e: {e}")
+                logger.error(f"Got exception trying to format the exception! e: {repr(e)}")
 
     if not response and status_code == -1:
+        # We are looking for all errors derived from BaseTapisError
         if isinstance(exc, BaseTapisError):
             response = error(msg=exc.msg)
             status_code = exc.code
+        elif isinstance(exc, RequestValidationError) or isinstance(exc, ValidationError):
+            error_list = []
+            for error_dict in exc.errors():
+                error_list.append(f"{', '.join(error_dict['loc'])}: {error_dict['msg']}")
+            response = error(msg=error_list)
+            status_code = 400
         else:
-            response = error(msg=f'Unexpected {type(exc).__name__}: {exc}')
+            response = error(msg=f'Unexpected. {repr(exc)}')
             status_code = 500
 
     return JSONResponse(
@@ -179,4 +188,5 @@ class TapisMiddleware:
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         g.tapis_user='cgarcia'
         g.request_tenant_id='tacc'
+        g.site_id='tacc'
         await self.app(scope, receive, send)

@@ -13,43 +13,53 @@ Service to allow for easy deployment and use of databases. Able to import and ex
 - [X] Create main api file and organize how routes will be organized
 - [ ] Completely solve exception handling with FastAPI (don't let any errors out)
 	- [X] Catch Exception and TapisErrors 
- 	- [ ] Validation errors should be formatted better https://stackoverflow.com/a/69720977 Seems useful
+ 	- [X] Validation errors should be formatted better https://stackoverflow.com/a/69720977 Seems useful
+	- [ ] Format "integrity errors" from postgres/sqlalchemy.
 - [ ] Finish all endpoints
  	- [ ] /pods
-		- [ ] Create
+		- [X] Create
 			- [X] Have models and create messages
-			- [ ] Finish the rest
-		- [ ] Post
+		- [X] Get
  	- [ ] /pods/{pod_id}
 		- [ ] Del
 		- [ ] Put
+		- [X] Get
  	- [ ] /pods/{pod_id}/export
 		- [ ] Post
  	- [ ] /data/{data_id}
 		- [ ] Del
 		- [ ] Put
-- [ ] 	Validate everything
+- [X] Validate everything
 ### Backend
-- [ ] NeoStore
-	- [X] Run function with validation
-	- [ ] More helper fns
+- [X] SQLModel taking care of everything
+	- [X] Migrations with alembic
+	- [X] Validation with SQLModel
+	- [X] TapisModel gives helper functions
+	- [X] Site/tenant support
 - [X] Channels.py
 - [X] Queues.py
 - [X] Request_Utils.py
 - [ ] Kubernetes_utils.py
-	- [ ] Organize file
-- [ ] Spawner.py to create/deal with pods
+	- [X] Remake pod creation
+	- [X] Add service creation
+	- [ ] Add init container functionality to pod creation
+- [X] Spawner.py to create/deal with pods
+	- [X] Create pod/service
 - [ ] Health.py
+    - [X] Monitor k8 pods, update pod in database.
+	- [X] Take care of select states
+	- [ ] Take care of Shutdown requested pods
+	- [X] Ensure k8 pods are in database
+	- [ ] Ensure database isn't missing any pods.
 - [ ] Caddy needs correct error message for 400-50X errors.
 - [ ] Have different pod images for each database type
 	- [X] Base Neo4j
 	- [ ] ...
-- [ ] Organize db better
 - [ ] Connect S3
 - [ ] Export scripts
 - [ ] Init container for S3 import
 ### Nice to have
-- [X] Create the best Makefile ever
+- [X] Makefile
 - [ ] Make the README actually good
 - [ ] Get config and entry and more root dir files mounted so they can be edited.
 	- There's some permissions issues, for example, nothing can execute entry.sh when it's mounted. Config things as well.

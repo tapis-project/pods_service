@@ -1,16 +1,10 @@
-from functools import partial
 import os
-
-from store import PostgresStore
-
-from tapisservice.config import conf
-from __init__ import t
-import subprocess
-import re
-import requests as r
 import time
+import subprocess
 import psycopg
-
+from store import PostgresStore
+from __init__ import t
+from tapisservice.config import conf
 from tapisservice.logs import get_logger
 logger = get_logger(__name__)
 
@@ -126,9 +120,10 @@ def rabbitmq_init():
             logger.critical(msg)
             raise RuntimeError(msg)
     except Exception as e:
-        msg = f"Error during RabbitMQ start process. e: {e}"
+        msg = f"Error during RabbitMQ start process. e: {repr(e)}"
         logger.critical(msg)
-        raise Exception(msg)
+        e.args = [msg]
+        raise e
     
     # Creating user/pass, vhost, and assigning permissions for rabbitmq.
     try:
@@ -162,75 +157,11 @@ def rabbitmq_init():
             logger.debug(f"RabbitMQ init complete for site: {site}.")
             print(f"RabbitMQ init complete for site: {site}.")
     except Exception as e:
-        msg = f"Error setting up RabbitMQ for site: {site} e: {repr(e)}"
+        msg = f"Error setting up RabbitMQ for site: {site}. e: {repr(e)}"
         logger.critical(msg)
-        raise Exception(msg)
+        e.args = [msg]
+        raise e
 
-
-def postgres_init():
-    """
-    Initial site init for RabbitMQ using the RabbitMQ utility.
-    Consists of creating a user/pass and vhost for each site. Each site's user
-    gets permissions to it's vhosts. Primary site gets control to each vhost.
-    One-time/deployment
-    """
-    # Getting admin/root credentials to create users.
-    try:
-        admin_postgres_user = conf.postgres_user
-        admin_postgres_pass = conf.postgres_pass
-    except Exception as e:
-        msg = f"Postgres init requires postgres user and password. e: {e}"
-        logger.critical(msg)
-        raise RuntimeError(msg)
-
-    if not isinstance(admin_postgres_user, str) or not isinstance(admin_postgres_pass, str):
-        msg = f"Postgres creds must be of type 'str'. user: {type(admin_postgres_user)}, pass: {type(admin_postgres_pass)}."
-        logger.critical(msg)
-        raise RuntimeError(msg)
-
-    if not admin_postgres_user or not admin_postgres_pass:
-        msg = f"Postgres creds were given, but were None or empty. user: {admin_postgres_user}, pass: {admin_postgres_pass}" 
-        logger.critical(msg)
-        raise RuntimeError(msg)
-
-    # Each site is a database. Each tenant is a schema.
-    logger.debug(f"Administrating Postgres with user: {admin_postgres_user}.")
-    pg = PostgresStore(username=admin_postgres_user,
-                       password=admin_postgres_pass,
-                       host=conf.postgres_host,
-                       dbname='')
-
-    # Create a database for each site.
-    with psycopg.connect(f"postgresql://{admin_postgres_user}:{admin_postgres_pass}@{conf.postgres_host}", autocommit=True) as conn:
-        with conn.cursor() as cur:
-            for site in SITE_TENANT_DICT.keys():
-                try:
-                    cur.execute(f"CREATE DATABASE {site}")
-                except psycopg.errors.DuplicateDatabase:
-                    msg = f"Database for site: {site}, already exists. Skipping."
-                    logger.warning(msg)
-                logger.debug(f"CREATE DB complete for site: {site}.")
-
-    ## Go into each database and init indexes and tables for each tenant.
-    for site, tenants in SITE_TENANT_DICT.items():
-        pg = PostgresStore(username=admin_postgres_user,
-                           password=admin_postgres_pass,
-                           host=conf.postgres_host,
-                           dbname=site)
-        for tenant in tenants:
-            try:
-                pg.run(
-                    f'CREATE SCHEMA IF NOT EXISTS "{tenant}";'
-                    f'CREATE TABLE IF NOT EXISTS "{tenant}".pods (pod_name text, attached_data text[], roles_required '
-                    'text[], inherited_roles text[], description text);'
-                    f'CREATE TABLE IF NOT EXISTS "{tenant}".exported_data (source_pod text, tag text[], description '
-                    'text, creation_ts timestamp, update_ts timestamp, inherited_roles text[], roles_required text[])'
-                )
-            except Exception as e:
-                msg = f"Error when creating schemas for tenant: {tenant}. e: {e}"
-                logger.warning(msg)
-
-#CREATE CONSTRAINT FOR (p:Pod) REQUIRE p.name IS UNIQUE
 
 def role_init():
     """
@@ -244,29 +175,139 @@ def role_init():
     #     t.sk.grantRole(tenant=tenant, roleName='abaco_admin', user='streams', _tapis_set_x_headers_from_service=True)
 
 
-if __name__ == "__main__":
-    # rabbitmq and neo only go through init on primary site.
-    rabbitmq_init()
-    postgres_init()
-    role_init()
+def create_pg_objects():
+    admin_postgres_user = conf.postgres_user
+    admin_postgres_pass = conf.postgres_pass
+
+    # Create default pg object to use later (creating dbs, etc)
+    pg_default = PostgresStore(username=admin_postgres_user,
+                               password=admin_postgres_pass,
+                               host=conf.postgres_host,
+                               dbname="postgres")
+
+    pg_store = {}
+    # Now add in all of the sites and tenant pg engines.
+    for site, tenants in SITE_TENANT_DICT.items():
+        for tenant in tenants:
+            pg = PostgresStore(username=admin_postgres_user,
+                               password=admin_postgres_pass,
+                               host=conf.postgres_host,
+                               dbname=site,
+                               dbschema=tenant)
+            if not pg_store.get(site):
+                pg_store[site] = {}
+            pg_store[site][tenant] = pg
+    return pg_store, pg_default
 
 # We do this outside of a function because the 'store' objects need to be imported
 # by other scripts. Functionalizing it would create more code and make it harder
 # to read in my opinion.
-# pg_store = {}
+try:
+    pg_store, pg_default = create_pg_objects()
+except Exception as e:
+    logger.critical(e)
+    raise
 
-admin_postgres_user = conf.postgres_user
-admin_postgres_pass = conf.postgres_pass
 
-pg_store = {}
-for site, tenants in SITE_TENANT_DICT.items():
-    for tenant in tenants:
-        pg = None
-        pg = PostgresStore(username=admin_postgres_user,
-                           password=admin_postgres_pass,
-                           host=conf.postgres_host,
-                           dbname=site,
-                           dbschema=tenant)
-        if not pg_store.get(site):
-            pg_store[site] = {}
-        pg_store[site][tenant]= pg
+if __name__ == "__main__":
+    # rabbitmq and neo only go through init on primary site.
+    rabbitmq_init()
+    role_init()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# # Schemas for postgres data.
+# # First entry is the primary_key
+# SCHEMAS = {
+#     "pods": {
+#         "pod_name": "text", # primary_key
+#         "roles_required": "text[]",
+#         "roles_inherited": "text[]",
+#         "description": "text",
+#         "database_type": "text",
+#         "data_requests": "text[]",
+#         "data_attached": "text[]",
+#         "status": "text",
+#         "creation_ts": "timestamp",
+#         "update_ts": "timestamp"
+#         },
+#     "exported_data": {
+#         "source_pod": "text", # primary_key
+#         "tag": "text[]",
+#         "description": "text",
+#         "creation_ts": "timestamp",
+#         "update_ts": "timestamp",
+#         "roles_inherited": "text[]",
+#         "roles_required": "text[]",
+#         "export_path": "text",
+#         "owner": "text"
+#     }
+# }
+
+
+# def postgres_init():
+#     """
+#     Initial site init for RabbitMQ using the RabbitMQ utility.
+#     Consists of creating a user/pass and vhost for each site. Each site's user
+#     gets permissions to it's vhosts. Primary site gets control to each vhost.
+#     One-time/deployment
+#     """
+#     # Getting admin/root credentials to create users.
+#     try:
+#         admin_postgres_user = conf.postgres_user
+#         admin_postgres_pass = conf.postgres_pass
+#     except Exception as e:
+#         msg = f"Postgres init requires postgres user and password. e: {repr(e)}"
+#         logger.critical(msg)
+#         e.args = [msg]
+#         raise e
+
+#     if not isinstance(admin_postgres_user, str) or not isinstance(admin_postgres_pass, str):
+#         msg = f"Postgres creds must be of type 'str'. user: {type(admin_postgres_user)}, pass: {type(admin_postgres_pass)}."
+#         logger.critical(msg)
+#         raise RuntimeError(msg)
+
+#     if not admin_postgres_user or not admin_postgres_pass:
+#         msg = f"Postgres creds were given, but were None or empty. user: {admin_postgres_user}, pass: {admin_postgres_pass}" 
+#         logger.critical(msg)
+#         raise RuntimeError(msg)
+
+#     # Each site is a database. Each tenant is a schema.
+#     logger.debug(f"Administrating Postgres with user: {admin_postgres_user}.")
+#     pg = PostgresStore(username=admin_postgres_user,
+#                        password=admin_postgres_pass,
+#                        host=conf.postgres_host,
+#                        dbname='postgres')
+
+    # # Create a database for each site.
+    # for site in SITE_TENANT_DICT.keys():
+    #     try:
+    #         pg.run(f"CREATE DATABASE {site}", autocommit=True)
+    #     except:
+    #         msg = f"Database for site: {site}, already exists. Skipping."
+    #         logger.warning(msg)
+
+    # Go into each database and init indexes and schemas for each tenant.
+    # for site, tenants in SITE_TENANT_DICT.items():
+    #     pg = PostgresStore(username=admin_postgres_user,
+    #                        password=admin_postgres_pass,
+    #                        host=conf.postgres_host,
+    #                        dbname=site)
+    #     for tenant in tenants:
+    #         try:
+    #             # TODO indexes! #CREATE CONSTRAINT FOR (p:Pod) REQUIRE p.name IS UNIQUE
+    #             pg.run(f'CREATE SCHEMA IF NOT EXISTS "{tenant}"', autocommit=True)
+    #         except Exception as e:
+    #             msg = f"Error when creating schemas for tenant: {tenant}. e: {repr(e)}"
+    #             logger.warning(msg)

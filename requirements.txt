@@ -9,3 +9,5 @@ kubernetes
 rabbitpy
 psycopg
 psycopg[pool]
+sqlmodel
+channelpy

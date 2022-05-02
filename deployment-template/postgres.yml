@@ -20,6 +20,8 @@ spec:
             memory: "4G"
             cpu: "2"
         env:
+        - name: POSTGRES_DB
+          value: postgres
         - name: POSTGRES_USER
           value: admin
         - name: POSTGRES_PASSWORD

@@ -34,6 +34,8 @@ RUN touch /home/tapis/config.json
 COPY service /home/tapis/service
 COPY configschema.json entry.sh /home/tapis/
 RUN chmod +x /home/tapis/entry.sh
+# We overwrite sqlmodel package because it's buggy, but we still want the features.
+COPY SQLMODEL/main.py /usr/local/lib/python3.10/site-packages/sqlmodel/main.py
 
 # Permission finalization
 RUN chown -R tapis:tapis /home/tapis
