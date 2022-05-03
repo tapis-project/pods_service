@@ -12,10 +12,10 @@ from __init__ import t, Tenants
 from tapisservice.tapisfastapi.auth import authn_and_authz
 from tapisservice.logs import get_logger
 logger = get_logger(__name__)
+from errors import ResourceError, PermissionsException
 
 from tapisservice.config import conf
 
-#from errors import ClientException, ResourceError, PermissionsException
 
 TOKEN_RE = re.compile('Bearer (.+)')
 

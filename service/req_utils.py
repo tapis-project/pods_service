@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 
+from tapisservice.tapisfastapi.utils import error
 from tapisservice.config import conf
 from tapisservice.errors import BaseTapisError
 from tapisservice.logs import get_logger
