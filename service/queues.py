@@ -4,7 +4,7 @@ import rabbitpy
 import threading
 import time
 
-from req_utils import g
+from tapisservice.tapisfastapi.utils import g
 from tapisservice.config import conf
 from tapisservice.logs import get_logger
 logger = get_logger(__name__)

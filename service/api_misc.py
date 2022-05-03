@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 from tapisservice.errors import BaseTapisError
-from req_utils import ok, g
+from tapisservice.tapisfastapi.utils import g, ok
 
 router = APIRouter()
 
@@ -22,4 +22,4 @@ async def broken():
 @router.get("/global/")
 async def globaltest():
     g.test = 26
-    return g.tapis_user, g.test
+    return g.username, g.test

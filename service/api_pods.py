@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 from models import Pod, NewPod, Password
 from channels import CommandChannel
-from req_utils import g, ok
+from tapisservice.tapisfastapi.utils import g, ok
 from codes import REQUESTED
 from tapisservice.logs import get_logger
 logger = get_logger(__name__)

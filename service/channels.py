@@ -3,7 +3,7 @@
 from tapisservice.config import conf
 from stores import get_site_rabbitmq_uri
 from queues import BinaryTaskQueue
-from req_utils import g
+from tapisservice.tapisfastapi.utils import g
 
 def site():
     site_id = g.site_id or conf.get('site_id')

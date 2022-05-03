@@ -1,12 +1,12 @@
 from fastapi import APIRouter
 from models import Pod, NewPod, UpdatePod
 from channels import CommandChannel
-from req_utils import g, ok
+from tapisservice.tapisfastapi.utils import g, ok
+
 from tapisservice.logs import get_logger
 logger = get_logger(__name__)
 
 router = APIRouter()
-
 
 ### /pods/{pod_name}
 @router.put("/pods/{pod_name}", tags=["pods"])

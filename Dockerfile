@@ -2,7 +2,7 @@
 # Image: kg/core
 
 # inherit from the flaskbase iamge:
-FROM tapis/flaskbase-plugins:latest
+FROM tapis/flaskbase-fastapi:latest
 #FROM python:3.10
 #RUN useradd tapis -u 4872
 RUN python -m pip install -U setuptools

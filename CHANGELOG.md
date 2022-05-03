@@ -2,6 +2,20 @@
 All notable changes to this project will be documented in this file.
 
 
+## 0.0.3 - 2022-05-03
+
+### Breaking Changes:
+- Yes.
+
+### New features:
+- Auth!
+- Updated flaskbase-plugins to flaskbase-fastapi. This uses a new TapisMiddleware that deals with authn/authz.
+- Removed duplicate req_utils stuff. Only have error handler locally now, all other utils from flaskbase (including global g)
+
+### Bug fixes:
+- Yes.
+
+
 ## 0.0.2 - 2022-05-02
 
 ### Breaking Changes:

@@ -10,7 +10,6 @@ from health import graceful_rm_pod
 from models import Pod
 from threading import Thread
 from channels import CommandChannel
-from req_utils import g
 #from health import get_worker
 from kubernetes_utils import create_container, create_service, KubernetesError
 from tapisservice.config import conf

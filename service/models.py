@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field, PrivateAttr, validator, root_validator
 from tomlkit import table
 
 from stores import pg_store
-from req_utils import g
+from tapisservice.tapisfastapi.utils import g
 from tapisservice.errors import DAOError
 from tapisservice.logs import get_logger
 logger = get_logger(__name__)
@@ -221,6 +221,12 @@ class Pod(TapisModel, table=True, validate=True):
         database_types = ['neo4j', 'test-still-neo4j']
         if not v in database_types:
             raise ValueError(f"database_type must be in {database_types}")
+        return v
+
+    @validator('pod_owner', always=True)
+    def check_owner(cls, v):
+        if v is None:
+            v = g.username
         return v
 
     @root_validator(pre=False)
