@@ -9,13 +9,13 @@ kubectl delete -f security.yml
 
 # Configs
 kubectl delete configmap MAKEFILE_SERVICE_NAME-config
-kubectl delete configmap MAKEFILE_SERVICE_NAME-caddyfile
+kubectl delete configmap MAKEFILE_SERVICE_NAME-nginx
 
 # PVC
 
 # Deploy
 kubectl delete -f rabbitmq.yml
 kubectl delete -f postgres.yml
-kubectl delete -f caddy.yml
+kubectl delete -f nginx.yml
 kubectl delete -f main.yml
 kubectl delete -f spawner.yml

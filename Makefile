@@ -48,14 +48,14 @@ export IMG_SOURCE := local
 export NAMESPACE := default
 
 # SERVICE_NAME to use throughout. Changes deployment folder. Have to modify here too.
-# options: "kgservice" | "whatever"
-# default: "kgservice"
-export SERVICE_NAME := kg
+# options: "pods" | "whatever"
+# default: "pods"
+export SERVICE_NAME := pods
 
 # SERVICE_PASS to use throughout. Must be filled.
 export SERVICE_PASS := password
 
-# DEV_TOOLS bool. Whether or not to start jupyter + mount kg_service folder in pods (main).
+# DEV_TOOLS bool. Whether or not to start jupyter + mount pods/service folder in pods (main).
 # options: "false" | "true"
 # default: "false"
 export DEV_TOOLS := true
@@ -71,7 +71,7 @@ help:
 	| column -t  -s '###'
 
 
-# Gets all remote images and starts kgservice in daemon mode
+# Gets all remote images and starts pods in daemon mode
 #: Deploy service
 up: vars build
 	@echo "Makefile: $(GREEN)up$(NC)"
@@ -106,8 +106,6 @@ test: vars up
 
 	@echo "Converting back to snake"
 	sed -i '' 's/"web_case".*/"web_case": "snake",/g' config-local.json
-
-
 	@echo "\n\nCamel Case Tests.\n"
 	@echo "Converting config file to camel case and launching Abaco Stack."
 	sed -i 's/"web_case".*/"web_case": "camel",/g' config-local.json
@@ -127,11 +125,11 @@ build: vars
 ifeq ($(DAEMON),minikube)
 	@echo "  🌎 : Using daemon: $(LCYAN)minikube$(NC)"
 	@echo ""
-	minikube image build -t $(SERVICE_NAME)/core:$$TAG ./
+	minikube image build -t $(SERVICE_NAME)/pods-api:$$TAG ./
 else ifeq ($(DAEMON),docker)
 	@echo "  🌎 : Using daemon: $(LCYAN)docker$(NC)"
 	@echo ""
-	docker build -t $(SERVICE_NAME)/core:$$TAG ./
+	docker build -t $(SERVICE_NAME)/pods-api:$$TAG ./
 endif
 	@echo ""
 
@@ -142,9 +140,7 @@ pull:
 	@echo "Not yet implemented"
 
 
-# Ends all active k8 containers needed for kgservice
-# This kills any workers on the "kgservice_kgservice" network.
-# In order to work on any network, the script needs to someone get network from the docker-compose.yml
+# Ends all active k8 containers needed for pods
 #: Delete service
 down:
 	@echo "Makefile: $(GREEN)down$(NC)"

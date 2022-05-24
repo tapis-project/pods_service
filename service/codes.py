@@ -23,14 +23,12 @@ class PermissionLevel(object):
         self.name = name
         if level:
             self.level = level
-        elif name == 'NONE':
-            self.level = 0
         elif name == 'READ':
+            self.level = 0
+        elif name == 'USER':
             self.level = 1
-        elif name == 'EXECUTE':
+        elif name == 'ADMIN':
             self.level = 2
-        elif name == 'UPDATE':
-            self.level = 3
 
     def __lt__(self, other):
         if isinstance(other, PermissionLevel):
@@ -55,19 +53,22 @@ class PermissionLevel(object):
     def __repr__(self):
         return self.name
 
+    def authorized_levels(self):
+        if self.name == 'READ':
+            return ['READ', 'USER', 'ADMIN']
+        elif self.name == 'USER':
+            return ['USER', 'ADMIN']
+        elif self.name == 'ADMIN':
+            return ['ADMIN']
+        else:
+            raise KeyError(f"Found PermissionLevel name that is unknown. {self.name}")
 
-NONE = PermissionLevel('NONE')
 READ = PermissionLevel('READ')
-EXECUTE = PermissionLevel('EXECUTE')
-UPDATE = PermissionLevel('UPDATE')
+USER = PermissionLevel('USER')
+ADMIN = PermissionLevel('ADMIN')
 
 
-PERMISSION_LEVELS = (NONE.name, READ.name, EXECUTE.name, UPDATE.name)
-
-ALIAS_NONCE_PERMISSION_LEVELS = (NONE.name, READ.name, EXECUTE.name)
-
-# role set by flaskbase in case the access_control_type is none
-ALL_ROLE = 'ALL'
+PERMISSION_LEVELS = (READ.name, USER.name, ADMIN.name)
 
 # roles - only used when Tapis's JWT Auth is activated.
 # the admin role allows users full access to Abaco, including modifying workers assigned to actors.
@@ -76,4 +77,4 @@ ADMIN_ROLE = 'abaco_admin'
 # the privileged role allows users to create privileged actors.
 PRIVILEGED_ROLE = 'abaco_privileged'
 
-roles = [ALL_ROLE, ADMIN_ROLE, PRIVILEGED_ROLE]
+roles = [ADMIN_ROLE, PRIVILEGED_ROLE]

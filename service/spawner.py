@@ -7,11 +7,9 @@ from concurrent.futures import ThreadPoolExecutor
 from codes import BUSY, ERROR, SPAWNER_SETUP, CREATING_CONTAINER, UPDATING_STORE, READY, \
     REQUESTED, SHUTDOWN_REQUESTED, SHUTTING_DOWN
 from health import graceful_rm_pod
-from models import Pod
-from threading import Thread
+from models import Pod, Password
 from channels import CommandChannel
-#from health import get_worker
-from kubernetes_utils import create_container, create_service, KubernetesError
+from kubernetes_templates import start_generic_pod, start_neo4j_pod
 from tapisservice.config import conf
 from tapisservice.logs import get_logger
 from tapisservice.errors import BaseTapisError
@@ -21,61 +19,6 @@ logger = get_logger(__name__)
 class SpawnerException(BaseTapisError):
     """Error with spawner."""
     pass
-
-def start_neo4j_pod(pod, revision: int):
-    logger.debug(f"Attempting to start neo4j pod; name: {pod.k8_name}; revision: {revision}")
-
-    # Init new user/pass https://neo4j.com/labs/apoc/4.1/operational/init-script/
-    container = {
-        "name": pod.k8_name,
-        "revision": revision,
-        "image": "neo4j",
-        "command": [
-            '/bin/bash',
-            '-c',
-            ('export NEO4J_dbms_default__advertised__address=$(hostname -f) && '
-            'export NEO4J_causalClustering_discoveryAdvertisedAddress=$(hostname -f)::5000 && '
-            'export NEO4J_causalClustering_transactionAdvertisedAddress=$(hostname -f):6000 && '
-            'export NEO4J_causalClustering_raftAdvertisedAddress=$(hostname -f):7000 && '
-            'exec /docker-entrypoint.sh "neo4j"')
-        ],
-        "ports_dict": {
-            "discovery": 5000,
-            "tx": 6000,
-            "raft": 7000,
-            "browser": 7474,
-            "bolt": 7687
-        },
-        "environment": {
-            "NEO4JLABS_PLUGINS": [],
-            "NEO4J_USERNAME": pod.k8_name,
-            "NEO4J_PASSWORD": "adminadmin",
-            "NEO4J_causalClustering_initialDiscoveryMembers": "neo4j-core-0.neo4j.default.svc.cluster.local:5000,neo4j-core-1.neo4j.default.svc.cluster.local:5000,neo4j-core-2.neo4j.default.svc.cluster.local:5000",
-            "NEO4J_dbms_security_auth__enabled": "false",
-            "NEO4J_dbms_mode": "CORE",
-            "NEO4J_dbms_memory_heap_max__size": "3g",
-            "NEO4J_dbms_memory_heap_initial__size": "2g",
-            "NEO4J_apoc_import_file_enabled": "true",
-            "NEO4J_apoc_export_file_enabled": "true",
-            "NEO4J_apoc_initializer_system": "CREATE USER name SET ENCRYPTED PASSWORD 1,hash,salt" #SHA256 #create user dummy set password 'abc'"
-        },
-        "mounts": [],
-        "mem_limit": "4G",
-        "max_cpus": "1000",
-        "user": None
-    }
-
-    # Change pod status
-    pod.status = CREATING_CONTAINER
-    pod.db_update()
-    logger.debug(f"spawner has updated pod status to CREATING_CONTAINER")
-
-    # Create init_container, container, and service.
-    create_container(**container)
-    create_service(name = pod.k8_name, ports_dict = container["ports_dict"])
-
-    # TODO: Change caddy api bit.
-
 
 class Spawner(object):
     def __init__(self):
@@ -99,7 +42,7 @@ class Spawner(object):
     def process(self, cmd):
         """Main spawner method for processing a command from the CommandChannel."""
         logger.info(f"top of process; cmd: {cmd}")
-        pod_name = cmd["pod_name"]
+        pod_id = cmd["pod_id"]
         tenant_id = cmd["tenant_id"]
         site_id = cmd["site_id"]
 
@@ -110,7 +53,7 @@ class Spawner(object):
         # the status will be SHUTDOWN_REQUESTED, not REQUESTED. in that case, we simply abort and remove the
         # worker from the collection.
         try:
-            pod = Pod.db_get_with_pk(pod_name, tenant=tenant_id, site=site_id)
+            pod = Pod.db_get_with_pk(pod_id, tenant=tenant_id, site=site_id)
         except Exception as e:
             msg = f"Exception in spawner trying to retrieve pod object from store. Aborting. Exception: {e}"
             logger.error(msg)
@@ -126,11 +69,17 @@ class Spawner(object):
         pod.db_update()
         logger.debug(f"spawner has updated pod status to SPAWNER_SETUP")
 
-        # TODO: If database_type == neo4j, then fn. How to generalize?
         try:
-            start_neo4j_pod(pod=pod, revision=1)
+            if pod.pod_template.startswith("custom-"):
+                custom_image = pod.pod_template.replace("custom-", "")
+                start_generic_pod(pod=pod, custom_image=custom_image, revision=1)
+            elif pod.pod_template == 'neo4j':
+                start_neo4j_pod(pod=pod, revision=1)
+            else:
+                logger.critical(f"pod_template found no working functions. Running graceful_rm_pod.")
+                graceful_rm_pod(pod)
         except Exception as e:
-            msg = f"Got error when creating pod. Running graceful_rm_pod. e: {e}"
+            logger.critical(f"Got error when creating pod. Running graceful_rm_pod. e: {e}")
             graceful_rm_pod(pod)
 
 def main():

@@ -1,16 +1,14 @@
-# Core image for kg
-# Image: kg/core
+# Core image for pods
+# Image: tapis/pods-api
 
-# inherit from the flaskbase iamge:
-FROM tapis/flaskbase-fastapi:latest
-#FROM python:3.10
-#RUN useradd tapis -u 4872
-RUN python -m pip install -U setuptools
+# Create base image
+FROM python:3.10
+RUN useradd tapis -u 4872
+WORKDIR /home/tapis/
 
 # set the name of the api, for use by some of the common modules.
-ENV TAPIS_API kg
-ENV PYTHONPATH .:*:kg:kg/*
-
+ENV TAPIS_API pods
+ENV PYTHONPATH .:*:pods:pods/*
 
 ## PACKAGE INITIALIZATION
 COPY requirements.txt /home/tapis/
@@ -24,9 +22,6 @@ RUN pip3 install -r /home/tapis/requirements.txt
 RUN wget https://raw.githubusercontent.com/rabbitmq/rabbitmq-management/v3.8.9/bin/rabbitmqadmin
 RUN chmod +x rabbitmqadmin
 
-## DEV TOOLS
-RUN pip3 install jupyterlab
-
 ## FILE INITIALIZATION
 # touch config.json
 RUN touch /home/tapis/config.json
@@ -39,9 +34,7 @@ RUN chmod +x /home/tapis/entry.sh
 COPY SQLMODEL/main.py /usr/local/lib/python3.10/site-packages/sqlmodel/main.py
 
 # Permission finalization
-RUN chown -R tapis:tapis /home/tapis
+#RUN chown -R tapis:tapis /home/tapis
 
-USER tapis
-WORKDIR /home/tapis/
 
 CMD ["/home/tapis/entry.sh"]

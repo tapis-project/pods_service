@@ -23,9 +23,9 @@ class CommandChannel(BinaryTaskQueue):
 
         super().__init__(name=f'command_channel_{name}')
 
-    def put_cmd(self, pod_name, tenant_id, site_id):
+    def put_cmd(self, pod_id, tenant_id, site_id):
         """Put a new command on the command channel."""
-        msg = {'pod_name': pod_name,
+        msg = {'pod_id': pod_id,
                'tenant_id': tenant_id,
                'site_id': site_id}
 

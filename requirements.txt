@@ -1,13 +1,24 @@
+# Tapis
+tapipy
+tapisservice==1.2.2
+
+# Service API
 pydantic
-jupyterlab
-neo4j-driver
-pylint
-uvicorn
 fastapi
-tomlkit
-kubernetes
-rabbitpy
-psycopg
-psycopg[pool]
 sqlmodel
+uvicorn
+
+# Databases/APIs
+sqlalchemy
+alembic
+psycopg2
+kubernetes
+neo4j-driver
+rabbitpy
 channelpy
+
+# Misc
+pylint
+
+# Dev
+jupyterlab

@@ -21,12 +21,14 @@ Running mode, either:
 """
 
 import time
+import random
 from kubernetes import client, config
-from kubernetes_utils import rm_container, get_current_k8_pods, rm_service, KubernetesError
+from kubernetes_utils import rm_container, get_current_k8_pods, rm_service, KubernetesError, update_nginx_configmap, get_k8_logs
 
 from codes import READY, SHUTTING_DOWN, SHUTDOWN_REQUESTED, STOPPED, ERROR
-from stores import pg_store
+from stores import pg_store, SITE_TENANT_DICT
 from models import Pod, ExportedData
+from sqlmodel import select
 from tapisservice.config import conf
 from tapisservice.logs import get_logger
 logger = get_logger(__name__)
@@ -67,14 +69,14 @@ def check_k8_pods():
     # This is all for only the site specified in conf.site_id.
     # Each site should get it's own health pod.
     # Go through live containers first as it's "truth". Set database from that info. (error if needed, update statuses)
-    k8_pods = get_current_k8_pods() # Returns {k8_pod_info, site, tenant, pod_name}
+    k8_pods = get_current_k8_pods() # Returns {k8_pod_info, site, tenant, pod_id}
 
     # Check each pod.
     for k8_pod in k8_pods:
-        logger.info(f"Checking health for pod_name: {k8_pod['pod_name']}")
+        logger.info(f"Checking health for pod_id: {k8_pod['pod_id']}")
 
         # Check for found pod in database.
-        pod = Pod.db_get_with_pk(k8_pod['pod_name'], k8_pod['tenant_id'], k8_pod['site_id'])
+        pod = Pod.db_get_with_pk(k8_pod['pod_id'], k8_pod['tenant_id'], k8_pod['site_id'])
         # We've found a pod without a database entry. Shut it and potential service down.
         if not pod:
             logger.warning(f"Found k8 pod without any database entry. Deleting. Pod: {k8_pod['k8_name']}")
@@ -92,6 +94,14 @@ def check_k8_pods():
                             "start_time": str(k8_pod['pod_info'].status.start_time),
                             "message": ""}
         
+        # Get pod container state
+        # We try to get c_state. c_state when pending is None for a bit.
+        try:
+            c_state = k8_pod['pod_info'].status.container_statuses[0].state
+        except:
+            c_state = None
+        logger.debug(f'state: {c_state}')
+
         # This is actually bad. Means the pod has stopped, which shouldn't be the case.
         # We'll put pod in error state with message.
         if k8_pod_phase == "Succeeded":
@@ -101,19 +111,20 @@ def check_k8_pods():
             pod.status = ERROR
             pod.db_update()
             continue
-        elif k8_pod_phase in ["Running", "Pending"]:
-            # Check if container running or in error state (pods are always only one container (so far))
+        elif k8_pod_phase in ["Running", "Pending", "Failed"]:
+            # Check if container running or in error state
             # Container can be in waiting state due to ContainerCreating ofc
-            # We try to get c_state. container_status when pending is None for a bit.
-            try:
-                c_state = k8_pod['pod_info'].status.container_statuses[0].state
-            except:
-                c_state = None
-            logger.debug(f'state: {c_state}')
             if c_state:
                 if c_state.waiting and c_state.waiting.reason != "ContainerCreating":
                     logger.critical(f"Kube pod in waiting state. msg:{c_state.waiting.message}; reason: {c_state.waiting.reason}")
                     container_status['message'] = f"Pod in waiting state for reason: {c_state.waiting.message}."
+                    pod.container_status = container_status
+                    pod.status = ERROR
+                    pod.db_update()
+                    continue
+                elif c_state.terminated:
+                    logger.critical(f"Kube pod in terminated state. msg:{c_state.terminated.message}; reason: {c_state.terminated.reason}")
+                    container_status['message'] = f"Pod in terminated state for reason: {c_state.terminated.message}."
                     pod.container_status = container_status
                     pod.status = ERROR
                     pod.db_update()
@@ -129,16 +140,64 @@ def check_k8_pods():
                     pod.container_status = container_status
                     pod.status = READY
                     pod.db_update()
-                    continue
             else:
                 # Not sure if this is possible/what happens here.
                 # There is definitely an Error state. Can't replicate locally yet.
                 logger.critical(f"NO c_state. {k8_pod['pod_info'].status}")
+        
+        # Getting here means pod is running. Store logs now.
+        logs = get_k8_logs(k8_pod['k8_name'])
+        pod.logs = logs
+        pod.db_update()
+
+
+def check_db_pods():
+    """Go through database for all tenants in this site. Sync with k8_pods. Delete/Create whatever is needed. Do nginx stuff.
+    """
+    all_pods = []
+    stmt = select(Pod)
+    for tenant in SITE_TENANT_DICT[conf.site_id]:
+        all_pods += pg_store[conf.site_id][tenant].run("execute", stmt, scalars=True, all=True)
+
+    # Get unused_instance_ports for nginx later.
+    unused_instance_ports = list(range(52001, 52999))
+    for pod in all_pods:
+        try:
+            unused_instance_ports.remove(pod.instance_port)
+        except ValueError:
+            pass
+
+    config_changed = False
+    tcp_pod_nginx_info = {} # for nginx config later
+    http_pod_nginx_info = {} # for nginx config later
+    for pod in all_pods:
+        # Check for shutting down status
+        # check for 1 or -1 in instance_ports to set/delete port.
+        # 1 means we need to assign an instance_port.
+        if pod.instance_port == 1:
+            new_port = random.choice(unused_instance_ports)
+            unused_instance_ports.remove(new_port)
+            pod.instance_port = new_port
+            pod.db_update()
+            config_changed = True
+        
+        if pod.instance_port > 52000:
+            match pod.server_protocol:
+                case "tcp":
+                    tcp_pod_nginx_info[pod.pod_id] = {"instance_port": pod.instance_port, "routing_port": pod.routing_port}
+                case "http":
+                    http_pod_nginx_info[pod.pod_id] = {"instance_port": pod.instance_port, "routing_port": pod.routing_port}
+
+    # Only update config when there's been a change (either setting an instance port. Or deleting.)
+    if config_changed:
+        update_nginx_configmap(tcp_pod_nginx_info, http_pod_nginx_info)
+
 
 def main():
     while True:
-        logger.info(f"Running kgservice health checks. Now: {time.time()}")
+        logger.info(f"Running pods health checks. Now: {time.time()}")
         check_k8_pods()
+        check_db_pods()
         ########
         #######
         # Go through database for each tenant in site now.

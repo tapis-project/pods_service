@@ -37,7 +37,7 @@ all_urls = {}
 for site, tenants in pg_store.items():
     # Create database and fail gracefully if it already exists
     try:
-        pg_default.run(f'CREATE DATABASE "{site}"', autocommit=True)
+        pg_default.run('execute', f'CREATE DATABASE "{site}"', autocommit=True)
     except:
         msg = f"Database for site: {site}, already exists. Skipping."
         logger.warning(msg)
@@ -46,7 +46,7 @@ for site, tenants in pg_store.items():
     for tenant, pg in tenants.items():
         try:
             # TODO indexes! #CREATE CONSTRAINT FOR (p:Pod) REQUIRE p.name IS UNIQUE
-            pg.run(f'CREATE SCHEMA IF NOT EXISTS "{tenant}"', autocommit=True)
+            pg.run("execute", f'CREATE SCHEMA IF NOT EXISTS "{tenant}"', autocommit=True)
         except Exception as e:
             msg = f"Error when creating schemas for tenant: {tenant}. e: {repr(e)}"
             logger.warning(msg)
@@ -130,6 +130,7 @@ def run_migrations_online():
     connections = []
     transactions = []
     try:
+        # Create tables in each tenant(schema) in each database.
         for name, engine in engines.items():
             site, tenant = name.split('_')
             tenant = tenant.replace('HYPHEN', '-')

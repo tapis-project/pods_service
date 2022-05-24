@@ -19,6 +19,9 @@ rules:
 - apiGroups: [""]
   resources: ["pods", "pods/log", "services"]
   verbs: ["list", "create", "get", "watch", "delete"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["list", "get", "patch"]
 
 ---
 kind: ClusterRoleBinding

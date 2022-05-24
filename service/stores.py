@@ -1,7 +1,6 @@
 import os
 import time
 import subprocess
-import psycopg
 from store import PostgresStore
 from __init__ import t
 from tapisservice.config import conf
@@ -36,7 +35,7 @@ def get_site_rabbitmq_uri(site):
     site_object = conf.get(f'{site}_site_object') or {}
 
     # Checking for RabbitMQ credentials for each site.
-    site_rabbitmq_user = f"kg_{site}_user"
+    site_rabbitmq_user = f"pods_{site}_user"
     site_rabbitmq_pass = site_object.get('site_rabbitmq_pass') or conf.get("global_site_object").get("site_rabbitmq_pass")
 
     # Setting up auth string.
@@ -48,7 +47,7 @@ def get_site_rabbitmq_uri(site):
     # Adding auth to rabbitmq_uri.
     rabbitmq_uri = rabbitmq_uri.replace("amqp://", f"amqp://{auth}@")
     # Adding site vhost to rabbitmq_uri
-    rabbitmq_uri += f"/kg_{site}"
+    rabbitmq_uri += f"/pods_{site}"
     return rabbitmq_uri
 
 
@@ -132,7 +131,7 @@ def rabbitmq_init():
             site_object = conf.get(f'{site}_site_object') or {}
 
             # Checking for RabbitMQ credentials for each site.
-            site_rabbitmq_user = f"kg_{site}_user"
+            site_rabbitmq_user = f"pods_{site}_user"
             site_rabbitmq_pass = site_object.get('site_rabbitmq_pass') or ""
             if not site_rabbitmq_pass:
                 msg = f'No site_rabbitmq_pass found for site: {site}. Using Global.'
@@ -144,7 +143,7 @@ def rabbitmq_init():
                     raise KeyError(msg)
 
             # Site DB Name
-            site_db_name = f"kg_{site}"
+            site_db_name = f"pods_{site}"
 
             # Initializing site user account.
             subprocess.run(fn_call + f'declare user name={site_rabbitmq_user} password={site_rabbitmq_pass} tags=None', shell=True) # create user/pass
@@ -167,7 +166,6 @@ def role_init():
     """
     Creating roles at reg startup so that we can insure they always exist and that they're in all tenants from now on.
     """
-    tenants = conf.tenants or []
     # for tenant in tenants:
     #     t.sk.createRole(roleTenant=tenant, roleName='abaco_admin', description='Admin role in Abaco.', _tapis_set_x_headers_from_service=True)
     #     t.sk.createRole(roleTenant=tenant, roleName='abaco_privileged', description='Privileged role in Abaco.', _tapis_set_x_headers_from_service=True)
@@ -215,4 +213,5 @@ if __name__ == "__main__":
     role_init()
     import subprocess
     time.sleep(3)
+    subprocess.run("alembic revision -m 'init2' --autogenerate", shell=True) #Dev step for new migrations
     subprocess.run("alembic upgrade head", shell=True)

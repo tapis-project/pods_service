@@ -1,3 +1,4 @@
+from fcntl import DN_DELETE
 import json
 import os
 import time
@@ -6,6 +7,7 @@ import datetime
 import random
 from typing import Literal, Dict, List
 
+from jinja2 import Environment, FileSystemLoader
 from kubernetes import client, config
 from requests.exceptions import ReadTimeout, ConnectionError
 
@@ -14,7 +16,10 @@ logger = get_logger(__name__)
 
 from tapisservice.config import conf
 from codes import BUSY, READY, RUNNING, CREATING_CONTAINER
-
+from stores import SITE_TENANT_DICT
+from stores import pg_store
+from sqlmodel import select
+from models import Pod
 
 # k8 client creation
 config.load_incluster_config()
@@ -95,23 +100,35 @@ def list_all_containers():
     pods = k8.list_namespaced_pod(NAMESPACE).items
     return pods
 
-def get_current_k8_pods(filter_str: str = "kgservice"):
+def get_current_k8_pods(service_name: str = "pods", site_id: str = conf.site_id):
+    """
+    The get_current_k8_pods function returns a list of dictionaries containing the following keys:
+        - pod_info: The Kubernetes API object for the container.
+        - site_id: The site ID (e.g., 'east', 'west') where this container is located.
+        - tenant_id: The tenant ID (e.g., 'acme-prod') where this container is located.
+        - pod_id: A string representing the name of the pod, e.g., &quot;pods-east-acme-prod&quot;.  This value can be used to filter out pods in other sites or tenants when needed.
+    
+    :param filter_str:str=&quot;pods&quot;: Filter the list of containers
+    :return: A list of dictionaries
+    :doc-author: Trelent
+    """
     """Get all containers, filter for just db, and display."""
+    filter_str = f"{service_name}-{site_id}"
     db_containers = []
     for k8_pod in list_all_containers():
         k8_name = k8_pod.metadata.name
         if filter_str in k8_name:
-            # db name format = "kgservice-<site>-<tenant>-<pod_name>
+            # db name format = "pods-<site>-<tenant>-<pod_id>
             # so split on - to get parts (containers use _, pods use -)
             try:
                 parts = k8_name.split('-')
                 site_id = parts[1]
                 tenant_id = parts[2]
-                pod_name = parts[3]
+                pod_id = parts[3]
                 db_containers.append({'pod_info': k8_pod,
                                       'site_id': site_id,
                                       'tenant_id': tenant_id,
-                                      'pod_name': pod_name,
+                                      'pod_id': pod_id,
                                       'k8_name': k8_name})
             except Exception as e:
                 msg = f"Exception parsing k8 pods. e: {e}"
@@ -119,10 +136,26 @@ def get_current_k8_pods(filter_str: str = "kgservice"):
                 pass
     return db_containers
 
-def container_running(name=None):
+def get_k8_logs(name: str):
+    try:
+        logs = k8.read_namespaced_pod_log(namespace=NAMESPACE, name=name)
+        return logs
+    except Exception as e:
+        return ""
+
+def container_running(name: str):
     """
-    Check if there is a running pods whose name contains the string, `name`. Note that this function will
-    return True if any running container has a name which contains the input `name`.
+    Check if k8 pod is currently running.
+
+    Args:
+        name (str): Name of k8 pod to look for, pods-<site>-<tenant>-<pod_id> format.
+    
+    Raises:
+        KeyError: _description_
+        KubernetesError: K8 got an error running read_namespaced_pod().
+
+    Returns:
+        bool: True if running, False otherwise.
     """
     logger.debug("top of kubernetes_utils.container_running().")
     if not name:
@@ -138,11 +171,19 @@ def container_running(name=None):
         logger.error(msg)
         raise KubernetesError(msg)
     
-def stop_container(name):
+def stop_container(name: str):
     """
-    Attempt to stop a running pod, with retry logic. Should only be called with a running pod.
-    :param name: the pod name of the pod to be stopped.
-    :return:
+    Attempt to stop running pod, with retry logic. Should only be called with a running pod.
+
+    Args:
+        name (str): Name of k8 pod to stop, pods-<site>-<tenant>-<pod_id> format.
+
+    Raises:
+        KeyError: _description_
+        KubernetesStopContainerError: _description_
+
+    Returns:
+        bool: True if pod deleted successfully, False otherwise.
     """
     if not name:
         raise KeyError(f"kubernetes_utils.container_running received name: {name}")
@@ -164,37 +205,43 @@ def stop_container(name):
 def create_container(name: str,
                      image: str,
                      revision: int,
-                     command: List,
+                     command: List | None = None,
                      ports_dict: Dict = {},
                      environment: Dict = {},
                      mounts: List = [],
+                     mem_request: str | None = None,
+                     cpu_request: str | None = None,
                      mem_limit: str | None = None,
-                     max_cpus: str | None = None,
+                     cpu_limit: str | None = None,
                      user: str | None = None,
                      image_pull_policy: Literal["Always", "IfNotPresent", "Never"] = "Always"):
     """
-    No permissions. No conf files. Not like Abaco. Just runs a Kube container with specified parameters.
-    ###### WIP
-    Creates and runs an actor pod and supervises the execution, collecting statistics about resource consumption
-    with kubernetes utils.
+    Creates and runs a k8 pod.
 
-    :param actor_id: the dbid of the actor; for updating worker status
-    :param worker_id: the worker id; also for updating worker status
-    :param execution_id: the id of the execution.
-    :param image: the actor's image;
-    :param msg: the message being passed to the actor.
-    :param user: string in the form {uid}:{gid} representing the uid and gid to run the command as.
-    :param environment: dictionary representing the environment to instantiate within the actor container.
-    :param privileged: whether this actor is "privileged"; i.e., its container should run in privileged mode with the
-    docker daemon mounted.
-    :param mounts: list of dictionaries representing the mounts to add; each dictionary mount should have 3 keys:
-    host_path, container_path and format (which should have value 'ro' or 'rw').
-    :param fifo_host_path: If not None, a string representing a path on the host to a FIFO used for passing binary data to the actor.
-    :param socket_host_path: If not None, a string representing a path on the host to a socket used for collecting results from the actor.
-    :param mem_limit: The maximum amount of memory the Actor container can use; should be the same format as the --memory Docker flag.
-    :param max_cpus: The maximum number of CPUs each actor will have available to them. Does not guarantee these CPU resources; serves as upper bound.
-    :return: result (dict), logs (str) - `result`: statistics about resource consumption; `logs`: output from docker logs.apiVersion: apps/v1
-    """
+    Notes:
+    Not like Abaco. This is purely container creation using inputs. Nothing specific to the pod to be created.
+    Meaning, no permissions, no adding conf files.
+
+    Args:
+        name (str): _description_
+        image (str): _description_
+        revision (int): _description_
+        command (List): _description_
+        ports_dict (Dict, optional): _description_. Defaults to {}.
+        environment (Dict, optional): _description_. Defaults to {}.
+        mounts (List, optional): _description_. Defaults to [].
+        mem_limit (str | None, optional): _description_. Defaults to None.
+        max_cpus (str | None, optional): _description_. Defaults to None.
+        user (str | None, optional): _description_. Defaults to None.
+        image_pull_policy ("Always" | "IfNotPresent" | "Never"): _description_. Defaults to "Always".
+
+    Raises:
+        KubernetesStartContainerError: _description_
+        KubernetesError: _description_
+
+    Returns:
+        k8pod: Pod info resulting from create_namespaced_pod.
+    """    
     logger.debug("top of kubernetes_utils.create_container().")
 
     ### Ports
@@ -229,26 +276,26 @@ def create_container(name: str,
     else:
         volumes = []
         volume_mounts = []
-    logger.debug(f"Volumes: {volumes}; pod_name: {name}")
-    logger.debug(f"Volume_mounts: {volume_mounts}; pod_name: {name}")
+    logger.debug(f"Volumes: {volumes}; pod_id: {name}")
+    logger.debug(f"Volume_mounts: {volume_mounts}; pod_id: {name}")
 
-    ### Resource Limits - memory and cpu
-    resources = None
-    resource_limits = {}
+    ### Resource Limits + Requests - memory and cpu
     # Memory - k8 uses no suffix (for bytes), Ki, Mi, Gi, Ti, Pi, or Ei (Does not accept kb, mb, or gb at all)
-    if not mem_limit or mem_limit == -1:
-        mem_limit = None # Unlimited memory
-    else:
+    # CPUs - In millicpus (m)
+    # Limits
+    resource_limits = {}
+    if mem_limit:
         resource_limits["memory"] = mem_limit
-    # CPUs - In nanocpus (n)
-    if not max_cpus or max_cpus == -1:
-        max_cpus = None # Unlimited CPI
-    else:
-        max_cpus = f"{max_cpus}m"
-        resource_limits["cpu"] = max_cpus
+    if cpu_limit:
+        resource_limits["cpu"] = f"{cpu_limit}m"
+    # Requests
+    resource_requests = {}
+    if mem_request:
+        resource_requests["memory"] = mem_request
+    if cpu_request:
+        resource_requests["cpu"] = f"{cpu_request}m"
     # Define resource requirements if resource limits specified
-    if resource_limits:
-        resources = client.V1ResourceRequirements(limits = resource_limits)
+    resources = client.V1ResourceRequirements(limits = resource_limits, requests = resource_requests)
 
     ### Security Context
     security_context = None
@@ -260,7 +307,7 @@ def create_container(name: str,
             uid, gid = user.split(":")
         except Exception as e:
             # error starting the pod, user will need to debug
-            msg = f"Got exception getting user uid/gid: {e}; pod_name: {name}"
+            msg = f"Got exception getting user uid/gid: {e}; pod_id: {name}"
             logger.info(msg)
             raise KubernetesStartContainerError(msg)
     # Define security context if uid and gid are found
@@ -286,8 +333,12 @@ def create_container(name: str,
             security_context=security_context,
             enable_service_links=False
         )
+        pod_metadata = client.V1ObjectMeta(
+            name=name,
+            labels={"app": name}
+        )
         pod_body = client.V1Pod(
-            metadata=client.V1ObjectMeta(name=name),
+            metadata=pod_metadata,
             spec=pod_spec,
             kind="Pod",
             api_version="v1"
@@ -297,7 +348,7 @@ def create_container(name: str,
             body=pod_body
         )
     except Exception as e:
-        msg = f"Got exception trying to create pod with image: {image}. {repr(e)}"
+        msg = f"Got exception trying to create pod with image: {image}. {repr(e)}. e: {e}"
         logger.info(msg)
         raise KubernetesError(msg)
     logger.info(f"Pod created successfully.")
@@ -306,6 +357,17 @@ def create_container(name: str,
 
 def create_service(name, ports_dict={}):
     """
+    Takes a given dict of ports and creates a service for a specific k8 pod.
+
+    Args:
+        name (_type_): _description_
+        ports_dict (dict, optional): _description_. Defaults to {}.
+
+    Raises:
+        KubernetesError: _description_
+
+    Returns:
+        _type_: _description_
     """
     logger.debug("top of kubernetes_utils.create_service().")
 
@@ -319,6 +381,7 @@ def create_service(name, ports_dict={}):
     try:
         service_spec = client.V1ServiceSpec(
             selector={"app": name},
+            type="NodePort",
             ports=ports
         )
         service_body = client.V1Service(
@@ -337,3 +400,42 @@ def create_service(name, ports_dict={}):
         raise KubernetesError(msg)
     logger.info(f"Pod started successfully.")
     return k8service
+
+
+def get_current_instance_ports():
+    """
+    Takes pod name. Calls get_current_k8_pods(). Cross references with database. There's a nginx_ports store.
+    Stores pod name, instance port, routing port. Concat data from all tenants. Create nginx_info from that.
+
+    Store gets updated by pod creation or pod deletion.
+
+    Result
+    """
+    all_instance_ports = []
+
+    stmt = select(Pod.instance_port)
+    result_list = pg_store['tacc']['tacc'].run("execute", stmt, all=True)
+    for result in result_list:
+        if result[0]:
+            all_instance_ports.append(result[0])
+    
+    return all_instance_ports
+
+
+def update_nginx_configmap(tcp_pod_nginx_info: Dict[str, Dict[str, str]], http_pod_nginx_info: Dict[str, Dict[str, str]]):
+    """
+    Update fn for nginx configmap. Will read kubernetes/db data and create nginx server stanza bits where neccessary.
+    Should be site specific.
+
+    Args:
+        pod_nginx_info ({"pod_id1": {"routing_port": int, "instance_port": int}, ..., ...}): Dict of dict that 
+            specifies ports needed to create pod service.
+    """
+    template_env = Environment(loader=FileSystemLoader("templates"))
+    template = template_env.get_template('nginx-template.j2')
+    rendered_template = template.render(tcp_pod_nginx_info = tcp_pod_nginx_info, http_pod_nginx_info = http_pod_nginx_info)
+
+    # Update the configmap with the new template immediately.
+    config_map = client.V1ConfigMap(data = {"nginx.conf": rendered_template})
+    k8.patch_namespaced_config_map(name='pods-nginx', namespace='default', body=config_map)
+    # Auto updates nginx pod. Changes take place according to kubelet sync frequency duration (60s default).

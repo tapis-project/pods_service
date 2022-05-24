@@ -24,12 +24,14 @@ Service to allow for easy deployment and use of databases. Able to import and ex
 		- [ ] Del
 		- [ ] Put
 		- [X] Get
- 	- [ ] /pods/{pod_id}/export
-		- [ ] Post
- 	- [ ] /data/{data_id}
-		- [ ] Del
-		- [ ] Put
 - [X] Validate everything
+### Models
+- [ ] Pods
+	- [X] Create basic model
+	- [ ] container_status - attr, gives k8 pod status
+	- [ ] data_attached - attr, get data imports
+	- [ ] data_requested - attr, get data imports
+
 ### Backend
 - [X] SQLModel taking care of everything
 	- [X] Migrations with alembic
@@ -51,13 +53,19 @@ Service to allow for easy deployment and use of databases. Able to import and ex
 	- [ ] Take care of Shutdown requested pods
 	- [X] Ensure k8 pods are in database
 	- [ ] Ensure database isn't missing any pods.
-- [ ] Caddy needs correct error message for 400-50X errors.
 - [ ] Have different pod images for each database type
 	- [X] Base Neo4j
 	- [ ] ...
 - [ ] Connect S3
 - [ ] Export scripts
 - [ ] Init container for S3 import
+- [X] Nginx integration
+  - [X] Pods with http
+  - [X] Pods with tcp
+  - [X] Switch between the two
+- [X] Database pods deployed
+- [X] Server pods deployed
+- [X] Docs/Redoc/openapi.json working
 ### Nice to have
 - [X] Makefile
 - [ ] Make the README actually good
@@ -88,7 +96,7 @@ To change a particular variable, please go into `Makefile` and make the change b
 
 ```
 # Get all commands and descriptions with:
-cd /kg_service
+cd /pods_service
 make help
 ```
 
@@ -97,7 +105,7 @@ Generally devs will use `make clean up` over and over again. This will clean up 
 ### Explanation of what's happening during `up`.
 The Makefile `up` target is the most complex. This is a light explainer.
 `up` takes the deployment-template directory, copies it, replaces (with sed) variables using the Makefile variables (such as image tag, k8 namespace, service_password).
-Once the new deployment directory is created. We then run `./burnup`, which starts the following pods: `main`, `health`, `spawner`, `postgres`, `caddy`, `rabbitmq`.
+Once the new deployment directory is created. We then run `./burnup`, which starts the following pods: `main`, `health`, `spawner`, `postgres`, `nginx`, `rabbitmq`.
 The `main` pod contains the server and also initializes the postgres database (using an alembic migration) and rabbitmq (using rabbitmqadmin script).
 
 ### Dev Containers
@@ -106,15 +114,15 @@ You can use dev containers with Minikube with the Makefile!
 Steps:
 - Install minikube, VSCode, Kubernetes VSCode plugin, and Remote-Containers VSCode plugin (0.231.X does NOT work).
 - With Kubernetes plugin in the VSCode sidebar:
-  - clusters -> minikube -> Nodes -> minikube -> right-click kg-main pod -> Attach Visual Studio Code
+  - clusters -> minikube -> Nodes -> minikube -> right-click pods-main pod -> Attach Visual Studio Code
     - This could error out. Read the error, but a lot of the time, you just need to refresh the cluster page because you forgot that you redeployed.
 - Bonus fun:
   - Setting `DEV_TOOLS` to true in the Makefile will:
-    - Mounts `{minikube}/kg_service` to the `kg-main` pod. Meaning you can work with persistent changes in the repo.
+    - Mounts `{minikube}/pods_service` to the `pods-main` pod. Meaning you can work with persistent changes in the repo.
       - Particular Mounts:
-        - `kg_service/service` -> `/home/tapis/service`
-        - `kg_service/entry.sh` -> `/home/tapis/entry.sh`
+        - `pods_service/service` -> `/home/tapis/service`
+        - `pods_service/entry.sh` -> `/home/tapis/entry.sh`
       - Mounts with minikube require users first mount their volumes to the minikube internal mounts, do that with:
-        - `minikube mount ~/kg_service:/kg_service`
+        - `minikube mount ~/pods_service:/pods_service`
         - You will have to keep the command running, no daemon mode.
 	- Start Jupyter Lab from within main. Link to lab should be in Make stdout under the up target.

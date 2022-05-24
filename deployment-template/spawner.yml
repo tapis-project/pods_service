@@ -15,7 +15,7 @@ spec:
       containers:
       - name: MAKEFILE_SERVICE_NAME-spawner
         imagePullPolicy: Never
-        image: MAKEFILE_SERVICE_NAME/core:MAKEFILE_TAG
+        image: MAKEFILE_SERVICE_NAME/pods-api:MAKEFILE_TAG
         command: ["python3","-u","/home/tapis/service/spawner.py"]
         resources:
           limits:

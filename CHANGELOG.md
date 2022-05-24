@@ -2,6 +2,34 @@
 All notable changes to this project will be documented in this file.
 
 
+## 0.30.0 - 2022-05-24
+
+### Breaking Changes:
+- Yes.
+
+### New features:
+- Optimized TapisModel model further. Simplified store access. Simplified running sqlalchemy commands. SqlAlchemy 2.0 compliant.
+- Service is now called pods, changed everywhere.
+- Added custom pod_template image configuration alongside database.
+- Pods can now be dynamically exposed via Nginx through HTTP or TCP.
+- Nginx hot reload implemented through health.py and nginx pod livenessProbe.
+- Multiple slashes in URL path are now simplified by redirect middleware.
+- Added permissions on object along with permission checking in authorization.
+- Revealing /docs/redoc/openapi.json now.
+- Added new model functions (display, get_permissions, etc.)
+- Added set/delete permission functions that ensure there is always one ADMIN per pod.
+- Added more configuration for cpu/mem limit and request.
+- Better error handling for pods. Some status messages. More in progress.
+- pods/{pod_id}/logs endpoint added.
+- pods/{pod_id}/permissions endpoint added.
+- Added in TapisMiddleware 2.0.
+- Now based off PyPi derived tapipy and tapisservice rather than Flaskbase. Allows for Python:3.10
+- Support now for more than just Neo4j, also custom images.
+
+### Bug fixes:
+- Yes.
+
+
 ## 0.0.3 - 2022-05-03
 
 ### Breaking Changes:

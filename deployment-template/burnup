@@ -9,15 +9,15 @@ kubectl apply -f security.yml
 
 # Configs
 kubectl create configmap MAKEFILE_SERVICE_NAME-config --from-file=config.json
-kubectl create configmap MAKEFILE_SERVICE_NAME-caddyfile --from-file=Caddyfile
+kubectl create configmap MAKEFILE_SERVICE_NAME-nginx --from-file=nginx.conf
 
 # PVC
-# Caddy config?
+# Nginx config?
 # Postgres
 
 # Deploy
 kubectl apply -f rabbitmq.yml
 kubectl apply -f postgres.yml
-kubectl apply -f caddy.yml
+kubectl apply -f nginx.yml
 kubectl apply -f main.yml
 #kubectl apply -f spawner.yml
