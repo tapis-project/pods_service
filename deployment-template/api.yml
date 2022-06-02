@@ -19,9 +19,12 @@ spec:
 #DEV        command: ["/bin/sh", "-c"]
 #DEV        args: ["/home/tapis/entry.sh & jupyter lab service --ip=0.0.0.0 --allow-root --no-browser --ServerApp.token=''"]
         resources:
+          requests:
+            cpu: "1"
+            memory: "1G"
           limits:
             cpu: "3"
-            memory: "2G"
+            memory: "3G"
         ports:
         - name: fastapi
           containerPort: 8000

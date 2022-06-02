@@ -191,6 +191,23 @@ def check_db_pods():
 
 
 def main():
+    # Try and run check_db_pods. Will try for 30 seconds until health is declared "broken".
+    logger.info("Top of health. Checking if db's are initialized.")
+    idx = 0
+    while idx < 6:
+        try:
+            check_db_pods()
+            logger.info("Succesfully connected to dbs.")
+            break
+        except Exception as e:
+            logger.info(f"Can't connect to dbs yet idx: {idx}.")
+            # Health seems to take a few seconds to come up (due to database creation and api creation)
+            time.sleep(5)
+            idx += 1
+    if idx == 6:
+        logger.critical("Health could not connect to databases. Shutting down!")
+        return
+
     while True:
         logger.info(f"Running pods health checks. Now: {time.time()}")
         check_k8_pods()

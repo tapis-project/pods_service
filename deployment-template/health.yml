@@ -1,22 +1,22 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: MAKEFILE_SERVICE_NAME-spawner
+  name: MAKEFILE_SERVICE_NAME-health
 spec:
   selector:
     matchLabels:
-      app: MAKEFILE_SERVICE_NAME-spawner
+      app: MAKEFILE_SERVICE_NAME-health
   template:
     metadata:
       labels:
-        app: MAKEFILE_SERVICE_NAME-spawner
+        app: MAKEFILE_SERVICE_NAME-health
     spec:
       serviceAccountName: MAKEFILE_SERVICE_NAME-serviceaccount
       containers:
-      - name: MAKEFILE_SERVICE_NAME-spawner
+      - name: MAKEFILE_SERVICE_NAME-health
         imagePullPolicy: Never
         image: MAKEFILE_SERVICE_NAME/pods-api:MAKEFILE_TAG
-        command: ["python3","-u","/home/tapis/service/spawner.py"]
+        command: ["python3","-u","/home/tapis/service/health.py"]
         resources:
           requests:
             cpu: "1"

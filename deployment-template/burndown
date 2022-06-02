@@ -22,4 +22,5 @@ kubectl delete -f rabbitmq.yml
 kubectl delete -f postgres.yml
 kubectl delete -f nginx.yml
 kubectl delete -f api.yml
-#kubectl delete -f spawner.yml
+kubectl delete -f spawner.yml
+kubectl delete -f health.yml

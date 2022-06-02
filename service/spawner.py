@@ -90,7 +90,7 @@ def main():
     print(msg)
     # Start spawner
     idx = 0
-    while idx < 3:
+    while idx < 6:
         try:
             sp = Spawner()
             logger.info("spawner made connection to rabbit, entering main loop")

@@ -1,6 +1,20 @@
 # Change Log
 All notable changes to this project will be documented in this file.
 
+
+## 0.30.3 - 2022-06-02
+
+### Breaking Changes:
+- Yes.
+
+### New features:
+- Added in proper health and spawner pods so users don't have to manually start the scripts.
+- Added check in health.py to wait for database connection instead of failing.
+
+### Bug fixes:
+- Yes.
+
+
 ## 0.30.2 - 2022-06-02
 
 ### Breaking Changes:

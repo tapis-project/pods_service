@@ -448,7 +448,7 @@ def update_nginx_configmap(tcp_pod_nginx_info: Dict[str, Dict[str, str]], http_p
         pod_nginx_info ({"pod_id1": {"routing_port": int, "instance_port": int}, ..., ...}): Dict of dict that 
             specifies ports needed to create pod service.
     """
-    template_env = Environment(loader=FileSystemLoader("templates"))
+    template_env = Environment(loader=FileSystemLoader("service/templates"))
     template = template_env.get_template('nginx-template.j2')
     rendered_template = template.render(tcp_pod_nginx_info = tcp_pod_nginx_info, http_pod_nginx_info = http_pod_nginx_info)
 
