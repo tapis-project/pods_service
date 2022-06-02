@@ -1,19 +1,19 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: MAKEFILE_SERVICE_NAME-main
+  name: MAKEFILE_SERVICE_NAME-api
 spec:
   selector:
     matchLabels:
-      app: MAKEFILE_SERVICE_NAME-main
+      app: MAKEFILE_SERVICE_NAME-api
   template:
     metadata:
       labels:
-        app: MAKEFILE_SERVICE_NAME-main
+        app: MAKEFILE_SERVICE_NAME-api
     spec:
       serviceAccountName: MAKEFILE_SERVICE_NAME-serviceaccount
       containers:
-      - name: MAKEFILE_SERVICE_NAME-main
+      - name: MAKEFILE_SERVICE_NAME-api
         imagePullPolicy: Never
         image: MAKEFILE_SERVICE_NAME/pods-api:MAKEFILE_TAG
 #DEV        command: ["/bin/sh", "-c"]

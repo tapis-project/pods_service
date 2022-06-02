@@ -25,6 +25,8 @@ spec:
         volumeMounts:
         - name: MAKEFILE_SERVICE_NAME-nginxconf
           mountPath: /etc/nginx/
+        - name: certs
+          mountPath: /tmp/ssl
         # Reload config every 30 seconds.
         livenessProbe:
           exec:
@@ -39,4 +41,6 @@ spec:
       - name: MAKEFILE_SERVICE_NAME-nginxconf
         configMap: 
           name: MAKEFILE_SERVICE_NAME-nginx
-
+      - name: certs
+        secret:
+          secretName: pods-certs

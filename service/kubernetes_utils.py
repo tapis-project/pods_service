@@ -202,19 +202,20 @@ def stop_container(name: str):
             continue
     raise KubernetesStopContainerError("Error. Pod not deleted after 10 attempts.")
 
-def create_container(name: str,
-                     image: str,
-                     revision: int,
-                     command: List | None = None,
-                     ports_dict: Dict = {},
-                     environment: Dict = {},
-                     mounts: List = [],
-                     mem_request: str | None = None,
-                     cpu_request: str | None = None,
-                     mem_limit: str | None = None,
-                     cpu_limit: str | None = None,
-                     user: str | None = None,
-                     image_pull_policy: Literal["Always", "IfNotPresent", "Never"] = "Always"):
+def create_pod(name: str,
+               image: str,
+               revision: int,
+               command: List | None = None,
+               init_command: List | None = None,
+               ports_dict: Dict = {},
+               environment: Dict = {},
+               mounts: List = [],
+               mem_request: str | None = None,
+               cpu_request: str | None = None,
+               mem_limit: str | None = None,
+               cpu_limit: str | None = None,
+               user: str | None = None,
+               image_pull_policy: Literal["Always", "IfNotPresent", "Never"] = "Always"):
     """
     Creates and runs a k8 pod.
 
@@ -242,7 +243,7 @@ def create_container(name: str,
     Returns:
         k8pod: Pod info resulting from create_namespaced_pod.
     """    
-    logger.debug("top of kubernetes_utils.create_container().")
+    logger.debug("top of kubernetes_utils.create_pod().")
 
     ### Ports
     ports = []
@@ -251,10 +252,10 @@ def create_container(name: str,
     logger.debug(f"Pod declared ports: {ports}")
 
     ### Environment
-    # Kubernetes sets some default envs. We write over these here + use enable_service_links=False in PodSpec
     environment.update({
         'image': image,
         'revision': revision,
+        # Kubernetes sets some default envs. We write over these here + use enable_service_links=False in PodSpec
         'KUBERNETES_PORT': "",
         'KUBERNETES_SERVICE_HOST': "",
         'KUBERNETES_SERVICE_PORT': "",
@@ -314,6 +315,21 @@ def create_container(name: str,
     if uid and gid:
         security = client.V1SecurityContext(run_as_user=uid, run_as_group=gid)
 
+    ### Init container creation
+    if init_command:
+        init_container = client.V1Container(
+            name=f"{name}-init",
+            command=init_command,
+            image=image,
+            volume_mounts=volume_mounts,
+            env=env,
+            resources=resources,
+            image_pull_policy=image_pull_policy
+        )
+        init_containers = [init_container]
+    else:
+        init_containers = []
+
     ### Define and start the pod
     try:
         container = client.V1Container(
@@ -327,6 +343,7 @@ def create_container(name: str,
             image_pull_policy=image_pull_policy
         )
         pod_spec = client.V1PodSpec(
+            init_containers=init_containers,
             containers=[container],
             volumes=volumes,
             restart_policy="Never",
@@ -395,7 +412,7 @@ def create_service(name, ports_dict={}):
             body=service_body
         )
     except Exception as e:
-        msg = f"Got exception trying to start service with name: {name}. {repr(e)}"
+        msg = f"Got exception trying to start service with name: {name}. {e}"
         logger.info(msg)
         raise KubernetesError(msg)
     logger.info(f"Pod started successfully.")
@@ -435,7 +452,11 @@ def update_nginx_configmap(tcp_pod_nginx_info: Dict[str, Dict[str, str]], http_p
     template = template_env.get_template('nginx-template.j2')
     rendered_template = template.render(tcp_pod_nginx_info = tcp_pod_nginx_info, http_pod_nginx_info = http_pod_nginx_info)
 
-    # Update the configmap with the new template immediately.
-    config_map = client.V1ConfigMap(data = {"nginx.conf": rendered_template})
-    k8.patch_namespaced_config_map(name='pods-nginx', namespace='default', body=config_map)
-    # Auto updates nginx pod. Changes take place according to kubelet sync frequency duration (60s default).
+    # Only update the configmap if the current configmap is out of date.
+    current_template = k8.read_namespaced_config_map(name='pods-nginx', namespace=NAMESPACE)
+    
+    if not current_template.data['nginx.conf'] == rendered_template:
+        # Update the configmap with the new template immediately.
+        config_map = client.V1ConfigMap(data = {"nginx.conf": rendered_template})
+        k8.patch_namespaced_config_map(name='pods-nginx', namespace=NAMESPACE, body=config_map)
+        # Auto updates nginx pod. Changes take place according to kubelet sync frequency duration (60s default).

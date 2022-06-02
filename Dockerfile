@@ -14,7 +14,7 @@ ENV PYTHONPATH .:*:pods:pods/*
 COPY requirements.txt /home/tapis/
 
 RUN apt-get update && apt-get install -y
-RUN apt-get install libffi-dev
+RUN apt-get install libffi-dev vim curl -y
 RUN pip3 install --upgrade pip
 RUN pip3 install -r /home/tapis/requirements.txt
 

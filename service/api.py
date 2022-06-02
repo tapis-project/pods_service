@@ -8,8 +8,8 @@ from fastapi.middleware import Middleware
 
 from auth import authorization, authentication
 from api_pods import router as router_pods
-from api_pods_podname import router as router_pods_podsname
-from api_pods_podname_func import router as router_pods_podsname_func
+from api_pods_podid import router as router_pods_podsname
+from api_pods_podid_func import router as router_pods_podsname_func
 
 
 api = FastAPI(title="pods",

@@ -114,11 +114,11 @@ You can use dev containers with Minikube with the Makefile!
 Steps:
 - Install minikube, VSCode, Kubernetes VSCode plugin, and Remote-Containers VSCode plugin (0.231.X does NOT work).
 - With Kubernetes plugin in the VSCode sidebar:
-  - clusters -> minikube -> Nodes -> minikube -> right-click pods-main pod -> Attach Visual Studio Code
+  - clusters -> minikube -> Nodes -> minikube -> right-click pods-api pod -> Attach Visual Studio Code
     - This could error out. Read the error, but a lot of the time, you just need to refresh the cluster page because you forgot that you redeployed.
 - Bonus fun:
   - Setting `DEV_TOOLS` to true in the Makefile will:
-    - Mounts `{minikube}/pods_service` to the `pods-main` pod. Meaning you can work with persistent changes in the repo.
+    - Mounts `{minikube}/pods_service` to the `pods-api` pod. Meaning you can work with persistent changes in the repo.
       - Particular Mounts:
         - `pods_service/service` -> `/home/tapis/service`
         - `pods_service/entry.sh` -> `/home/tapis/entry.sh`

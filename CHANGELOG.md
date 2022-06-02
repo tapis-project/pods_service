@@ -1,6 +1,22 @@
 # Change Log
 All notable changes to this project will be documented in this file.
 
+## 0.30.1 - 2022-06-02
+
+### Breaking Changes:
+- Yes.
+
+### New features:
+- Now including certs in Neo4j pods so users can make encrypted calls and we can intercept subdomain.
+- Changed pods-main to pods-api. No concept of "main" anymore. Just api components.
+- Improved serviceaccount. No longer cluster level, only namespace level, easier to manage this way.
+- Updated logic for updating configmap. Now checks if old configmap == new. If not update. Tested, no issue in updating configmap hundreds of time per second.
+- Init container support is now working.
+- Neo4J now has example code for setting volume mounts in kubernetes_templates.
+
+### Bug fixes:
+- Yes.
+
 
 ## 0.30.0 - 2022-05-24
 

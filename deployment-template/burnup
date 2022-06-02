@@ -1,6 +1,9 @@
 # Secrets
 kubectl apply -f secrets.yml
 
+# Certs
+kubectl apply -f cert.yml
+
 # Services
 kubectl apply -f services.yml
 
@@ -19,5 +22,5 @@ kubectl create configmap MAKEFILE_SERVICE_NAME-nginx --from-file=nginx.conf
 kubectl apply -f rabbitmq.yml
 kubectl apply -f postgres.yml
 kubectl apply -f nginx.yml
-kubectl apply -f main.yml
+kubectl apply -f api.yml
 #kubectl apply -f spawner.yml

@@ -5,7 +5,7 @@ if [ $api = "api" ]; then
     # dev
     # Set up stores.
     python3 -u /home/tapis/service/stores.py
-    cd /home/tapis/service; uvicorn api:api --reload --host 0.0.0.0
+    cd /home/tapis/service; uvicorn api:api --reload --host 0.0.0.0 --port 8000
     # prod - https://www.uvicorn.org/deployment/
     # gunicorn uvicorn.worker stuff
     fi

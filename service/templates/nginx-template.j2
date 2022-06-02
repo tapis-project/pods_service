@@ -21,12 +21,12 @@ stream {
     map $ssl_preread_server_name $instanceport {
         # TCP
         {% for pname, pdata in tcp_pod_nginx_info.items() -%}
-        {{ pname }}.develop.tapis.io    {{ pdata.instance_port }}
+        {{ pname }}.develop.tapis.io    {{ pdata.instance_port }};
         {% endfor %}
 
         # HTTP
         {% for pname, pdata in http_pod_nginx_info.items() -%}
-        {{ pname }}.develop.tapis.io    {{ pdata.instance_port }}
+        {{ pname }}.develop.tapis.io    {{ pdata.instance_port }};
         {% endfor %}
 
         # Default back to API
@@ -35,12 +35,12 @@ stream {
 
     {% for pname, pdata in tcp_pod_nginx_info.items() -%}
     server {
-        listen                  {{ pdata.instance_port }}; # ssl;
+        listen                  {{ pdata.instance_port }} ssl;
         ssl_preread             off;
         proxy_pass              {{ pname }}:{{ pdata.routing_port }};
         proxy_timeout           600s;
-        #ssl_certificate        /tmp/ssl/tls.crt;
-        #ssl_certificate_key    /tmp/ssl/tls.key;
+        ssl_certificate        /tmp/ssl/tls.crt;
+        ssl_certificate_key    /tmp/ssl/tls.key;
     }
     {% endfor %}
     
@@ -83,7 +83,7 @@ http {
     }
     {% endfor %}
 
-    # Configuration for actors.
+    # Configuration for pods.
     server {
         listen 8880;
         resolver 127.0.0.11;
@@ -92,66 +92,66 @@ http {
         access_log /dev/stdout;
 
         location ~ ^/pods(.*) {
-            proxy_pass http://pods-main:8000/pods$1$is_args$args;
-            proxy_set_header Host localhost:8000;
+            proxy_pass http://pods-api:8000/pods$1$is_args$args;
+            proxy_set_header Host localhost:5000;
         }
 
         # custom 40x errors:
         error_page 400 /400.json;
         location /400.json {
-            return 400 '{"status": "error", "message": "Invalid request: The Abaco service does not know how to fulfill the request.", "version": "unknown", "result": null}';
+            return 400 '{"status": "error", "message": "Invalid request: The Pods service does not know how to fulfill the request.", "version": "unknown", "result": null}';
         }
 
         error_page 401 /401.json;
         location /401.json {
-            return 401 '{"status": "error", "message": "Invalid request: The Abaco service does not know how to fulfill the request.", "version": "unknown", "result": null}';
+            return 401 '{"status": "error", "message": "Invalid request: The Pods service does not know how to fulfill the request.", "version": "unknown", "result": null}';
         }
 
         error_page 402 /402.json;
         location /402.json {
-            return 402 '{"status": "error", "message": "Invalid request: The Abaco service does not know how to fulfill the request.", "version": "unknown", "result": null}';
+            return 402 '{"status": "error", "message": "Invalid request: The Pods service does not know how to fulfill the request.", "version": "unknown", "result": null}';
         }
 
         error_page 403 /403.json;
         location /403.json {
-            return 403 '{"status": "error", "message": "Invalid request: The Abaco service does not know how to fulfill the request.", "version": "unknown", "result": null}';
+            return 403 '{"status": "error", "message": "Invalid request: The Pods service does not know how to fulfill the request.", "version": "unknown", "result": null}';
         }
 
         error_page 404 /404.json;
         location /404.json {
-            return 404 '{"status": "error", "message": "Invalid request: the requested URL is not an Abaco endpoint.", "version": "unknown", "result": null}';
+            return 404 '{"status": "error", "message": "Invalid request: the requested URL is not an Pods endpoint.", "version": "unknown", "result": null}';
         }
 
         error_page 405 /405.json;
         location /405.json {
-            return 405 '{"status": "error", "message": "Invalid request: The Abaco service does not know how to fulfill the request.", "version": "unknown", "result": null}';
+            return 405 '{"status": "error", "message": "Invalid request: The Pods service does not know how to fulfill the request.", "version": "unknown", "result": null}';
         }
 
 
         # custom 50x errors:
         error_page 500 500.json;
         location /500.json{
-            return 500 '{"status": "error", "message": "Unable to parse Abaco service response. The server may be misconfigured or overloaded.", "version": "unknown", "result": null}';
+            return 500 '{"status": "error", "message": "Unable to parse Pods service response. The server may be misconfigured or overloaded.", "version": "unknown", "result": null}';
         }
 
         error_page 501 501.json;
         location /501.json{
-            return 501 '{"status": "error", "message": "Unable to parse Abaco service response. The server may be misconfigured or overloaded.", "version": "unknown", "result": null}';
+            return 501 '{"status": "error", "message": "Unable to parse Pods service response. The server may be misconfigured or overloaded.", "version": "unknown", "result": null}';
         }
 
         error_page 502 502.json;
         location /502.json{
-            return 502 '{"status": "error", "message": "Timeout error waiting on Abaco service response. The server may be busy or overloaded.", "version": "unknown", "result": null}';
+            return 502 '{"status": "error", "message": "Timeout error waiting on Pods service response. The server may be busy or overloaded.", "version": "unknown", "result": null}';
         }
 
         error_page 503 503.json;
         location /503.json{
-            return 503 '{"status": "error", "message": "Unable to parse Abaco service response. The server may be misconfigured or overloaded.", "version": "unknown", "result": null}';
+            return 503 '{"status": "error", "message": "Unable to parse Pods service response. The server may be misconfigured or overloaded.", "version": "unknown", "result": null}';
         }
 
         error_page 504 504.json;
         location /504.json{
-            return 504 '{"status": "error", "message": "Unable to parse Abaco service response. The server may be misconfigured or overloaded.", "version": "unknown", "result": null}';
+            return 504 '{"status": "error", "message": "Unable to parse Pods service response. The server may be misconfigured or overloaded.", "version": "unknown", "result": null}';
         }
     }
 }

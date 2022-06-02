@@ -25,7 +25,7 @@ class Pod(TapisModel, table=True, validate=True):
 
     # Optional
     description: str = Field("", description = "Description of this pod.")
-    environment_variables: List[str] = Field([], description = "Environment variables to inject into k8 pod; Only for custom pods.", sa_column=Column(ARRAY(String)))
+    environment_variables: Dict = Field({}, description = "Environment variables to inject into k8 pod; Only for custom pods.", sa_column=Column(JSON))
     data_requests: List[str] = Field([], description = "Requested pod names.", sa_column=Column(ARRAY(String)))
     roles_required: List[str] = Field([], description = "Roles required to view this pod.", sa_column=Column(ARRAY(String)))
 
@@ -54,13 +54,16 @@ class Pod(TapisModel, table=True, validate=True):
     @validator('pod_id')
     def check_pod_id(cls, v):
         # In case we want to add reserved keywords.
-        reserved_names = []
-        if v in reserved_names:
-            raise ValueError(f"name overlaps with reserved names: {reserved_names}")
-        # Regex match full name to ensure a-z0-9.
+        reserved_pod_ids = []
+        if v in reserved_pod_ids:
+            raise ValueError(f"pod_id overlaps with reserved pod ids: {reserved_pod_ids}")
+        # Regex match full pod_id to ensure a-z0-9.
         res = re.fullmatch(r'[a-z][a-z0-9]+', v)
         if not res:
-            raise ValueError(f"name must be lowercase alphanumeric. First character must be alpha.")
+            raise ValueError(f"pod_id must be lowercase alphanumeric. First character must be alpha.")
+        # pod_id char limit = 64
+        if len(v) > 64:
+            raise ValueError(f"pod_id must be less than 64 characters. Inputted length: {len(v)}")
         return v
 
     @validator('instance_port')
@@ -75,6 +78,7 @@ class Pod(TapisModel, table=True, validate=True):
 
     @validator('permissions')
     def check_permissions(cls, v):
+        #By default add author permissions to model.
         if not v:
             v = [f"{g.username}:ADMIN"]
         return v

@@ -167,7 +167,6 @@ def check_db_pods():
         except ValueError:
             pass
 
-    config_changed = False
     tcp_pod_nginx_info = {} # for nginx config later
     http_pod_nginx_info = {} # for nginx config later
     for pod in all_pods:
@@ -179,18 +178,16 @@ def check_db_pods():
             unused_instance_ports.remove(new_port)
             pod.instance_port = new_port
             pod.db_update()
-            config_changed = True
         
         if pod.instance_port > 52000:
             match pod.server_protocol:
                 case "tcp":
-                    tcp_pod_nginx_info[pod.pod_id] = {"instance_port": pod.instance_port, "routing_port": pod.routing_port}
+                    tcp_pod_nginx_info[pod.k8_name] = {"instance_port": pod.instance_port, "routing_port": pod.routing_port}
                 case "http":
-                    http_pod_nginx_info[pod.pod_id] = {"instance_port": pod.instance_port, "routing_port": pod.routing_port}
+                    http_pod_nginx_info[pod.k8_name] = {"instance_port": pod.instance_port, "routing_port": pod.routing_port}
 
-    # Only update config when there's been a change (either setting an instance port. Or deleting.)
-    if config_changed:
-        update_nginx_configmap(tcp_pod_nginx_info, http_pod_nginx_info)
+    # This functions only updates if config is out of date.
+    update_nginx_configmap(tcp_pod_nginx_info, http_pod_nginx_info)
 
 
 def main():
