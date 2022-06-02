@@ -1,8 +1,9 @@
 # Secrets
 kubectl apply -f secrets.yml
 
-# Certs
-kubectl apply -f cert.yml
+# Certs - Built-in certs added in secrets.yml. Only uncomment if you have cert-manager installed. If so delete certs from secrets.yml
+#kubectl apply -f cert-issuer.yml
+#kubectl apply -f cert.yml
 
 # Services
 kubectl apply -f services.yml

@@ -1,6 +1,18 @@
 # Change Log
 All notable changes to this project will be documented in this file.
 
+## 0.30.2 - 2022-06-02
+
+### Breaking Changes:
+- Yes.
+
+### New features:
+- Now includes pre-baked certs with the option to create certs at run time if you do have cert-manager (requires code edits. Ask Christian.)
+
+### Bug fixes:
+- Yes.
+
+
 ## 0.30.1 - 2022-06-02
 
 ### Breaking Changes:
