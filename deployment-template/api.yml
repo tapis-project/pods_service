@@ -63,9 +63,9 @@ spec:
           name: MAKEFILE_SERVICE_NAME-config 
 #DEV      - name: dev-service
 #DEV        hostPath:
-#DEV          path: /kg_service/service #NOTE FOR MINIKUBE: Minikube is a vm, you have to minikube mount for hostpath to work
+#DEV          path: /pods_service/service #NOTE FOR MINIKUBE: Minikube is a vm, you have to minikube mount for hostpath to work
 #DEV          type: Directory
 #2DEV      - name: dev-alembic
 #2DEV        hostPath:
-#2DEV          path: /kg_service/alembic #NOTE FOR MINIKUBE: Minikube is a vm, you have to minikube mount for hostpath to work
+#2DEV          path: /pods_service/alembic #NOTE FOR MINIKUBE: Minikube is a vm, you have to minikube mount for hostpath to work
 #2DEV          type: Directory

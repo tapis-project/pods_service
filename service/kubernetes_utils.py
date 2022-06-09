@@ -450,7 +450,7 @@ def update_nginx_configmap(tcp_pod_nginx_info: Dict[str, Dict[str, str]], http_p
     """
     template_env = Environment(loader=FileSystemLoader("service/templates"))
     template = template_env.get_template('nginx-template.j2')
-    rendered_template = template.render(tcp_pod_nginx_info = tcp_pod_nginx_info, http_pod_nginx_info = http_pod_nginx_info)
+    rendered_template = template.render(tcp_pod_nginx_info = tcp_pod_nginx_info, http_pod_nginx_info = http_pod_nginx_info, namespace = NAMESPACE)
 
     # Only update the configmap if the current configmap is out of date.
     current_template = k8.read_namespaced_config_map(name='pods-nginx', namespace=NAMESPACE)

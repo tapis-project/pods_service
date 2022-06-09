@@ -166,7 +166,6 @@ def check_db_pods():
             unused_instance_ports.remove(pod.instance_port)
         except ValueError:
             pass
-
     tcp_pod_nginx_info = {} # for nginx config later
     http_pod_nginx_info = {} # for nginx config later
     for pod in all_pods:
@@ -180,11 +179,14 @@ def check_db_pods():
             pod.db_update()
         
         if pod.instance_port > 52000:
+            template_info = {"instance_port": pod.instance_port,
+                             "routing_port": pod.routing_port,
+                             "url": pod.url}
             match pod.server_protocol:
                 case "tcp":
-                    tcp_pod_nginx_info[pod.k8_name] = {"instance_port": pod.instance_port, "routing_port": pod.routing_port}
+                    tcp_pod_nginx_info[pod.k8_name] = template_info
                 case "http":
-                    http_pod_nginx_info[pod.k8_name] = {"instance_port": pod.instance_port, "routing_port": pod.routing_port}
+                    http_pod_nginx_info[pod.k8_name] = template_info
 
     # This functions only updates if config is out of date.
     update_nginx_configmap(tcp_pod_nginx_info, http_pod_nginx_info)
@@ -197,7 +199,7 @@ def main():
     while idx < 6:
         try:
             check_db_pods()
-            logger.info("Succesfully connected to dbs.")
+            logger.info("Successfully connected to dbs.")
             break
         except Exception as e:
             logger.info(f"Can't connect to dbs yet idx: {idx}.")

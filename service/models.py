@@ -11,6 +11,8 @@ from tapisservice.tapisfastapi.utils import g
 from tapisservice.logs import get_logger
 logger = get_logger(__name__)
 
+from __init__ import t
+
 from sqlalchemy import UniqueConstraint
 from sqlalchemy.inspection import inspect
 from sqlalchemy.dialects.postgresql import ARRAY
@@ -33,6 +35,7 @@ class Pod(TapisModel, table=True, validate=True):
     tenant_id: str = Field(g.request_tenant_id or 'tacc', description = "Tapis tenant used during creation of this pod.")
     site_id: str = Field(g.site_id or 'tacc', description = "Tapis site used during creation of this pod.")
     k8_name: str = Field(None, description = "Name to use for Kubernetes name.")
+    url: str = Field(None, description = "Url used to access this database if it is running.")
     status: str = Field("SUBMITTED", description = "Status of pod.")
     container_status: Dict = Field({}, description = "Status of container if exists. Gives phase.", sa_column=Column(JSON))
     data_attached: List[str] = Field([], description = "Data attached.", sa_column=Column(ARRAY(String)))
@@ -96,19 +99,27 @@ class Pod(TapisModel, table=True, validate=True):
         return v
 
     @root_validator(pre=False)
-    def set_k8_name(cls, values):
+    def set_url_and_k8_name(cls, values):
+        # NOTE: Pydantic loops during validation, so for a few calls, tenant_id and site_id will be NONE.
+        # Must account for this. By end of loop, everything will be set properly.
+        # In this case "tacc" tenant is backup.
         site_id = values.get('site_id')
-        tenant_id = values.get('tenant_id')
+        tenant_id = values.get('tenant_id') or "tacc"
         pod_id = values.get('pod_id')
-        # pods-<site>-<tenant>-<pod_id>
+        ### k8_name: pods-<site>-<tenant>-<pod_id>
         values['k8_name'] = f"pods-{site_id}-{tenant_id}-{pod_id}"
+        ### url: podname.pods.tacc.develop.tapis.io
+        # base_url in the form of https://tacc.develop.tapis.io.
+        base_url = t.tenant_cache.get_tenant_config(tenant_id=tenant_id).base_url
+        # new url in the form of pod_id.tacc.develop.tapis.io
+        values['url'] = base_url.replace("https://", f"{pod_id}.pods.")
         return values
 
     @root_validator(pre=False)
     def set_routing_port_for_templates(cls, values):
         pod_template = values.get('pod_template')
         if pod_template == "neo4j":
-            values['routing_port'] = 7474
+            values['routing_port'] = 7687
         return values
 
     def display(self):

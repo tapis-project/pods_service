@@ -9,7 +9,7 @@ logger = get_logger(__name__)
 
 # Get all sites and tenants for all sites.
 SITE_TENANT_DICT = {} # {site_id1: [tenant1, tenant2, ...], site_id2: ...}
-for tenant in t.tenant_cache.tenants:
+for tenant in t.tenant_cache.tenants.values():
     if not SITE_TENANT_DICT.get(tenant.site_id):
         SITE_TENANT_DICT[tenant.site_id] = []
     SITE_TENANT_DICT[tenant.site_id].append(tenant.tenant_id)

@@ -21,12 +21,12 @@ stream {
     map $ssl_preread_server_name $instanceport {
         # TCP
         {% for pname, pdata in tcp_pod_nginx_info.items() -%}
-        {{ pname }}.develop.tapis.io    {{ pdata.instance_port }};
+        {{ pdata.url }}    {{ pdata.instance_port }};
         {% endfor %}
 
         # HTTP
         {% for pname, pdata in http_pod_nginx_info.items() -%}
-        {{ pname }}.develop.tapis.io    {{ pdata.instance_port }};
+        {{ pdata.url }}    {{ pdata.instance_port }};
         {% endfor %}
 
         # Default back to API
@@ -56,7 +56,7 @@ stream {
 
 
 http {
-    resolver 127.0.0.11;
+    resolver 10.96.0.10;
     default_type  application/octet-stream;
 
     log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
@@ -86,13 +86,12 @@ http {
     # Configuration for pods.
     server {
         listen 8880;
-        resolver 127.0.0.11;
         charset utf-8;
 
         access_log /dev/stdout;
 
-        location ~ ^/pods(.*) {
-            proxy_pass http://pods-api:8000/pods$1$is_args$args;
+        location ~ ^/v3/pods(.*) {
+            proxy_pass http://pods-api.{{ namespace }}.svc.cluster.local:8000/pods$1$is_args$args;
             proxy_set_header Host localhost:5000;
         }
 
@@ -119,7 +118,7 @@ http {
 
         error_page 404 /404.json;
         location /404.json {
-            return 404 '{"status": "error", "message": "Invalid request: the requested URL is not an Pods endpoint.", "version": "unknown", "result": null}';
+            return 404 '{"status": "error", "message": "Invalid request: the requested URL is not a Pods endpoint.", "version": "unknown", "result": null}';
         }
 
         error_page 405 /405.json;

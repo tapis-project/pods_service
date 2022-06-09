@@ -2,6 +2,19 @@
 All notable changes to this project will be documented in this file.
 
 
+## 0.30.4 - 2022-06-09
+
+### Breaking Changes:
+- Yes.
+
+### New features:
+- Fixed nginx routing and resolver. 
+- Pods are now routed based on pods.url attr. mypod.pods.tacc.develop.tapis.io is the uri format.
+
+### Bug fixes:
+- Yes.
+
+
 ## 0.30.3 - 2022-06-02
 
 ### Breaking Changes:
