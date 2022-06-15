@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from models import Pod, NewPod, UpdatePod
+from models import Pod, NewPod, UpdatePod, getPodReturn
 from channels import CommandChannel
 from tapisservice.tapisfastapi.utils import g, ok
 
@@ -11,7 +11,7 @@ router = APIRouter()
 
 #### /pods/{pod_id}
 
-@router.put("/pods/{pod_id}", tags=["pods"])
+@router.put("/pods/{pod_id}", tags=["pods"], summary="update_pod", operation_id="update_pod", response_model=getPodReturn)
 async def update_pod(pod_id, update_pod: UpdatePod):
     pod = Pod.db_get_DAO(pod_id)
 
@@ -24,13 +24,13 @@ async def update_pod(pod_id, update_pod: UpdatePod):
     return ok("update_pod - Not yet implemented.")
 
 
-@router.delete("/pods/{pod_id}", tags=["pods"])
+@router.delete("/pods/{pod_id}", tags=["pods"], summary="delete_pod", operation_id="delete_pod")
 async def delete_pod():
     # This is actually just a stop_pod.
     return ok("delete_pod - Not yet implemented.")
 
 
-@router.get("/pods/{pod_id}", tags=["pods"])
+@router.get("/pods/{pod_id}", tags=["pods"], summary="get_pod", operation_id="get_pod", response_model=getPodReturn)
 async def get_pod(pod_id):
     logger.info(f"GET /pods/{pod_id} - Top of get_pods.")
 

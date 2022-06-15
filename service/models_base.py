@@ -15,7 +15,7 @@ from sqlalchemy.inspection import inspect
 from sqlmodel import Field, Session, SQLModel, select, JSON, Column
 
 
-class TapisImportModel(BaseModel):
+class TapisApiModel(BaseModel):
     class Config:
         validate_assignment = True
         extra = "forbid"

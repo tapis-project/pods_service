@@ -1,5 +1,5 @@
-from codes import BUSY, ERROR, SPAWNER_SETUP, CREATING_CONTAINER, UPDATING_STORE, READY, \
-    REQUESTED, SHUTDOWN_REQUESTED, SHUTTING_DOWN
+from codes import ERROR, SPAWNER_SETUP, CREATING_CONTAINER, \
+    REQUESTED, SHUTTING_DOWN
 from models import Pod, Password
 from kubernetes_utils import create_pod, create_service, KubernetesError
 from kubernetes import client, config
@@ -68,11 +68,6 @@ def start_neo4j_pod(pod, revision: int):
         "user": None
     }
 
-    # Change pod status
-    pod.status = CREATING_CONTAINER
-    pod.db_update()
-    logger.debug(f"spawner has updated pod status to CREATING_CONTAINER")
-
     # Create init_container, container, and service.
     create_pod(**container)
     create_service(name = pod.k8_name, ports_dict = container["ports_dict"])
@@ -86,10 +81,9 @@ def start_generic_pod(pod, custom_image, revision: int):
         "revision": revision,
         "image": custom_image,
         "ports_dict": {
-            "http": 8000
+            "http": 5000
         },
-        "environment": {
-        },
+        "environment": pod.environment_variables.copy(),
         "mounts": [],
         "mem_request": "1G",
         "cpu_request": "1000",
@@ -97,11 +91,6 @@ def start_generic_pod(pod, custom_image, revision: int):
         "cpu_limit": "3000",
         "user": None
     }
-
-    # Change pod status
-    pod.status = CREATING_CONTAINER
-    pod.db_update()
-    logger.debug(f"spawner has updated pod status to CREATING_CONTAINER")
 
     # Create init_container, container, and service.
     create_pod(**container)

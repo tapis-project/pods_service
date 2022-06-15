@@ -1,8 +1,8 @@
 from fastapi import APIRouter
-from models import Pod, NewPod, Password
+from models import Pod, NewPod, Password, getPodsReturn, getPodReturn
 from channels import CommandChannel
 from tapisservice.tapisfastapi.utils import g, ok
-from codes import REQUESTED
+from codes import REQUESTED, ON
 from tapisservice.logs import get_logger
 logger = get_logger(__name__)
 
@@ -11,7 +11,7 @@ router = APIRouter()
 
 #### /pods
 
-@router.get("/pods", tags=["pods"])
+@router.get("/pods", tags=["pods"], summary="get_pods", operation_id="get_pods", response_model=getPodsReturn)
 async def get_pods():
     logger.info("GET /pods - Top of get_pods.")
 
@@ -26,7 +26,7 @@ async def get_pods():
     return ok(result=pods_to_show, msg="Pods retrieved successfully.")
 
 
-@router.post("/pods", tags=["pods"])
+@router.post("/pods", tags=["pods"], summary="create_pod", operation_id="create_pod", response_model=getPodReturn)
 async def create_pod(new_pod: NewPod):
     logger.info("POST /pods - Top of create_pod.")
 
@@ -42,18 +42,17 @@ async def create_pod(new_pod: NewPod):
     pod.db_create()
     logger.debug(f"New pod saved in db. pod_id: {pod.pod_id}; pod_template: {pod.pod_template}; tenant: {g.request_tenant_id}.")
 
-    ### Update status to REQUESTED, probably need to create "ensure_one_worker like fn here"
-    pod.status = REQUESTED
-    pod.db_update()
+    # If status_requested = On, then we request pod and put a command. Else leave in default STOPPED state. 
+    if pod.status_requested == ON:
+        pod.status = REQUESTED
+        pod.db_update()
 
-    # Send command to start new pod
-    ch = CommandChannel(name=pod.site_id)
-    ch.put_cmd(pod_id=pod.pod_id,
-               tenant_id=pod.tenant_id,
-               site_id=pod.site_id)
-    ch.close()
-    logger.debug(f"Command Channel - Added msg for pod_id: {pod.pod_id}.")
-
-    # TODO Permissions?
+        # Send command to start new pod
+        ch = CommandChannel(name=pod.site_id)
+        ch.put_cmd(pod_id=pod.pod_id,
+                   tenant_id=pod.tenant_id,
+                   site_id=pod.site_id)
+        ch.close()
+        logger.debug(f"Command Channel - Added msg for pod_id: {pod.pod_id}.")
 
     return ok(result=pod.display(), msg="Pod created successfully.")

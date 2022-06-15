@@ -3,6 +3,7 @@ from string import ascii_letters, digits
 from secrets import choice
 from datetime import datetime
 from typing import List, Dict, Literal, Any, Set
+from wsgiref import validate
 from pydantic import BaseModel, Field, validator, root_validator
 from codes import PERMISSION_LEVELS, PermissionLevel
 
@@ -17,7 +18,7 @@ from sqlalchemy import UniqueConstraint
 from sqlalchemy.inspection import inspect
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlmodel import Field, Session, SQLModel, select, JSON, Column, String
-from models_base import TapisModel, TapisImportModel
+from models_base import TapisModel, TapisApiModel
 
 
 class Pod(TapisModel, table=True, validate=True):
@@ -30,20 +31,21 @@ class Pod(TapisModel, table=True, validate=True):
     environment_variables: Dict = Field({}, description = "Environment variables to inject into k8 pod; Only for custom pods.", sa_column=Column(JSON))
     data_requests: List[str] = Field([], description = "Requested pod names.", sa_column=Column(ARRAY(String)))
     roles_required: List[str] = Field([], description = "Roles required to view this pod.", sa_column=Column(ARRAY(String)))
+    status_requested: str = Field("ON", description = "Status requested by user, ON or OFF.")
 
     # Provided
     tenant_id: str = Field(g.request_tenant_id or 'tacc', description = "Tapis tenant used during creation of this pod.")
     site_id: str = Field(g.site_id or 'tacc', description = "Tapis site used during creation of this pod.")
     k8_name: str = Field(None, description = "Name to use for Kubernetes name.")
     url: str = Field(None, description = "Url used to access this database if it is running.")
-    status: str = Field("SUBMITTED", description = "Status of pod.")
-    container_status: Dict = Field({}, description = "Status of container if exists. Gives phase.", sa_column=Column(JSON))
+    status: str = Field("STOPPED", description = "Current status of pod.")
+    status_container: Dict = Field({}, description = "Status of container if exists. Gives phase.", sa_column=Column(JSON))
     data_attached: List[str] = Field([], description = "Data attached.", sa_column=Column(ARRAY(String)))
     roles_inherited: List[str] = Field([], description = "Inherited roles required to view this pod", sa_column=Column(ARRAY(String)))
     creation_ts: datetime | None = Field(None, description = "Time (UTC) that this node was created.")
     update_ts: datetime | None = Field(None, description = "Time (UTC) that this node was updated.")
-    server_protocol: str = Field("tcp", description = "Protocol to route server with. tcp or http.")
-    routing_port: int = Field(8000, description = "Port Nginx points to in Pod.")
+    server_protocol: str = Field("http", description = "Protocol to route server with. tcp or http.")
+    routing_port: int = Field(5000, description = "Port Nginx points to in Pod.")
     instance_port: int = Field(1, description = "Port that Nginx uses internally to route calls. 52001-52999, 1, or -1.")
     logs: str = Field("", description = "Logs from kubernetes pods, useful for debugging and reading results.")
     permissions: List[str] = Field([], description = "Pod permissions for each user.", sa_column=Column(ARRAY(String, dimensions=1)))
@@ -86,10 +88,22 @@ class Pod(TapisModel, table=True, validate=True):
             v = [f"{g.username}:ADMIN"]
         return v
 
+    @validator('environment_variables')
+    def check_environment_variables(cls, v):
+        if v:
+            if not isinstance(v, dict):
+                raise TypeError(f"environment_variable must be dict. Got {type(v).__name__}.")
+            for key, val in v.items():
+                if not isinstance(key, str):
+                    raise TypeError(f"environment_variable key must be str. Got {type(key).__name__}.")
+                if not isinstance(val, str):
+                    raise TypeError(f"environment_variable val must be str. Got {type(val).__name__}.")
+        return v
+
     @validator('pod_template')
     def check_pod_template(cls, v):
         templates = ["neo4j"]
-        custom_allow_list = ["jstubbs/abaco_test"]
+        custom_allow_list = ["jstubbs/abaco_test", "tuyamei/smartfoodshed-server"]
 
         if v.startswith("custom-"):
             if v.replace("custom-", "") not in custom_allow_list:
@@ -113,13 +127,18 @@ class Pod(TapisModel, table=True, validate=True):
         base_url = t.tenant_cache.get_tenant_config(tenant_id=tenant_id).base_url
         # new url in the form of pod_id.tacc.develop.tapis.io
         values['url'] = base_url.replace("https://", f"{pod_id}.pods.")
+
+        ### Temporarily set url to pod_id.develop.tapis.io.
+        base_url = t.tenant_cache.get_tenant_config(tenant_id=tenant_id).site.base_url
+        values['url'] = base_url.replace("https://", f"{pod_id}.")
         return values
 
     @root_validator(pre=False)
-    def set_routing_port_for_templates(cls, values):
+    def set_routing_port_and_protocol_for_templates(cls, values):
         pod_template = values.get('pod_template')
         if pod_template == "neo4j":
             values['routing_port'] = 7687
+            values['server_protocol'] = "tcp"
         return values
 
     def display(self):
@@ -209,7 +228,22 @@ class Password(TapisModel, table=True, validate=True):
         return values
 
 
-class NewPod(TapisImportModel):
+class NewPod(TapisApiModel):
+    """
+    Object with fields that users are allowed to specify for the Pod class.
+    """
+    # Required
+    pod_id: str = Field(..., description = "Name of this pod.")
+    pod_template: str = Field(..., description = "Which pod template to use, or which custom image to run, must be on allowlist.")
+
+    # Optional
+    description: str = Field("", description = "Description of this pod.")
+    environment_variables: Dict = Field({}, description = "Environment variables to inject into k8 pod; Only for custom pods.", sa_column=Column(JSON))
+    data_requests: List[str] = Field([], description = "Requested pod names.")
+    roles_required: List[str] = Field([], description = "Roles required to view this pod")
+
+
+class UpdatePod(TapisApiModel):
     """
     Object with fields that users are allowed to specify for the Pod class.
     """
@@ -223,21 +257,7 @@ class NewPod(TapisImportModel):
     roles_required: List[str] = Field([], description = "Roles required to view this pod")
 
 
-class UpdatePod(TapisImportModel):
-    """
-    Object with fields that users are allowed to specify for the Pod class.
-    """
-    # Required
-    pod_id: str = Field(..., description = "Name of this pod.")
-    pod_template: str = Field(..., description = "Which pod template to use, or which custom image to run, must be on allowlist.")
-
-    # Optional
-    description: str = Field("", description = "Description of this pod.")
-    data_requests: List[str] = Field([], description = "Requested pod names.")
-    roles_required: List[str] = Field([], description = "Roles required to view this pod")
-
-
-class SetPermission(TapisImportModel):
+class SetPermission(TapisApiModel):
     """
     Object with fields that users are allowed to specify for the Pod class.
     """
@@ -251,9 +271,40 @@ class SetPermission(TapisImportModel):
             raise ValueError(f"level must be in {PERMISSION_LEVELS}")
         return v
 
-class DeletePermission(TapisImportModel):
+class DeletePermission(TapisApiModel):
     """
     Object with fields that users are allowed to specify for the Pod class.
     """
     # Required
     user: str = Field(..., description = "User to delete permissions from.")
+
+
+class PodReturn(TapisApiModel):
+    pod_id: str = Field(..., description = "Name of this pod.", primary_key = True)
+    pod_template: str = Field(..., description = "Which pod template to use, or which custom image to run, must be on allowlist.")
+    description: str = Field("", description = "Description of this pod.")
+    environment_variables: Dict = Field({}, description = "Environment variables to inject into k8 pod; Only for custom pods.", sa_column=Column(JSON))
+    data_requests: List[str] = Field([], description = "Requested pod names.", sa_column=Column(ARRAY(String)))
+    roles_required: List[str] = Field([], description = "Roles required to view this pod.", sa_column=Column(ARRAY(String)))
+    status_requested: str = Field("ON", description = "Status requested by user, ON or OFF.")
+    url: str = Field(None, description = "Url used to access this database if it is running.")
+    status: str = Field("STOPPED", description = "Current status of pod.")
+    status_container: Dict = Field({}, description = "Status of container if exists. Gives phase.", sa_column=Column(JSON))
+    data_attached: List[str] = Field([], description = "Data attached.", sa_column=Column(ARRAY(String)))
+    roles_inherited: List[str] = Field([], description = "Inherited roles required to view this pod", sa_column=Column(ARRAY(String)))
+    creation_ts: datetime | None = Field(None, description = "Time (UTC) that this node was created.")
+    update_ts: datetime | None = Field(None, description = "Time (UTC) that this node was updated.")
+
+class getPodReturn(TapisApiModel):
+    message: str = "The request was successful."
+    metadata: Dict
+    result: PodReturn
+    status: str
+    version: str
+
+class getPodsReturn(TapisApiModel):
+    message: str = "The request was successful."
+    metadata: Dict
+    result: List[PodReturn]
+    status: str
+    version: str

@@ -1,21 +1,18 @@
 # Status codes for actor objects
+ON = 'ON'
+OFF = 'OFF'
+RESTART = 'RESTART'
 
 REQUESTED = 'REQUESTED'
 SPAWNER_SETUP = 'SPAWNER SETUP'
-PULLING_IMAGE = 'PULLING IMAGE'
 CREATING_CONTAINER = 'CREATING CONTAINER'
-UPDATING_STORE = 'UPDATING STORE'
-#TODO: error include prior state ie ERROR previous STATE
 #TODO: comment about order of states
 COMPLETE = 'COMPLETE'
 SUBMITTED = 'SUBMITTED'
 RUNNING = 'RUNNING'
-READY = 'READY'
-SHUTDOWN_REQUESTED = 'SHUTDOWN_REQUESTED'
 SHUTTING_DOWN = 'SHUTTING_DOWN'
 STOPPED = 'STOPPED'
 ERROR = 'ERROR'
-BUSY = 'BUSY'
 
 class PermissionLevel(object):
 
@@ -72,9 +69,9 @@ PERMISSION_LEVELS = (READ.name, USER.name, ADMIN.name)
 
 # roles - only used when Tapis's JWT Auth is activated.
 # the admin role allows users full access to Abaco, including modifying workers assigned to actors.
-ADMIN_ROLE = 'abaco_admin'
+ADMIN_ROLE = 'pods_admin'
 
 # the privileged role allows users to create privileged actors.
-PRIVILEGED_ROLE = 'abaco_privileged'
+PRIVILEGED_ROLE = 'pods_privileged'
 
 roles = [ADMIN_ROLE, PRIVILEGED_ROLE]

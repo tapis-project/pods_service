@@ -1,18 +1,29 @@
 """
 Does the following:
-1. Go through database. 
-  a. Deletes pods in shutting down status.
-  b. Deletes pods in error status.
+1. Go through running k8 pods
+  a. Remove pods that are not in the database (dangling)
+  b. Else update the database based on information from the pod
+    - Update logs
+    - Update status
+      - If pod is in Completed, put in Completed
+      - If pod is in Error, put in Error
+      - If pod is in Running, put in Running
+    - Update status_container
+  c. Clean up dangling services.
+
+2. Go through database. 
+  a. Deletes pods with status_requested = OFF
+  b. Deletes pods in error status. (Maybe not?)
   c. Updates pod status.
   d. Ensures all database pods exist (For this site)
   e. Ensures all pods that exist are in the database.
     i. Also checks that pods are healthy and communicating
 
-2. Enforce ttl for pods.
+3. Enforce ttl for pods.
 
-3. Look through S3? Prune old things?/Prune non-existing pods.
+4. Look through S3? Prune old things?/Prune non-existing pods.
 
-4. Check that spawner is alive? Create if needed?
+5. Check that spawner is alive? Create if needed?
   a. Maybe have a warning slack message if none available?
 
 Running mode, either:
@@ -23,9 +34,9 @@ Running mode, either:
 import time
 import random
 from kubernetes import client, config
-from kubernetes_utils import rm_container, get_current_k8_pods, rm_service, KubernetesError, update_nginx_configmap, get_k8_logs
-
-from codes import READY, SHUTTING_DOWN, SHUTDOWN_REQUESTED, STOPPED, ERROR
+from kubernetes_utils import get_current_k8_services, get_current_k8_pods, rm_container, \
+    get_current_k8_pods, rm_service, KubernetesError, update_nginx_configmap, get_k8_logs
+from codes import RUNNING, SHUTTING_DOWN, STOPPED, ERROR, COMPLETE, RESTART, ON, OFF
 from stores import pg_store, SITE_TENANT_DICT
 from models import Pod, ExportedData
 from sqlmodel import select
@@ -40,40 +51,46 @@ k8 = client.CoreV1Api()
 
 
 def rm_pod(k8_name):
-    # TODO Change Caddy address!
-
+    container_exists = True
+    service_exists = True
     try:
         rm_container(k8_name)
     except KubernetesError:
-        # pod not found
+        # container not found
+        container_exists = False
         pass
     try:
         rm_service(k8_name)
     except KubernetesError:
         # service not found
+        service_exists = False
         pass
+
+    return container_exists, service_exists
 
 def graceful_rm_pod(pod):
     """
+    This is async. Commands run, but deletion takes some time.
     Needs to delete pod, delete service, and change caddy to "offline" response.
-    TODO Set status to shutting down. Something else will put into "shutdown".
+    TODO Set status to shutting down. Something else will put into "STOPPED".
     """
     logger.info(f"Top of shutdown pod for pod: {pod.k8_name}")
     # Change pod status to SHUTTING DOWN
     pod.status = SHUTTING_DOWN
     pod.db_update()
     logger.debug(f"spawner has updated pod status to SHUTTING_DOWN")
-    rm_pod(pod.k8_name)
+
+    return rm_pod(pod.k8_name)
 
 def check_k8_pods():
     # This is all for only the site specified in conf.site_id.
     # Each site should get it's own health pod.
     # Go through live containers first as it's "truth". Set database from that info. (error if needed, update statuses)
-    k8_pods = get_current_k8_pods() # Returns {k8_pod_info, site, tenant, pod_id}
+    k8_pods = get_current_k8_pods() # Returns {pod_info, site, tenant, pod_id}
 
     # Check each pod.
     for k8_pod in k8_pods:
-        logger.info(f"Checking health for pod_id: {k8_pod['pod_id']}")
+        logger.info(f"Checking pod health for pod_id: {k8_pod['pod_id']}")
 
         # Check for found pod in database.
         pod = Pod.db_get_with_pk(k8_pod['pod_id'], k8_pod['tenant_id'], k8_pod['site_id'])
@@ -86,11 +103,11 @@ def check_k8_pods():
         # Found pod in db.
         # TODO Update status in db.
         # Add last_health_check attr.
-        # Delete things in Shutdown requested.
-        # We could try and make a get to the pod to check if still alive.
+        # Delete pods when their status_requested = OFF or RESTART.
+        # TODO We could try and make a get to the pod to check if it's actually alive.
 
         k8_pod_phase = k8_pod['pod_info'].status.phase
-        container_status = {"phase": k8_pod_phase,
+        status_container = {"phase": k8_pod_phase,
                             "start_time": str(k8_pod['pod_info'].status.start_time),
                             "message": ""}
         
@@ -105,10 +122,10 @@ def check_k8_pods():
         # This is actually bad. Means the pod has stopped, which shouldn't be the case.
         # We'll put pod in error state with message.
         if k8_pod_phase == "Succeeded":
-            logger.critical(f"Kube pod in succeeded phase.")
-            container_status['message'] = "Pod phase in Succeeded, stopped processing. Erroring out."
-            pod.container_status = container_status
-            pod.status = ERROR
+            logger.warning(f"Kube pod in succeeded phase.")
+            status_container['message'] = "Pod phase in Succeeded, putting in COMPLETE status."
+            pod.status_container = status_container
+            pod.status = COMPLETE
             pod.db_update()
             continue
         elif k8_pod_phase in ["Running", "Pending", "Failed"]:
@@ -117,28 +134,28 @@ def check_k8_pods():
             if c_state:
                 if c_state.waiting and c_state.waiting.reason != "ContainerCreating":
                     logger.critical(f"Kube pod in waiting state. msg:{c_state.waiting.message}; reason: {c_state.waiting.reason}")
-                    container_status['message'] = f"Pod in waiting state for reason: {c_state.waiting.message}."
-                    pod.container_status = container_status
+                    status_container['message'] = f"Pod in waiting state for reason: {c_state.waiting.message}."
+                    pod.status_container = status_container
                     pod.status = ERROR
                     pod.db_update()
                     continue
                 elif c_state.terminated:
                     logger.critical(f"Kube pod in terminated state. msg:{c_state.terminated.message}; reason: {c_state.terminated.reason}")
-                    container_status['message'] = f"Pod in terminated state for reason: {c_state.terminated.message}."
-                    pod.container_status = container_status
+                    status_container['message'] = f"Pod in terminated state for reason: {c_state.terminated.message}."
+                    pod.status_container = status_container
                     pod.status = ERROR
                     pod.db_update()
                     continue
                 elif c_state.waiting and c_state.waiting.reason == "ContainerCreating":
                     logger.info(f"Kube pod in waiting state, still creating container.")
-                    container_status['message'] = "Pod is still initializing."
-                    pod.container_status = container_status
+                    status_container['message'] = "Pod is still initializing."
+                    pod.status_container = status_container
                     pod.db_update()
                     continue
                 elif c_state.running:
-                    container_status['message'] = "Pod is running."
-                    pod.container_status = container_status
-                    pod.status = READY
+                    status_container['message'] = "Pod is running."
+                    pod.status_container = status_container
+                    pod.status = RUNNING
                     pod.db_update()
             else:
                 # Not sure if this is possible/what happens here.
@@ -150,15 +167,48 @@ def check_k8_pods():
         pod.logs = logs
         pod.db_update()
 
+def check_k8_services():
+    # This is all for only the site specified in conf.site_id.
+    # Each site should get it's own health pod.
+    # Go through live containers first as it's "truth". Set database from that info. (error if needed, update statuses)
+    k8_services = get_current_k8_services() # Returns {service_info, site, tenant, pod_id}
+
+    # Check each service.
+    for k8_service in k8_services:
+        logger.info(f"Checking service health for pod_id: {k8_service['pod_id']}")
+
+        # Check for found service in database.
+        pod = Pod.db_get_with_pk(k8_service['pod_id'], k8_service['tenant_id'], k8_service['site_id'])
+        # We've found a service without a database entry. Shut it and potential service down.
+        if not pod:
+            logger.warning(f"Found k8 service without any database entry. Deleting. Service: {k8_service['k8_name']}")
+            rm_pod(k8_service['k8_name'])
+            continue
 
 def check_db_pods():
-    """Go through database for all tenants in this site. Sync with k8_pods. Delete/Create whatever is needed. Do nginx stuff.
+    """Go through database for all tenants in this site. Delete/Create whatever is needed. Do nginx stuff.
     """
     all_pods = []
     stmt = select(Pod)
     for tenant in SITE_TENANT_DICT[conf.site_id]:
         all_pods += pg_store[conf.site_id][tenant].run("execute", stmt, scalars=True, all=True)
 
+    ### Delete pods with status_requested = OFF or RESTART
+    for pod in all_pods:
+        if pod.status_requested in [OFF, RESTART] and pod.status != STOPPED:
+            logger.info(f"pod_id: {pod.pod_id} found with status_requested: {pod.status_requested}. Gracefully shutting pod down.")
+            container_exists, service_exists = graceful_rm_pod(pod)
+            # if container and service not alive. Update status to STOPPED. UPDATE RESTART to ON.
+            if not container_exists and not service_exists:
+                logger.info(f"pod_id: {pod.pod_id} found with container and service stopped. Moving to status = STOPPED.")
+                pod.status = STOPPED
+                pod.status_container = {}
+                if pod.status_requested == RESTART:
+                    logger.info(f"pod_id: {pod.pod_id} in RESTART. Now in STOPPED, so switching status_requested back to ON.")
+                    pod.status_requested = ON
+                pod.db_update()
+                
+    ### Nginx ports and config changes
     # Get unused_instance_ports for nginx later.
     unused_instance_ports = list(range(52001, 52999))
     for pod in all_pods:
@@ -213,6 +263,7 @@ def main():
     while True:
         logger.info(f"Running pods health checks. Now: {time.time()}")
         check_k8_pods()
+        check_k8_services()
         check_db_pods()
         ########
         #######
@@ -232,44 +283,6 @@ if __name__ == '__main__':
 
 
 # shutdown_all_k8_pods()?
-# def check_containers():
-#     # Delete hanging containers without db record.
-#     logger.info(f"Top of check_containers in health. Looking to delete hanging containers.")
-#     worker_records = workers_store['tacc'].items()
-#     worker_ids_in_db = []
-#     for worker in worker_records:
-#         worker_ids_in_db.append(worker['id'].lower())
-#     logger.info(f"check_containers(). List of all worker_ids found in db: {worker_ids_in_db}")
-
-#     worker_containers = get_current_k8_pods()
-#     # We check only by worker_id (not actors-worker-tenant-actor_id-worker_id) because it's easier. + better to leave container, then delete
-#     for container in worker_containers:
-#         container_worker_id = container['worker_id']
-#         if not container_worker_id in worker_ids_in_db:
-#             # Couldn't find worker doc matching worker container
-#             # reconstitute container name actors-worker-<tenant>-<actor-id>-<worker-id>
-#             container_id = f"actors-worker-{container['tenant_id']}-{container['actor_id']}-{container_worker_id}"
-#             logger.debug(f"Container {container_id} found, but no worker_id == {container_worker_id} found in db. Hanging container, deleting pod.")
-#             rm_container(container_id)
-
-# worker_id = worker['id']
-# worker_status = worker.get('status')
-# # if the worker has only been requested, it will not have a host_id. it is possible
-# # the worker will ultimately get scheduled on a different host; however, if there is
-# # some issue and the worker is "stuck" in the early phases, we should remove it..
-# if 'host_id' not in worker:
-#     # check for an old create time
-#     worker_create_t = worker.get('create_time')
-#     # in versions prior to 1.9, worker create_time was not set until after it was READY
-#     if not worker_create_t:
-#         hard_delete_worker(actor_id, worker_id, reason_str='Worker did not have a host_id or create_time field.')
-#     # if still no host after 5 minutes, delete it
-#     if worker_create_t <  get_current_utc_time() - datetime.timedelta(minutes=5):
-#         hard_delete_worker(actor_id, worker_id, reason_str='Worker did not have a host_id and had '
-#                                                             'old create_time field.')
-#     continue
-
-
 # # we need to delete any worker that is in SHUTDOWN REQUESTED or SHUTTING down for too long
 # if worker_status == codes.SHUTDOWN_REQUESTED or worker_status == codes.SHUTTING_DOWN:
 #     worker_last_health_check_time = worker.get('last_health_check_time')

@@ -73,8 +73,8 @@ http {
     server {
         listen                 {{ pdata.instance_port }} ssl;
         proxy_set_header X-Forwarded-Proto $scheme;
-        #ssl_certificate       /tmp/ssl/tls.crt;
-        #ssl_certificate_key   /tmp/ssl/tls.key;
+        ssl_certificate       /tmp/ssl/tls.crt;
+        ssl_certificate_key   /tmp/ssl/tls.key;
         location ~ .* {
             proxy_pass http://{{ pname }}:{{ pdata.routing_port }};
             proxy_redirect off;

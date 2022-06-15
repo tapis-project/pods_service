@@ -15,7 +15,7 @@ from tapisservice.logs import get_logger
 logger = get_logger(__name__)
 
 from tapisservice.config import conf
-from codes import BUSY, READY, RUNNING, CREATING_CONTAINER
+from codes import RUNNING, CREATING_CONTAINER
 from stores import SITE_TENANT_DICT
 from stores import pg_store
 from sqlmodel import select
@@ -71,7 +71,7 @@ NAMESPACE = get_kubernetes_namespace()
 
 def rm_container(k8_name):
     """
-    Remove a container.
+    Remove a container. Async
     :param cid:
     :return:
     """    
@@ -80,25 +80,30 @@ def rm_container(k8_name):
     except Exception as e:
         logger.info(f"Got exception trying to remove pod: {k8_name}. Exception: {e}")
         raise KubernetesError(f"Error removing pod {k8_name}, exception: {str(e)}")
-    logger.info(f"pod {k8_name} removed.")
+    logger.info(f"delete_namespaced_pod ran for pod {k8_name}.")
 
 def rm_service(service_id):
     """
-    Remove a container.
+    Remove a container. Async
     :param service_id:
     :return:
     """    
     try:
         k8.delete_namespaced_service(name=service_id, namespace=NAMESPACE)
     except Exception as e:
-        logger.info(f"Got exception trying to remove pod: {service_id}. Exception: {e}")
-        raise KubernetesError(f"Error removing pod {service_id}, exception: {str(e)}")
-    logger.info(f"pod {service_id} removed.")
+        logger.info(f"Got exception trying to remove service: {service_id}. Exception: {e}")
+        raise KubernetesError(f"Error removing service {service_id}, exception: {str(e)}")
+    logger.info(f"delete_namespaced_service ran for service {service_id}.")
 
 def list_all_containers():
     """Returns a list of all containers in a particular namespace """
     pods = k8.list_namespaced_pod(NAMESPACE).items
     return pods
+
+def list_all_services():
+    """Returns a list of all containers in a particular namespace """
+    services = k8.list_namespaced_service(NAMESPACE).items
+    return services
 
 def get_current_k8_pods(service_name: str = "pods", site_id: str = conf.site_id):
     """
@@ -135,6 +140,42 @@ def get_current_k8_pods(service_name: str = "pods", site_id: str = conf.site_id)
                 print(msg)
                 pass
     return db_containers
+
+def get_current_k8_services(service_name: str = "pods", site_id: str = conf.site_id):
+    """
+    The get_current_k8_service function returns a list of dictionaries containing the following keys:
+        - service_info: The Kubernetes API object for the container.
+        - site_id: The site ID (e.g., 'east', 'west') where this container is located.
+        - tenant_id: The tenant ID (e.g., 'acme-prod') where this container is located.
+        - pod_id: A string representing the name of the pod, e.g., &quot;pods-east-acme-prod&quot;.  This value can be used to filter out pods in other sites or tenants when needed.
+    
+    :param filter_str:str=&quot;pods&quot;: Filter the list of containers
+    :return: A list of dictionaries
+    :doc-author: Trelent
+    """
+    """Get all containers, filter for just db, and display."""
+    filter_str = f"{service_name}-{site_id}"
+    db_services = []
+    for k8_service in list_all_services():
+        k8_name = k8_service.metadata.name
+        if filter_str in k8_name:
+            # db name format = "pods-<site>-<tenant>-<pod_id>
+            # so split on - to get parts (containers use _, pods use -)
+            try:
+                parts = k8_name.split('-')
+                site_id = parts[1]
+                tenant_id = parts[2]
+                pod_id = parts[3]
+                db_services.append({'service_info': k8_service,
+                                    'site_id': site_id,
+                                    'tenant_id': tenant_id,
+                                    'pod_id': pod_id,
+                                    'k8_name': k8_name})
+            except Exception as e:
+                msg = f"Exception parsing k8 services. e: {e}"
+                print(msg)
+                pass
+    return db_services
 
 def get_k8_logs(name: str):
     try:

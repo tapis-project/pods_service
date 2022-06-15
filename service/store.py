@@ -79,7 +79,8 @@ class PostgresStore():
             if autocommit:
                 session.connection(execution_options={"isolation_level": "AUTOCOMMIT"})
             try:
-                logger.info(f"PostgresStore.fn; Command: {fn_name} - Statement/Instance: {fn_input}")
+                # Following line creates a lot of logs.
+                #logger.info(f"PostgresStore.fn; Command: {fn_name} - Statement/Instance: {fn_input}")
                 # Gets session function to run (sess.execute, sess.scalars, etc.)
                 fn_to_run = getattr(session, fn_name)
 

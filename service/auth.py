@@ -222,6 +222,21 @@ def authorization(request):
             if request.method == 'GET':
                 # GET creds requires USER
                 has_pem = check_permissions(user=g.username, pod=pod, level=codes.USER)
+        # Check for func = stop
+        if path_split[3] == "stop":
+            if request.method == 'GET':
+                # GET creds requires USER
+                has_pem = check_permissions(user=g.username, pod=pod, level=codes.ADMIN)
+        # Check for func = start
+        if path_split[3] == "start":
+            if request.method == 'GET':
+                # GET creds requires USER
+                has_pem = check_permissions(user=g.username, pod=pod, level=codes.ADMIN)
+        # Check for func = restart
+        if path_split[3] == "restart":
+            if request.method == 'GET':
+                # GET creds requires USER
+                has_pem = check_permissions(user=g.username, pod=pod, level=codes.ADMIN)
     else:
         # Now just /pods/{pod_id}
         if request.method == 'GET':

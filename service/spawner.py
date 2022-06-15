@@ -4,8 +4,8 @@ import time
 
 import rabbitpy
 from concurrent.futures import ThreadPoolExecutor
-from codes import BUSY, ERROR, SPAWNER_SETUP, CREATING_CONTAINER, UPDATING_STORE, READY, \
-    REQUESTED, SHUTDOWN_REQUESTED, SHUTTING_DOWN
+from codes import ERROR, SPAWNER_SETUP, CREATING_CONTAINER, \
+    REQUESTED, SHUTTING_DOWN, ON
 from health import graceful_rm_pod
 from models import Pod, Password
 from channels import CommandChannel
@@ -46,12 +46,8 @@ class Spawner(object):
         tenant_id = cmd["tenant_id"]
         site_id = cmd["site_id"]
 
-        # Get pod while in spawner. Expected REQUESTED (Maybe SUBMITTED?). If SHUTDOWN_REQUESTED then request
-        # was started while waiting for command to startup in queue.
-        ###
-        # if the worker was sent a delete request before spawner received this message to create the worker,
-        # the status will be SHUTDOWN_REQUESTED, not REQUESTED. in that case, we simply abort and remove the
-        # worker from the collection.
+        # Get pod while in spawner. Expect REQUESTED. If status_requested = OFF then request was started while waiting
+        # for command to startup in queue. In that case, we simply abort and wait for health to delete pod.
         try:
             pod = Pod.db_get_with_pk(pod_id, tenant=tenant_id, site=site_id)
         except Exception as e:
@@ -59,12 +55,17 @@ class Spawner(object):
             logger.error(msg)
             return
         
-        status = getattr(pod, 'status', None)
+        status = getattr(pod, 'status', '')
         if not status == REQUESTED:
             logger.debug(f"Spawner found pod NOT in REQUESTED status as expected. status: {status}. Returning and not processing command.")
             return
-        
-        # Pod status was REQUESTED; moving on to SPAWNER_SETUP ----
+
+        status_requested = getattr(pod, 'status_requested', '')
+        if not status_requested == ON:
+            logger.debug(f"Spawner found pod not requesting ON as expected. status_requested: {status_requested}. Returning and not processing command.")
+            return
+
+        # Pod status was REQUESTED and status_requested was ON; moving on to SPAWNER_SETUP ----
         pod.status = SPAWNER_SETUP
         pod.db_update()
         logger.debug(f"spawner has updated pod status to SPAWNER_SETUP")
@@ -78,9 +79,16 @@ class Spawner(object):
             else:
                 logger.critical(f"pod_template found no working functions. Running graceful_rm_pod.")
                 graceful_rm_pod(pod)
+                return
         except Exception as e:
             logger.critical(f"Got error when creating pod. Running graceful_rm_pod. e: {e}")
             graceful_rm_pod(pod)
+            return
+
+        # If we get to this point we can update pod status
+        pod.status = CREATING_CONTAINER
+        pod.db_update()
+        logger.debug(f"spawner has updated pod status to CREATING_CONTAINER")
 
 def main():
     # todo - find something more elegant
