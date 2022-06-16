@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from models import Pod, NewPod, UpdatePod, getPodReturn
+from models import Pod, NewPod, UpdatePod, PodResponse, Password, DeletePodResponse
 from channels import CommandChannel
 from tapisservice.tapisfastapi.utils import g, ok
 
@@ -11,8 +11,10 @@ router = APIRouter()
 
 #### /pods/{pod_id}
 
-@router.put("/pods/{pod_id}", tags=["pods"], summary="update_pod", operation_id="update_pod", response_model=getPodReturn)
+@router.put("/pods/{pod_id}", tags=["Pods"], summary="update_pod", operation_id="update_pod", response_model=PodResponse)
 async def update_pod(pod_id, update_pod: UpdatePod):
+    logger.info(f"UPDATE /pods/{pod_id} - Top of update_pod.")
+
     pod = Pod.db_get_DAO(pod_id)
 
     # Do checks here, ensure pod exists. etc.
@@ -24,15 +26,23 @@ async def update_pod(pod_id, update_pod: UpdatePod):
     return ok("update_pod - Not yet implemented.")
 
 
-@router.delete("/pods/{pod_id}", tags=["pods"], summary="delete_pod", operation_id="delete_pod")
-async def delete_pod():
-    # This is actually just a stop_pod.
-    return ok("delete_pod - Not yet implemented.")
+@router.delete("/pods/{pod_id}", tags=["Pods"], summary="delete_pod", operation_id="delete_pod", response_model=DeletePodResponse)
+async def delete_pod(pod_id):
+    logger.info(f"DELETE /pods/{pod_id} - Top of delete_pod.")
+
+    # Needs to delete pod, service, db_pod, db_password
+    pod = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
+    password = Password.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
+
+    pod.db_delete()
+    password.db_delete()
+
+    return ok(result=None, msg="Pod successfully deleted.")
 
 
-@router.get("/pods/{pod_id}", tags=["pods"], summary="get_pod", operation_id="get_pod", response_model=getPodReturn)
+@router.get("/pods/{pod_id}", tags=["Pods"], summary="get_pod", operation_id="get_pod", response_model=PodResponse)
 async def get_pod(pod_id):
-    logger.info(f"GET /pods/{pod_id} - Top of get_pods.")
+    logger.info(f"GET /pods/{pod_id} - Top of get_pod.")
 
     # TODO .display(), search, permissions
 

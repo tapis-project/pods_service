@@ -1,14 +1,23 @@
 {
   "openapi":"3.0.2",
   "info":{
-    "title":"pods",
-    "version":"0.1.0"
+    "title":"Tapis Pods Service",
+    "description":"\nThe Pods Service is a web service and distributed computing platform providing pods-as-a-service (PaaS). The service \nimplements a message broker and processor model that requests pods, alongside a health module to poll for pod\ndata, including logs, status, and health. The primary use of this service is to have quick to deploy long-lived\nservices based on Docker images that are exposed via HTTP or TCP endpoints listed by the API.\n\n**The Pods service provides functionality for two types of pod solutions:**\n * **Templated Pods** for run-as-is popular images. Neo4J is one example, the template manages TCP ports, user creation, and permissions.\n * **Custom Pods** for arbitrary docker images with less functionality. In this case we will expose port 5000 and do nothing else.\n",
+    "contact":{
+      "name":"CIC Support",
+      "email":"cicsupport@tacc.utexas.edu"
+    },
+    "license":{
+      "name":"BSD 3.0",
+      "url":"https://github.com/tapis-project/pods_service"
+    },
+    "version":"0.30"
   },
   "paths":{
     "/pods":{
       "get":{
         "tags":[
-          "pods"
+          "Pods"
         ],
         "summary":"get_pods",
         "operationId":"get_pods",
@@ -18,7 +27,7 @@
             "content":{
               "application/json":{
                 "schema":{
-                  "$ref":"#/components/schemas/getPodsReturn"
+                  "$ref":"#/components/schemas/PodsResponse"
                 }
               }
             }
@@ -27,7 +36,7 @@
       },
       "post":{
         "tags":[
-          "pods"
+          "Pods"
         ],
         "summary":"create_pod",
         "operationId":"create_pod",
@@ -47,7 +56,7 @@
             "content":{
               "application/json":{
                 "schema":{
-                  "$ref":"#/components/schemas/getPodReturn"
+                  "$ref":"#/components/schemas/PodResponse"
                 }
               }
             }
@@ -68,7 +77,7 @@
     "/pods/{pod_id}":{
       "get":{
         "tags":[
-          "pods"
+          "Pods"
         ],
         "summary":"get_pod",
         "operationId":"get_pod",
@@ -88,7 +97,7 @@
             "content":{
               "application/json":{
                 "schema":{
-                  "$ref":"#/components/schemas/getPodReturn"
+                  "$ref":"#/components/schemas/PodResponse"
                 }
               }
             }
@@ -107,7 +116,7 @@
       },
       "put":{
         "tags":[
-          "pods"
+          "Pods"
         ],
         "summary":"update_pod",
         "operationId":"update_pod",
@@ -137,7 +146,7 @@
             "content":{
               "application/json":{
                 "schema":{
-                  "$ref":"#/components/schemas/getPodReturn"
+                  "$ref":"#/components/schemas/PodResponse"
                 }
               }
             }
@@ -156,17 +165,37 @@
       },
       "delete":{
         "tags":[
-          "pods"
+          "Pods"
         ],
         "summary":"delete_pod",
         "operationId":"delete_pod",
+        "parameters":[
+          {
+            "required":true,
+            "schema":{
+              "title":"Pod Id"
+            },
+            "name":"pod_id",
+            "in":"path"
+          }
+        ],
         "responses":{
           "200":{
             "description":"Successful Response",
             "content":{
               "application/json":{
                 "schema":{
-                  
+                  "$ref":"#/components/schemas/DeletePodResponse"
+                }
+              }
+            }
+          },
+          "422":{
+            "description":"Validation Error",
+            "content":{
+              "application/json":{
+                "schema":{
+                  "$ref":"#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -177,7 +206,7 @@
     "/pods/{pod_id}/credentials":{
       "get":{
         "tags":[
-          "pods"
+          "Credentials"
         ],
         "summary":"get_pod_credentials",
         "operationId":"get_pod_credentials",
@@ -197,7 +226,7 @@
             "content":{
               "application/json":{
                 "schema":{
-                  
+                  "$ref":"#/components/schemas/PodCredentialsResponse"
                 }
               }
             }
@@ -218,9 +247,9 @@
     "/pods/{pod_id}/logs":{
       "get":{
         "tags":[
-          "pods"
+          "Logs"
         ],
-        "summary":"Get Pod Logs",
+        "summary":"get_pod_logs",
         "operationId":"get_pod_logs",
         "parameters":[
           {
@@ -238,7 +267,7 @@
             "content":{
               "application/json":{
                 "schema":{
-                  
+                  "$ref":"#/components/schemas/PodLogsResponse"
                 }
               }
             }
@@ -259,7 +288,7 @@
     "/pods/{pod_id}/permissions":{
       "get":{
         "tags":[
-          "pods"
+          "Permissions"
         ],
         "summary":"get_pod_permissions",
         "operationId":"get_pod_permissions",
@@ -279,7 +308,7 @@
             "content":{
               "application/json":{
                 "schema":{
-                  
+                  "$ref":"#/components/schemas/PodPermissionsResponse"
                 }
               }
             }
@@ -298,9 +327,9 @@
       },
       "post":{
         "tags":[
-          "pods"
+          "Permissions"
         ],
-        "summary":"set_pod_permissions",
+        "summary":"set_pod_permission",
         "operationId":"set_pod_permission",
         "parameters":[
           {
@@ -328,7 +357,7 @@
             "content":{
               "application/json":{
                 "schema":{
-                  
+                  "$ref":"#/components/schemas/PodPermissionsResponse"
                 }
               }
             }
@@ -347,9 +376,9 @@
       },
       "delete":{
         "tags":[
-          "pods"
+          "Permissions"
         ],
-        "summary":"delete_pod_permissions",
+        "summary":"delete_pod_permission",
         "operationId":"delete_pod_permission",
         "parameters":[
           {
@@ -377,7 +406,7 @@
             "content":{
               "application/json":{
                 "schema":{
-                  
+                  "$ref":"#/components/schemas/PodPermissionsResponse"
                 }
               }
             }
@@ -398,7 +427,7 @@
     "/pods/{pod_id}/stop":{
       "get":{
         "tags":[
-          "pods"
+          "Pods"
         ],
         "summary":"stop_pod",
         "operationId":"stop_pod",
@@ -418,7 +447,7 @@
             "content":{
               "application/json":{
                 "schema":{
-                  "$ref":"#/components/schemas/getPodReturn"
+                  "$ref":"#/components/schemas/PodResponse"
                 }
               }
             }
@@ -439,7 +468,7 @@
     "/pods/{pod_id}/start":{
       "get":{
         "tags":[
-          "pods"
+          "Pods"
         ],
         "summary":"start_pod",
         "operationId":"start_pod",
@@ -459,7 +488,7 @@
             "content":{
               "application/json":{
                 "schema":{
-                  "$ref":"#/components/schemas/getPodReturn"
+                  "$ref":"#/components/schemas/PodResponse"
                 }
               }
             }
@@ -480,7 +509,7 @@
     "/pods/{pod_id}/restart":{
       "get":{
         "tags":[
-          "pods"
+          "Pods"
         ],
         "summary":"restart_pod",
         "operationId":"restart_pod",
@@ -500,7 +529,7 @@
             "content":{
               "application/json":{
                 "schema":{
-                  "$ref":"#/components/schemas/getPodReturn"
+                  "$ref":"#/components/schemas/PodResponse"
                 }
               }
             }
@@ -521,6 +550,25 @@
   },
   "components":{
     "schemas":{
+      "CredentialsModel":{
+        "title":"CredentialsModel",
+        "required":[
+          "user_username",
+          "user_password"
+        ],
+        "type":"object",
+        "properties":{
+          "user_username":{
+            "title":"User Username",
+            "type":"string"
+          },
+          "user_password":{
+            "title":"User Password",
+            "type":"string"
+          }
+        },
+        "additionalProperties":false
+      },
       "DeletePermission":{
         "title":"DeletePermission",
         "required":[
@@ -537,6 +585,40 @@
         "additionalProperties":false,
         "description":"Object with fields that users are allowed to specify for the Pod class."
       },
+      "DeletePodResponse":{
+        "title":"DeletePodResponse",
+        "required":[
+          "message",
+          "metadata",
+          "result",
+          "status",
+          "version"
+        ],
+        "type":"object",
+        "properties":{
+          "message":{
+            "title":"Message",
+            "type":"string"
+          },
+          "metadata":{
+            "title":"Metadata",
+            "type":"object"
+          },
+          "result":{
+            "title":"Result",
+            "type":"null"
+          },
+          "status":{
+            "title":"Status",
+            "type":"string"
+          },
+          "version":{
+            "title":"Version",
+            "type":"string"
+          }
+        },
+        "additionalProperties":false
+      },
       "HTTPValidationError":{
         "title":"HTTPValidationError",
         "type":"object",
@@ -549,6 +631,19 @@
             }
           }
         }
+      },
+      "LogsModel":{
+        "title":"LogsModel",
+        "type":"object",
+        "properties":{
+          "logs":{
+            "title":"Logs",
+            "type":"string",
+            "description":"Logs from kubernetes pods, useful for debugging and reading results.",
+            "default":""
+          }
+        },
+        "additionalProperties":false
       },
       "NewPod":{
         "title":"NewPod",
@@ -608,8 +703,158 @@
         "additionalProperties":false,
         "description":"Object with fields that users are allowed to specify for the Pod class."
       },
-      "PodReturn":{
-        "title":"PodReturn",
+      "PermissionsModel":{
+        "title":"PermissionsModel",
+        "type":"object",
+        "properties":{
+          "permissions":{
+            "title":"Permissions",
+            "type":"array",
+            "items":{
+              "type":"string"
+            },
+            "description":"Pod permissions for each user.",
+            "default":[
+              
+            ]
+          }
+        },
+        "additionalProperties":false
+      },
+      "PodCredentialsResponse":{
+        "title":"PodCredentialsResponse",
+        "required":[
+          "message",
+          "metadata",
+          "result",
+          "status",
+          "version"
+        ],
+        "type":"object",
+        "properties":{
+          "message":{
+            "title":"Message",
+            "type":"string"
+          },
+          "metadata":{
+            "title":"Metadata",
+            "type":"object"
+          },
+          "result":{
+            "$ref":"#/components/schemas/CredentialsModel"
+          },
+          "status":{
+            "title":"Status",
+            "type":"string"
+          },
+          "version":{
+            "title":"Version",
+            "type":"string"
+          }
+        },
+        "additionalProperties":false
+      },
+      "PodLogsResponse":{
+        "title":"PodLogsResponse",
+        "required":[
+          "message",
+          "metadata",
+          "result",
+          "status",
+          "version"
+        ],
+        "type":"object",
+        "properties":{
+          "message":{
+            "title":"Message",
+            "type":"string"
+          },
+          "metadata":{
+            "title":"Metadata",
+            "type":"object"
+          },
+          "result":{
+            "$ref":"#/components/schemas/LogsModel"
+          },
+          "status":{
+            "title":"Status",
+            "type":"string"
+          },
+          "version":{
+            "title":"Version",
+            "type":"string"
+          }
+        },
+        "additionalProperties":false
+      },
+      "PodPermissionsResponse":{
+        "title":"PodPermissionsResponse",
+        "required":[
+          "message",
+          "metadata",
+          "result",
+          "status",
+          "version"
+        ],
+        "type":"object",
+        "properties":{
+          "message":{
+            "title":"Message",
+            "type":"string"
+          },
+          "metadata":{
+            "title":"Metadata",
+            "type":"object"
+          },
+          "result":{
+            "$ref":"#/components/schemas/PermissionsModel"
+          },
+          "status":{
+            "title":"Status",
+            "type":"string"
+          },
+          "version":{
+            "title":"Version",
+            "type":"string"
+          }
+        },
+        "additionalProperties":false
+      },
+      "PodResponse":{
+        "title":"PodResponse",
+        "required":[
+          "message",
+          "metadata",
+          "result",
+          "status",
+          "version"
+        ],
+        "type":"object",
+        "properties":{
+          "message":{
+            "title":"Message",
+            "type":"string"
+          },
+          "metadata":{
+            "title":"Metadata",
+            "type":"object"
+          },
+          "result":{
+            "$ref":"#/components/schemas/PodResponseModel"
+          },
+          "status":{
+            "title":"Status",
+            "type":"string"
+          },
+          "version":{
+            "title":"Version",
+            "type":"string"
+          }
+        },
+        "additionalProperties":false
+      },
+      "PodResponseModel":{
+        "title":"PodResponseModel",
         "required":[
           "pod_id",
           "pod_template"
@@ -724,6 +969,43 @@
         },
         "additionalProperties":false
       },
+      "PodsResponse":{
+        "title":"PodsResponse",
+        "required":[
+          "message",
+          "metadata",
+          "result",
+          "status",
+          "version"
+        ],
+        "type":"object",
+        "properties":{
+          "message":{
+            "title":"Message",
+            "type":"string"
+          },
+          "metadata":{
+            "title":"Metadata",
+            "type":"object"
+          },
+          "result":{
+            "title":"Result",
+            "type":"array",
+            "items":{
+              "$ref":"#/components/schemas/PodResponseModel"
+            }
+          },
+          "status":{
+            "title":"Status",
+            "type":"string"
+          },
+          "version":{
+            "title":"Version",
+            "type":"string"
+          }
+        },
+        "additionalProperties":false
+      },
       "SetPermission":{
         "title":"SetPermission",
         "required":[
@@ -828,77 +1110,25 @@
             "type":"string"
           }
         }
-      },
-      "getPodReturn":{
-        "title":"getPodReturn",
-        "required":[
-          "metadat",
-          "result",
-          "status",
-          "version"
-        ],
-        "type":"object",
-        "properties":{
-          "message":{
-            "title":"Message",
-            "type":"string",
-            "default":"The request was successful."
-          },
-          "metadat":{
-            "title":"Metadat",
-            "type":"object"
-          },
-          "result":{
-            "$ref":"#/components/schemas/PodReturn"
-          },
-          "status":{
-            "title":"Status",
-            "type":"string"
-          },
-          "version":{
-            "title":"Version",
-            "type":"string"
-          }
-        },
-        "additionalProperties":false
-      },
-      "getPodsReturn":{
-        "title":"getPodsReturn",
-        "required":[
-          "metadat",
-          "result",
-          "status",
-          "version"
-        ],
-        "type":"object",
-        "properties":{
-          "message":{
-            "title":"Message",
-            "type":"string",
-            "default":"The request was successful."
-          },
-          "metadat":{
-            "title":"Metadat",
-            "type":"object"
-          },
-          "result":{
-            "title":"Result",
-            "type":"array",
-            "items":{
-              "$ref":"#/components/schemas/PodReturn"
-            }
-          },
-          "status":{
-            "title":"Status",
-            "type":"string"
-          },
-          "version":{
-            "title":"Version",
-            "type":"string"
-          }
-        },
-        "additionalProperties":false
       }
     }
-  }
+  },
+  "tags":[
+    {
+      "name":"Pods",
+      "description":"Create and command pods."
+    },
+    {
+      "name":"Credentials",
+      "description":"Manage pod's credentials used."
+    },
+    {
+      "name":"Logs",
+      "description":"Manage pod logs."
+    },
+    {
+      "name":"Permissions",
+      "description":"Manage pod permissions. Grant specific TACC users **READ**, **USER**, and **ADMIN** level permissions."
+    }
+  ]
 }

@@ -63,6 +63,20 @@ class TapisModel(SQLModel):
         logger.info(f"Row successfully updated in table {tenant}.{table_name}.")
         return self
 
+    def db_delete(self):
+        """
+        Deletes db_object
+        """
+        site, tenant, store = self.get_site_tenant_session(obj=self)
+        table_name = self.table_name()
+        logger.info(f'Top of {table_name}.db_delete() for tenant.site: {tenant}.{site}')
+
+        # Run command
+        store.run("delete", self)
+        
+        logger.info(f"Row successfully deleted from table {tenant}.{table_name}.")
+        return self
+
     def get_permissions(self):
         # create permissions dict {"username": [roles], ...} with current permissions.
         perm_dict = {}

@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from models import Pod, NewPod, Password, getPodsReturn, getPodReturn
+from models import Pod, NewPod, Password, PodsResponse, PodResponse
 from channels import CommandChannel
 from tapisservice.tapisfastapi.utils import g, ok
 from codes import REQUESTED, ON
@@ -11,7 +11,7 @@ router = APIRouter()
 
 #### /pods
 
-@router.get("/pods", tags=["pods"], summary="get_pods", operation_id="get_pods", response_model=getPodsReturn)
+@router.get("/pods", tags=["Pods"], summary="get_pods", operation_id="get_pods", response_model=PodsResponse)
 async def get_pods():
     logger.info("GET /pods - Top of get_pods.")
 
@@ -26,7 +26,7 @@ async def get_pods():
     return ok(result=pods_to_show, msg="Pods retrieved successfully.")
 
 
-@router.post("/pods", tags=["pods"], summary="create_pod", operation_id="create_pod", response_model=getPodReturn)
+@router.post("/pods", tags=["Pods"], summary="create_pod", operation_id="create_pod", response_model=PodResponse)
 async def create_pod(new_pod: NewPod):
     logger.info("POST /pods - Top of create_pod.")
 

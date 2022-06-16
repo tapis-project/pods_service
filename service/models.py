@@ -127,10 +127,6 @@ class Pod(TapisModel, table=True, validate=True):
         base_url = t.tenant_cache.get_tenant_config(tenant_id=tenant_id).base_url
         # new url in the form of pod_id.tacc.develop.tapis.io
         values['url'] = base_url.replace("https://", f"{pod_id}.pods.")
-
-        ### Temporarily set url to pod_id.develop.tapis.io.
-        base_url = t.tenant_cache.get_tenant_config(tenant_id=tenant_id).site.base_url
-        values['url'] = base_url.replace("https://", f"{pod_id}.")
         return values
 
     @root_validator(pre=False)
@@ -279,7 +275,7 @@ class DeletePermission(TapisApiModel):
     user: str = Field(..., description = "User to delete permissions from.")
 
 
-class PodReturn(TapisApiModel):
+class PodResponseModel(TapisApiModel):
     pod_id: str = Field(..., description = "Name of this pod.", primary_key = True)
     pod_template: str = Field(..., description = "Which pod template to use, or which custom image to run, must be on allowlist.")
     description: str = Field("", description = "Description of this pod.")
@@ -295,16 +291,54 @@ class PodReturn(TapisApiModel):
     creation_ts: datetime | None = Field(None, description = "Time (UTC) that this node was created.")
     update_ts: datetime | None = Field(None, description = "Time (UTC) that this node was updated.")
 
-class getPodReturn(TapisApiModel):
-    message: str = "The request was successful."
+class PodResponse(TapisApiModel):
+    message: str
     metadata: Dict
-    result: PodReturn
+    result: PodResponseModel
     status: str
     version: str
 
-class getPodsReturn(TapisApiModel):
-    message: str = "The request was successful."
+class PodsResponse(TapisApiModel):
+    message: str
     metadata: Dict
-    result: List[PodReturn]
+    result: List[PodResponseModel]
+    status: str
+    version: str
+
+class DeletePodResponse(TapisApiModel):
+    message: str
+    metadata: Dict
+    result: None
+    status: str
+    version: str
+
+class PermissionsModel(TapisApiModel):
+    permissions: List[str] = Field([], description = "Pod permissions for each user.")
+
+class PodPermissionsResponse(TapisApiModel):
+    message: str
+    metadata: Dict
+    result: PermissionsModel
+    status: str
+    version: str
+
+class LogsModel(TapisApiModel):
+    logs: str = Field("", description = "Logs from kubernetes pods, useful for debugging and reading results.")
+
+class PodLogsResponse(TapisApiModel):
+    message: str
+    metadata: Dict
+    result: LogsModel
+    status: str
+    version: str
+
+class CredentialsModel(TapisApiModel):
+    user_username: str
+    user_password: str
+
+class PodCredentialsResponse(TapisApiModel):
+    message: str
+    metadata: Dict
+    result: CredentialsModel
     status: str
     version: str
