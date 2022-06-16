@@ -11,8 +11,18 @@ router = APIRouter()
 
 #### /pods
 
-@router.get("/pods", tags=["Pods"], summary="get_pods", operation_id="get_pods", response_model=PodsResponse)
+@router.get(
+    "/pods",
+    tags=["Pods"],
+    summary="get_pods",
+    operation_id="get_pods",
+    response_model=PodsResponse)
 async def get_pods():
+    """
+    Get all pods in your respective tenant and site that you have READ or higher access to.
+
+    Returns a list of pods.
+    """
     logger.info("GET /pods - Top of get_pods.")
 
     # TODO .display(), search, permissions
@@ -26,8 +36,22 @@ async def get_pods():
     return ok(result=pods_to_show, msg="Pods retrieved successfully.")
 
 
-@router.post("/pods", tags=["Pods"], summary="create_pod", operation_id="create_pod", response_model=PodResponse)
+@router.post(
+    "/pods",
+    tags=["Pods"],
+    summary="create_pod",
+    operation_id="create_pod",
+    response_model=PodResponse)
 async def create_pod(new_pod: NewPod):
+    """
+    Create a pod with inputted information.
+    
+    Notes:
+    - Author will be given ADMIN level permissions to the pod.
+    - status_requested defaults to "ON". So pod will immediately begin creation.
+
+    Returns new pod object.
+    """
     logger.info("POST /pods - Top of create_pod.")
 
     # Create full Pod object. Validates as well.

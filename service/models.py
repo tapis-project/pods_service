@@ -291,12 +291,14 @@ class PodResponseModel(TapisApiModel):
     creation_ts: datetime | None = Field(None, description = "Time (UTC) that this node was created.")
     update_ts: datetime | None = Field(None, description = "Time (UTC) that this node was updated.")
 
+
 class PodResponse(TapisApiModel):
     message: str
     metadata: Dict
     result: PodResponseModel
     status: str
     version: str
+
 
 class PodsResponse(TapisApiModel):
     message: str
@@ -305,15 +307,18 @@ class PodsResponse(TapisApiModel):
     status: str
     version: str
 
+
 class DeletePodResponse(TapisApiModel):
     message: str
     metadata: Dict
-    result: None
+    result: str
     status: str
     version: str
 
+
 class PermissionsModel(TapisApiModel):
     permissions: List[str] = Field([], description = "Pod permissions for each user.")
+
 
 class PodPermissionsResponse(TapisApiModel):
     message: str
@@ -322,8 +327,10 @@ class PodPermissionsResponse(TapisApiModel):
     status: str
     version: str
 
+
 class LogsModel(TapisApiModel):
     logs: str = Field("", description = "Logs from kubernetes pods, useful for debugging and reading results.")
+
 
 class PodLogsResponse(TapisApiModel):
     message: str
@@ -332,9 +339,11 @@ class PodLogsResponse(TapisApiModel):
     status: str
     version: str
 
+
 class CredentialsModel(TapisApiModel):
     user_username: str
     user_password: str
+
 
 class PodCredentialsResponse(TapisApiModel):
     message: str

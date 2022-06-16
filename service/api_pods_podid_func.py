@@ -12,8 +12,21 @@ router = APIRouter()
 
 #### /pods/{pod_id}/functionHere
 
-@router.get("/pods/{pod_id}/credentials", tags=["Credentials"], summary="get_pod_credentials", operation_id="get_pod_credentials", response_model=PodCredentialsResponse)
+@router.get(
+    "/pods/{pod_id}/credentials",
+    tags=["Credentials"],
+    summary="get_pod_credentials",
+    operation_id="get_pod_credentials",
+    response_model=PodCredentialsResponse)
 async def get_pod_credentials(pod_id):
+    """
+    Get the credentials created for a pod.
+
+    Note:
+    - These credentials are used in the case of templated pods, but for custom pods they're not.
+
+    Returns user accessible credentials.
+    """
     logger.info(f"GET /pods/{pod_id}/credentials - Top of get_pod_credentials.")
 
     # Do more update things.
@@ -24,8 +37,22 @@ async def get_pod_credentials(pod_id):
     return ok(result=user_cred)
 
 
-@router.get("/pods/{pod_id}/logs", tags=["Logs"], summary="get_pod_logs", operation_id="get_pod_logs", response_model=PodLogsResponse)
+@router.get(
+    "/pods/{pod_id}/logs",
+    tags=["Logs"],
+    summary="get_pod_logs",
+    operation_id="get_pod_logs",
+    response_model=PodLogsResponse)
 async def get_pod_logs(pod_id):
+    """
+    Get a pods logs.
+    
+    Note:
+    - These are only retrieved while pod is running.
+    - If a pod is restarted or turned off and then on, the logs will be reset.
+
+    Returns pod logs.
+    """
     logger.info(f"GET /pods/{pod_id}/logs - Top of get_pod_logs.")
 
     pod = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
@@ -33,8 +60,22 @@ async def get_pod_logs(pod_id):
     return ok(result={"logs": pod.logs}, msg = "Pod logs retrieved successfully.")
 
 
-@router.get("/pods/{pod_id}/permissions", tags=["Permissions"], summary="get_pod_permissions", operation_id="get_pod_permissions", response_model=PodPermissionsResponse)
+@router.get(
+    "/pods/{pod_id}/permissions",
+    tags=["Permissions"],
+    summary="get_pod_permissions",
+    operation_id="get_pod_permissions",
+    response_model=PodPermissionsResponse)
 async def get_pod_permissions(pod_id):
+    """
+    Get a pods permissions.
+
+    Note:
+    - There are 3 levels of permissions, READ, USER, and ADMIN.
+    - Permissions are granted/revoked to individual TACC usernames.
+
+    Returns all pod permissions.
+    """
     logger.info(f"GET /pods/{pod_id}/permissions - Top of get_pod_permissions.")
 
     pod = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
@@ -42,8 +83,18 @@ async def get_pod_permissions(pod_id):
     return ok(result={"permissions": pod.permissions}, msg = "Pod permissions retrieved successfully.")
 
 
-@router.post("/pods/{pod_id}/permissions", tags=["Permissions"], summary="set_pod_permission", operation_id="set_pod_permission", response_model=PodPermissionsResponse)
+@router.post(
+    "/pods/{pod_id}/permissions",
+    tags=["Permissions"],
+    summary="set_pod_permission",
+    operation_id="set_pod_permission",
+    response_model=PodPermissionsResponse)
 async def set_pod_permission(pod_id, set_permission: SetPermission):
+    """
+    Set a permission for a pod.
+
+    Returns updated pod permissions.
+    """
     logger.info(f"POST /pods/{pod_id}/permissions - Top of set_pod_permissions.")
 
     inp_user = set_permission.user
@@ -73,22 +124,30 @@ async def set_pod_permission(pod_id, set_permission: SetPermission):
     return ok(result={"permissions": pod.permissions}, msg = "Pod permissions updated successfully.")
 
 
-@router.delete("/pods/{pod_id}/permissions", tags=["Permissions"], summary="delete_pod_permission", operation_id="delete_pod_permission", response_model=PodPermissionsResponse)
-async def delete_pod_permission(pod_id, delete_permission: DeletePermission):
-    logger.info(f"DELETE /pods/{pod_id}/permissions - Top of delete_pod_permission.")
+@router.delete(
+    "/pods/{pod_id}/permissions/{user}",
+    tags=["Permissions"],
+    summary="delete_pod_permission",
+    operation_id="delete_pod_permission",
+    response_model=PodPermissionsResponse)
+async def delete_pod_permission(pod_id, user):
+    """
+    Delete a permission from a pod.
 
-    inp_user = delete_permission.user
+    Returns updated pod permissions.
+    """
+    logger.info(f"DELETE /pods/{pod_id}/permissions/{user} - Top of delete_pod_permission.")
 
     pod = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
 
     # Get formatted perms
     curr_perms = pod.get_permissions()
 
-    if inp_user not in curr_perms.keys():
-        raise KeyError(f"Could not find permission for pod with username {inp_user} when deleting permission")
+    if user not in curr_perms.keys():
+        raise KeyError(f"Could not find permission for pod with username {user} when deleting permission")
 
     # Delete permission
-    del curr_perms[inp_user]
+    del curr_perms[user]
 
     # Ensure there's still one ADMIN role before finishing.
     if "ADMIN" not in curr_perms.values():
@@ -103,11 +162,24 @@ async def delete_pod_permission(pod_id, delete_permission: DeletePermission):
     pod.permissions = perm_list
     pod.db_update()
 
-    return ok(result=perm_list, msg = "Pod permissions updated successfully.")
+    return ok(result={"permissions": pod.permissions}, msg = "Pod permission deleted successfully.")
 
 
-@router.get("/pods/{pod_id}/stop", tags=["Pods"], summary="stop_pod", operation_id="stop_pod", response_model=PodResponse)
+@router.get(
+    "/pods/{pod_id}/stop",
+    tags=["Pods"],
+    summary="stop_pod",
+    operation_id="stop_pod",
+    response_model=PodResponse)
 async def stop_pod(pod_id):
+    """
+    Stop a pod.
+
+    Note:
+    - Sets status_requested to OFF. Pod will attempt to get to STOPPED status unless start_pod is ran.
+
+    Returns updated pod object.
+    """
     logger.info(f"GET /pods/{pod_id}/stop - Top of stop_pod.")
 
     pod = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
@@ -117,8 +189,21 @@ async def stop_pod(pod_id):
     return ok(result=pod.display(), msg = "Updated pod's status_requested to OFF.")
 
 
-@router.get("/pods/{pod_id}/start", tags=["Pods"], summary="start_pod", operation_id="start_pod", response_model=PodResponse)
+@router.get(
+    "/pods/{pod_id}/start",
+    tags=["Pods"],
+    summary="start_pod",
+    operation_id="start_pod",
+    response_model=PodResponse)
 async def start_pod(pod_id):
+    """
+    Start a pod.
+
+    Note:
+    - Sets status_requested to ON. Pod will attempt to deploy.
+
+    Returns updated pod object.
+    """
     logger.info(f"GET /pods/{pod_id}/start - Top of start_pod.")
 
     pod = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
@@ -137,8 +222,21 @@ async def start_pod(pod_id):
     return ok(result=pod.display(), msg = "Updated pod's status_requested to ON and requested pod.")
 
 
-@router.get("/pods/{pod_id}/restart", tags=["Pods"], summary="restart_pod", operation_id="restart_pod", response_model=PodResponse)
+@router.get(
+    "/pods/{pod_id}/restart",
+    tags=["Pods"],
+    summary="restart_pod",
+    operation_id="restart_pod",
+    response_model=PodResponse)
 async def restart_pod(pod_id):
+    """
+    Restart a pod. CURRENTLY WORK IN PROGRESS. BROKEN.
+
+    Note:
+    - Sets status_requested to OFF. If pod status gets to STOPPED, status_requested will be flipped to ON.
+
+    Returns updated pod object.
+    """
     logger.info(f"GET /pods/{pod_id}/restart - Top of restart_pod.")
 
     pod = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)

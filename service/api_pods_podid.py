@@ -11,8 +11,21 @@ router = APIRouter()
 
 #### /pods/{pod_id}
 
-@router.put("/pods/{pod_id}", tags=["Pods"], summary="update_pod", operation_id="update_pod", response_model=PodResponse)
+@router.put(
+    "/pods/{pod_id}",
+    tags=["Pods"],
+    summary="update_pod",
+    operation_id="update_pod",
+    response_model=PodResponse)
 async def update_pod(pod_id, update_pod: UpdatePod):
+    """
+    Update a pod. CURRENTLY WORK IN PROGRESS. BROKEN.
+
+    Note:
+    - Pod will not be restarted, you must restart the pod for any pod-related changes to proliferate.
+
+    Returns updated pod object.
+    """
     logger.info(f"UPDATE /pods/{pod_id} - Top of update_pod.")
 
     pod = Pod.db_get_DAO(pod_id)
@@ -26,8 +39,18 @@ async def update_pod(pod_id, update_pod: UpdatePod):
     return ok("update_pod - Not yet implemented.")
 
 
-@router.delete("/pods/{pod_id}", tags=["Pods"], summary="delete_pod", operation_id="delete_pod", response_model=DeletePodResponse)
+@router.delete(
+    "/pods/{pod_id}",
+    tags=["Pods"],
+    summary="delete_pod",
+    operation_id="delete_pod",
+    response_model=DeletePodResponse)
 async def delete_pod(pod_id):
+    """
+    Delete a pod.
+
+    Returns None.
+    """
     logger.info(f"DELETE /pods/{pod_id} - Top of delete_pod.")
 
     # Needs to delete pod, service, db_pod, db_password
@@ -40,8 +63,18 @@ async def delete_pod(pod_id):
     return ok(result=None, msg="Pod successfully deleted.")
 
 
-@router.get("/pods/{pod_id}", tags=["Pods"], summary="get_pod", operation_id="get_pod", response_model=PodResponse)
+@router.get(
+    "/pods/{pod_id}",
+    tags=["Pods"],
+    summary="get_pod",
+    operation_id="get_pod",
+    response_model=PodResponse)
 async def get_pod(pod_id):
+    """
+    Get a pod.
+
+    Returns retrieved pod object.
+    """
     logger.info(f"GET /pods/{pod_id} - Top of get_pod.")
 
     # TODO .display(), search, permissions
