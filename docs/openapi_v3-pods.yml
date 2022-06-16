@@ -379,7 +379,7 @@ components:
           type: object
         result:
           title: Result
-          type: 'null'
+          type: string
         status:
           title: Status
           type: string
