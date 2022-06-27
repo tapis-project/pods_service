@@ -17,6 +17,7 @@ spec:
         imagePullPolicy: Never
         image: MAKEFILE_SERVICE_NAME/pods-api:MAKEFILE_TAG
         command: ["python3","-u","/home/tapis/service/spawner.py"]
+        #command: ["sleep", "2000000"]
         resources:
           requests:
             cpu: "1"
@@ -32,11 +33,15 @@ spec:
             secretKeyRef:
               name: tapis-MAKEFILE_SERVICE_NAME-secrets
               key: service-password
+        - name: POSTGRES_USERNAME
+          value: pods-admin
         - name: POSTGRES_PASSWORD
           valueFrom:
             secretKeyRef:
               name: tapis-MAKEFILE_SERVICE_NAME-secrets
               key: postgres-password
+        - name: RABBITMQ_USERNAME
+          value: pods-admin
         - name: RABBITMQ_PASSWORD
           valueFrom:
             secretKeyRef:

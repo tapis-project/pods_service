@@ -246,7 +246,7 @@ def main():
     # Try and run check_db_pods. Will try for 30 seconds until health is declared "broken".
     logger.info("Top of health. Checking if db's are initialized.")
     idx = 0
-    while idx < 6:
+    while idx < 12:
         try:
             check_db_pods()
             logger.info("Successfully connected to dbs.")
@@ -256,7 +256,7 @@ def main():
             # Health seems to take a few seconds to come up (due to database creation and api creation)
             time.sleep(5)
             idx += 1
-    if idx == 6:
+    if idx == 12:
         logger.critical("Health could not connect to databases. Shutting down!")
         return
 

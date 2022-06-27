@@ -9,7 +9,7 @@ from codes import ERROR, SPAWNER_SETUP, CREATING_CONTAINER, \
 from health import graceful_rm_pod
 from models import Pod, Password
 from channels import CommandChannel
-from kubernetes_templates import start_generic_pod, start_neo4j_pod
+from kubernetes_templates import start_generic_pod, start_neo4j_pod, start_postgres_pod
 from tapisservice.config import conf
 from tapisservice.logs import get_logger
 from tapisservice.errors import BaseTapisError
@@ -76,6 +76,8 @@ class Spawner(object):
                 start_generic_pod(pod=pod, custom_image=custom_image, revision=1)
             elif pod.pod_template == 'neo4j':
                 start_neo4j_pod(pod=pod, revision=1)
+            elif pod.pod_template == 'postgres':
+                start_postgres_pod(pod=pod, revision=1)
             else:
                 logger.critical(f"pod_template found no working functions. Running graceful_rm_pod.")
                 graceful_rm_pod(pod)

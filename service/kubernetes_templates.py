@@ -14,6 +14,49 @@ config.load_incluster_config()
 k8 = client.CoreV1Api()
 
 
+def start_postgres_pod(pod, revision: int):
+    logger.debug(f"Attempting to start postgres pod; name: {pod.k8_name}; revision: {revision}")
+
+    password = Password.db_get_with_pk(pod.pod_id, pod.tenant_id, pod.site_id)
+
+    # Volumes
+    volumes = []
+    volume_mounts = []
+
+    # Create and mount certs neccessary for bolt TLS.
+    secret_volume = client.V1SecretVolumeSource(secret_name='pods-certs')
+    volumes.append(client.V1Volume(name='certs', secret = secret_volume))
+    volume_mounts.append(client.V1VolumeMount(name="certs", mount_path="/etc/ssl/later"))
+
+    container = {
+        "name": pod.k8_name,
+        "revision": revision,
+        "image": "postgres",
+        "command": ["docker-entrypoint.sh"],
+        "args": [
+          "-c", "ssl=on",
+          "-c", "ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem",#"-c ssl_cert_file=/var/lib/postgresql/server.crt",
+          "-c", "ssl_key_file=/etc/ssl/private/ssl-cert-snakeoil.key"#"-c ssl_key_file=/var/lib/postgresql/server.key"
+        ],
+        "ports_dict": {
+            "postgres": 5432,
+        },
+        "environment": {
+            "POSTGRES_USER": password.user_username,
+            "POSTGRES_PASSWORD": password.user_password
+        },
+        "mounts": [volumes, volume_mounts],
+        "mem_request": "1G",
+        "cpu_request": "1000",
+        "mem_limit": "4G",
+        "cpu_limit": "3000",
+    }
+
+    # Create init_container, container, and service.
+    create_pod(**container)
+    create_service(name = pod.k8_name, ports_dict = container["ports_dict"])
+
+
 def start_neo4j_pod(pod, revision: int):
     logger.debug(f"Attempting to start neo4j pod; name: {pod.k8_name}; revision: {revision}")
 

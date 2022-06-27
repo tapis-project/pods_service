@@ -39,8 +39,8 @@ stream {
         ssl_preread             off;
         proxy_pass              {{ pname }}:{{ pdata.routing_port }};
         proxy_timeout           600s;
-        ssl_certificate        /tmp/ssl/tls.crt;
-        ssl_certificate_key    /tmp/ssl/tls.key;
+        ssl_certificate         /tmp/ssl/tls.crt;
+        ssl_certificate_key     /tmp/ssl/tls.key;
     }
     {% endfor %}
     

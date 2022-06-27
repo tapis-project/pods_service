@@ -30,7 +30,7 @@ spec:
         - name: RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS
           value: "+A 128"
         - name: RABBITMQ_DEFAULT_USER
-          value: "admin"
+          value: "pods-admin"
         - name: RABBITMQ_DEFAULT_PASS
           valueFrom:
             secretKeyRef:

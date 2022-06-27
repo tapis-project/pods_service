@@ -1,6 +1,6 @@
 # Tapis Pods Service
 [![live-docs](https://img.shields.io/badge/live--docs-passing-brightgreen)](https://tapis-project.github.io/live-docs/?service=Pods)
-[![docs](https://readthedocs.org/projects/tapis/badge/?version=latest)](https://tapis.readthedocs.io/en/latest/?badge=latest)
+[![docs](https://img.shields.io/badge/docs-passing-brightgreen)](https://tapis.readthedocs.io/en/latest/technical/pods.html)
 [![Docker Image Version (latest by date)](https://img.shields.io/badge/docker%20version-latest-blue)](https://hub.docker.com/r/tapis/pods-api)
 
 Service to allow for easy deployment and use of databases. Able to import and export data from live databases. WIP. Better docs in the future.

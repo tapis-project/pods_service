@@ -102,7 +102,7 @@ class Pod(TapisModel, table=True, validate=True):
 
     @validator('pod_template')
     def check_pod_template(cls, v):
-        templates = ["neo4j"]
+        templates = ["neo4j", "postgres"]
         custom_allow_list = ["jstubbs/abaco_test", "tuyamei/smartfoodshed-server"]
 
         if v.startswith("custom-"):
@@ -134,6 +134,9 @@ class Pod(TapisModel, table=True, validate=True):
         pod_template = values.get('pod_template')
         if pod_template == "neo4j":
             values['routing_port'] = 7687
+            values['server_protocol'] = "tcp"
+        if pod_template == "postgres":
+            values['routing_port'] = 5432
             values['server_protocol'] = "tcp"
         return values
 

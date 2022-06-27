@@ -38,11 +38,15 @@ spec:
             secretKeyRef:
               name: tapis-MAKEFILE_SERVICE_NAME-secrets
               key: service-password
+        - name: POSTGRES_USERNAME
+          value: pods-admin
         - name: POSTGRES_PASSWORD
           valueFrom:
             secretKeyRef:
               name: tapis-MAKEFILE_SERVICE_NAME-secrets
               key: postgres-password
+        - name: RABBITMQ_USERNAME
+          value: pods-admin
         - name: RABBITMQ_PASSWORD
           valueFrom:
             secretKeyRef:

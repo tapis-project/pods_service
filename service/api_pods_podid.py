@@ -49,7 +49,7 @@ async def delete_pod(pod_id):
     """
     Delete a pod.
 
-    Returns None.
+    Returns "".
     """
     logger.info(f"DELETE /pods/{pod_id} - Top of delete_pod.")
 
@@ -60,7 +60,7 @@ async def delete_pod(pod_id):
     pod.db_delete()
     password.db_delete()
 
-    return ok(result=None, msg="Pod successfully deleted.")
+    return ok(result="", msg="Pod successfully deleted.")
 
 
 @router.get(
