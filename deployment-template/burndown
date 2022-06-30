@@ -2,8 +2,8 @@
 kubectl delete -f secrets.yml
 
 # Certs - Built-in certs added in secrets.yml. Only uncomment if you have cert-manager installed. If so delete certs from secrets.yml
-#kubectl delete -f cert-issuer.yml
-#kubectl delete -f cert.yml
+kubectl delete -f cert-issuer.yml
+kubectl delete -f cert.yml
 
 # Services
 #kubectl delete -f services.yml

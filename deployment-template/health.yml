@@ -17,6 +17,7 @@ spec:
         imagePullPolicy: Never
         image: MAKEFILE_SERVICE_NAME/pods-api:MAKEFILE_TAG
         command: ["python3","-u","/home/tapis/service/health.py"]
+        #command: ["sleep", "2000000"]
         resources:
           requests:
             cpu: "1"
