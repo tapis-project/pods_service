@@ -34,8 +34,8 @@ class Pod(TapisModel, table=True, validate=True):
     status_requested: str = Field("ON", description = "Status requested by user, ON or OFF.")
 
     # Provided
-    tenant_id: str = Field(g.request_tenant_id or 'tacc', description = "Tapis tenant used during creation of this pod.")
-    site_id: str = Field(g.site_id or 'tacc', description = "Tapis site used during creation of this pod.")
+    tenant_id: str = Field(g.request_tenant_id, description = "Tapis tenant used during creation of this pod.")
+    site_id: str = Field(g.site_id, description = "Tapis site used during creation of this pod.")
     k8_name: str = Field(None, description = "Name to use for Kubernetes name.")
     url: str = Field(None, description = "Url used to access this database if it is running.")
     status: str = Field("STOPPED", description = "Current status of pod.")
@@ -70,6 +70,14 @@ class Pod(TapisModel, table=True, validate=True):
         if len(v) > 64:
             raise ValueError(f"pod_id must be less than 64 characters. Inputted length: {len(v)}")
         return v
+
+    @validator('tenant_id')
+    def check_tenant_id(cls, v):
+        return g.request_tenant_id
+
+    @validator('site_id')
+    def check_site_id(cls, v):
+        return g.site_id
 
     @validator('instance_port')
     def check_instance_port(cls, v):
@@ -210,7 +218,18 @@ class Password(TapisModel, table=True, validate=True):
     admin_password: str = Field(None, description = "Admin password for pod.")
     user_username: str = Field(None, description = "User username for pod.")
     user_password: str = Field(None, description = "User password for pod.")
-    
+    # Provided
+    tenant_id: str = Field(g.request_tenant_id, description = "Tapis tenant used during creation of this password's pod.")
+    site_id: str = Field(g.site_id, description = "Tapis site used during creation of this password's pod.")
+
+    @validator('tenant_id')
+    def check_tenant_id(cls, v):
+        return g.request_tenant_id
+
+    @validator('site_id')
+    def check_site_id(cls, v):
+        return g.site_id
+
     @validator('admin_password')
     def add_admin_password(cls, v):
         password = ''.join(choice(ascii_letters + digits) for i in range(30))

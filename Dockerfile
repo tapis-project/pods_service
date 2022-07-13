@@ -25,13 +25,14 @@ RUN chmod +x rabbitmqadmin
 ## FILE INITIALIZATION
 # touch config.json
 RUN touch /home/tapis/config.json
-# Copy files
-COPY service /home/tapis/service
-COPY alembic /home/tapis/alembic
-COPY configschema.json entry.sh alembic.ini /home/tapis/
-RUN chmod +x /home/tapis/entry.sh
 # We overwrite sqlmodel package because it's buggy, but we still want the features.
 COPY SQLMODEL/main.py /usr/local/lib/python3.10/site-packages/sqlmodel/main.py
+# Copy files
+COPY alembic /home/tapis/alembic
+COPY tests /home/tapis/tests
+COPY service /home/tapis/service
+COPY configschema.json entry.sh alembic.ini /home/tapis/
+RUN chmod +x /home/tapis/entry.sh
 
 # Permission finalization
 #RUN chown -R tapis:tapis /home/tapis

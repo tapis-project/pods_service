@@ -6,7 +6,7 @@ from logging.config import fileConfig
 import re
 import os
 
-from sqlalchemy import engine_from_config
+from sqlalchemy import create_engine
 from sqlalchemy import pool
 
 from alembic import context
@@ -31,7 +31,7 @@ username = conf.postgres_user
 password = conf.postgres_pass
 host = conf.postgres_host
 
-
+engines = {}
 all_urls = {}
 # Create databases and schemas wanted.
 for site, tenants in pg_store.items():
@@ -54,7 +54,8 @@ for site, tenants in pg_store.items():
         # Add database connection info to alembic config
         conninfo = f"postgresql://{username}:{password}@{host}/{site}"#?options=-csearch_path%3Ddbo,{tenant}"
         name = f"{site}_{tenant}".replace("-", "HYPHEN") # Some tenants have - in their names. This messes up alembic later.
-        all_urls[name] = conninfo
+        all_urls[site] = conninfo
+        engines[name] = create_engine(conninfo, future=False)
         config.set_section_option(name, "sqlalchemy.url", conninfo)
 
 # Add databases to alembic's list of databases.
@@ -72,42 +73,6 @@ target_metadata = SQLModel.metadata
 # can be acquired:
 # my_example_option = config.get_main_option("my_example_option")
 
-
-def run_migrations_offline():
-    """Run migrations in 'offline' mode.
-
-    This configures the context with just a URL
-    and not an Engine, though an Engine is acceptable
-    here as well.  By skipping the Engine creation
-    we don't even need a DBAPI to be available.
-
-    Calls to context.execute() here emit the given string to the
-    script output.
-
-    """
-    # for the --sql use case, run migrations for each URL into
-    # individual files.
-
-    engines = {}
-    for name in re.split(r",\s*", db_names):
-        engines[name] = rec = {}
-        rec["url"] = context.config.get_section_option(name, "sqlalchemy.url")
-
-    for name, rec in engines.items():
-        logger.info("Migrating database %s" % name)
-        file_ = "%s.sql" % name
-        logger.info("Writing output to %s" % file_)
-        with open(file_, "w") as buffer:
-            context.configure(
-                url=rec["url"],
-                output_buffer=buffer,
-                target_metadata=target_metadata,
-                literal_binds=True,
-            )
-            with context.begin_transaction():
-                context.run_migrations(engine_name=name)
-
-
 def run_migrations_online():
     """Run migrations in 'online' mode.
 
@@ -115,20 +80,11 @@ def run_migrations_online():
     and associate a connection with the context.
 
     """
-
-    # for the direct-to-DB use case, start a transaction on all
-    # engines, then run all migrations, then commit all transactions.
-    engines = {}
-    for name in re.split(r",\s*", db_names):
-        engines[name] = engine_from_config(
-            context.config.get_section(name),
-            prefix="sqlalchemy.",
-            poolclass=pool.NullPool,
-        )
-
     # Create transactions/connections here so we can rollback/close later.
     connections = []
     transactions = []
+    logger.info(f"engine: {engines}")
+
     try:
         # Create tables in each tenant(schema) in each database.
         for name, engine in engines.items():
@@ -139,7 +95,9 @@ def run_migrations_online():
             logger.info(f"Migrating database {site}; tenant {tenant}")
             # Reference https://alembic.sqlalchemy.org/en/latest/cookbook.html#rudimental-schema-level-multi-tenancy-for-postgresql-databases
             # Get engine/connection/transaction and add some schema stuff to it.
+            logger.info(f"{engine}")
             connection = engine.connect()
+            logger.info(f"{connection}")
             connection.execute(f'set search_path to "{tenant}"')
             connection.dialect.default_schema_name = tenant
             connections.append(connection)
@@ -149,8 +107,9 @@ def run_migrations_online():
             # Create context
             context.configure(
                 connection=connection,
-                upgrade_token=f"{name}_upgrades",
-                downgrade_token=f"{name}_downgrades",
+                include_schemas=True,
+                upgrade_token=f"upgrade_alltenants",
+                downgrade_token=f"downgrade_alltenants",
                 target_metadata=target_metadata,
             )
             context.run_migrations(engine_name=name)
@@ -166,7 +125,4 @@ def run_migrations_online():
             connection.close()
 
 
-if context.is_offline_mode():
-    run_migrations_offline()
-else:
-    run_migrations_online()
+run_migrations_online()

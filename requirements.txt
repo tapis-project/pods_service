@@ -22,3 +22,6 @@ pylint
 
 # Dev
 jupyterlab
+
+# Tests
+pytest

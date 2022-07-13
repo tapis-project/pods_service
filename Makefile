@@ -94,26 +94,15 @@ endif
 	echo ""
 
 
-# Builds local everything and runs both camel case and snake case tests.
-# Can run specific test based on the 'test' environment variable
-# ex: export test=test/load_tests.py
-#: Deploy service + run tests
-test: vars up
+# Runs pytest in the pods-api container
+#: Run tests in pods-api container
+test:
+	@echo "Tests are a work in progress"
 	@echo "Makefile: $(GREEN)test$(NC)"
-	@echo "Not yet implemented"
-	exit 0
-
-
-	@echo "Converting back to snake"
-	sed -i '' 's/"web_case".*/"web_case": "snake",/g' config-local.json
-	@echo "\n\nCamel Case Tests.\n"
-	@echo "Converting config file to camel case and launching Abaco Stack."
-	sed -i 's/"web_case".*/"web_case": "camel",/g' config-local.json
-	make local-deploy
-	sleep $$docker_ready_wait
-	docker run -e TESTS=/home/tapis/tests -v $$abaco_path/abaco.log:/home/tapis/runtime_files/logs/service.log -e case=camel $$interactive -e maxErrors=$$maxErrors --entrypoint=/home/tapis/tests/entry.sh --network=abaco_abaco -e base_url=http://nginx -e _called_from_within_test=True -v /:/host -v $$abaco_path/config-local.json:/home/tapis/config.json --rm abaco/core-v3:$$TAG
-	@echo "Converting back to snake"
-	sed -i 's/"web_case".*/"web_case": "snake",/g' config-local.json
+	@echo "  📝  : Running Tests"
+	@echo ""
+	kubectl exec -it deploy/pods-api -- pytest --maxfail 1 tests/* --disable-pytest-warnings
+	@echo ""
 
 
 # Builds core locally and sets to correct tag. This should take priority over DockerHub images

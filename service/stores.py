@@ -213,5 +213,5 @@ if __name__ == "__main__":
     role_init()
     import subprocess
     time.sleep(3)
-    subprocess.run("alembic revision -m 'init2' --autogenerate", shell=True) #Dev step for new migrations
+    subprocess.run("alembic revision -m 'init' --autogenerate", shell=True) #Dev step for new migrations
     subprocess.run("alembic upgrade head", shell=True)
