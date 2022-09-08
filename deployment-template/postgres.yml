@@ -16,9 +16,12 @@ spec:
         image: postgres:14-alpine
         imagePullPolicy: Always
         resources:
+          requests:
+            cpu: ".5"
+            memory: "1G"
           limits:
-            memory: "4G"
-            cpu: "2"
+            cpu: "3"
+            memory: "3G"
         env:
         - name: POSTGRES_DB
           value: postgres

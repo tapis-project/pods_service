@@ -16,9 +16,12 @@ spec:
       - name: MAKEFILE_SERVICE_NAME-nginx
         image: nginx
         resources:
+          requests:
+            cpu: ".5"
+            memory: "1G"
           limits:
             cpu: "3"
-            memory: "2G"
+            memory: "3G"
         ports:
         - name: nginx
           containerPort: 80

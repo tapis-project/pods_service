@@ -16,9 +16,12 @@ spec:
       - name: MAKEFILE_SERVICE_NAME-rabbitmq
         image: rabbitmq:3.6.12-management
         resources:
+          requests:
+            cpu: ".5"
+            memory: "1G"
           limits:
-            cpu: "2"
-            memory: "2G"
+            cpu: "3"
+            memory: "3G"
         ports:
         - name: rabbitmq
           containerPort: 5672

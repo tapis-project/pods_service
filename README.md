@@ -54,7 +54,8 @@ Steps:
       - Particular Mounts:
         - `pods_service/service` -> `/home/tapis/service`
         - `pods_service/entry.sh` -> `/home/tapis/entry.sh`
+        - `pods_service/alembic` -> `home/tapis/alembic`
       - Mounts with minikube require users first mount their volumes to the minikube internal mounts, do that with:
-        - `minikube mount ~/pods_service:/pods_service`
+        - `minikube mount --uid=4872 --gid=4872 --msize=1048576000 /home/user/repodir/pods_service:/pods_service`
         - You will have to keep the command running, no daemon mode.
 	- Start Jupyter Lab from within "api". Link to lab should be in Make stdout under the up target.

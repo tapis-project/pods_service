@@ -58,7 +58,7 @@ export SERVICE_PASS := password
 # DEV_TOOLS bool. Whether or not to start jupyter + mount pods/service folder in pods (main).
 # options: "false" | "true"
 # default: "false"
-export DEV_TOOLS := true
+export DEV_TOOLS := false
 
 
 
@@ -88,6 +88,9 @@ up: vars build
 ifeq ($(DEV_TOOLS),true)
 	@sed -i 's/#DEV//g' *
 	echo "  🔗 : Jupyter Lab URL: $(LCYAN)http://$$(minikube ip):$$(kubectl get service $(SERVICE_NAME)-api-jupyter | grep -o -P '(?<=8888:).*(?=/TCP)')$(NC)"
+# Delete #DEV lines when DEV_TOOLS is set to false. Config can break b/c it has to be proper JSON.
+else
+	@sed -i '/#DEV/d' *
 endif
 	@echo ""
 	./burnup
