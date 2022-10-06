@@ -14,6 +14,8 @@ kubectl delete -f security.yml
 # Configs
 kubectl delete configmap MAKEFILE_SERVICE_NAME-config
 kubectl delete configmap MAKEFILE_SERVICE_NAME-nginx
+kubectl delete configmap MAKEFILE_SERVICE_NAME-traefik-conf
+#kubectl delete configmap MAKEFILE_SERVICE_NAME-envoy
 
 # PVC
 
@@ -24,3 +26,4 @@ kubectl delete -f nginx.yml
 kubectl delete -f api.yml
 kubectl delete -f spawner.yml
 kubectl delete -f health.yml
+kubectl delete -f traefik.yml

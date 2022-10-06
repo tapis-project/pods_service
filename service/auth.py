@@ -12,11 +12,11 @@ import codes
 from __init__ import t, Tenants
 from tapisservice.tapisfastapi.auth import authn_and_authz
 from tapisservice.logs import get_logger
+from tapisservice.config import conf
 logger = get_logger(__name__)
+
 from errors import ResourceError, PermissionsException
 from models import Pod
-
-from tapisservice.config import conf
 
 
 TOKEN_RE = re.compile('Bearer (.+)')
@@ -138,8 +138,9 @@ def authorization(request):
     #     return True
     if (request.url.path == '/redoc' or
         request.url.path == '/docs' or
-        request.url.path == '/openapi.json'):
-        logger.debug(f"Spec and Docs doesn't need auth. Skipping. url.path: {request.url.path}")
+        request.url.path == '/openapi.json' or
+        request.url.path == '/traefik-config'):
+        logger.debug(f"Spec, Docs, Traefik conf doesn't need auth. Skipping. url.path: {request.url.path}")
         return
     elif (request.url.path == '/pods' or 
           request.url.path == '/pods/' or
@@ -261,6 +262,7 @@ def authorization(request):
 
 def authentication(request):
     if (request.url.path == '/redoc' or
-        request.url.path == '/docs' or 
-        request.url.path == '/openapi.json'):
+        request.url.path == '/docs' or
+        request.url.path == '/openapi.json' or
+        request.url.path == '/traefik-config'):
         pass

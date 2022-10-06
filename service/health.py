@@ -35,7 +35,7 @@ import time
 import random
 from kubernetes import client, config
 from kubernetes_utils import get_current_k8_services, get_current_k8_pods, rm_container, \
-    get_current_k8_pods, rm_service, KubernetesError, update_nginx_configmap, get_k8_logs
+    get_current_k8_pods, rm_service, KubernetesError, update_nginx_configmap, update_traefik_configmap, get_k8_logs
 from codes import RUNNING, SHUTTING_DOWN, STOPPED, ERROR, COMPLETE, RESTART, ON, OFF
 from stores import pg_store, SITE_TENANT_DICT
 from models import Pod, ExportedData
@@ -186,7 +186,7 @@ def check_k8_services():
             continue
 
 def check_db_pods():
-    """Go through database for all tenants in this site. Delete/Create whatever is needed. Do nginx stuff.
+    """Go through database for all tenants in this site. Delete/Create whatever is needed. Do proxy config stuff.
     """
     all_pods = []
     stmt = select(Pod)
@@ -208,16 +208,19 @@ def check_db_pods():
                     pod.status_requested = ON
                 pod.db_update()
                 
-    ### Nginx ports and config changes
-    # Get unused_instance_ports for nginx later.
+    ### Proxy ports and config changes
+    # pod_info = {pod.k8_name: {instance_port, routing_port, url}, ...}
+    # Get unused_instance_ports for proxy (nginx or traefik) later.
     unused_instance_ports = list(range(52001, 52999))
     for pod in all_pods:
         try:
             unused_instance_ports.remove(pod.instance_port)
         except ValueError:
             pass
-    tcp_pod_nginx_info = {} # for nginx config later
-    http_pod_nginx_info = {} # for nginx config later
+    # for proxy config later
+    tcp_proxy_info = {}
+    http_proxy_info = {}
+    postgres_proxy_info = {}
     for pod in all_pods:
         # Check for shutting down status
         # check for 1 or -1 in instance_ports to set/delete port.
@@ -234,12 +237,16 @@ def check_db_pods():
                              "url": pod.url}
             match pod.server_protocol:
                 case "tcp":
-                    tcp_pod_nginx_info[pod.k8_name] = template_info
+                    tcp_proxy_info[pod.k8_name] = template_info
                 case "http":
-                    http_pod_nginx_info[pod.k8_name] = template_info
+                    http_proxy_info[pod.k8_name] = template_info
+                case "postgres":
+                    postgres_proxy_info[pod.k8_name] = template_info
+
 
     # This functions only updates if config is out of date.
-    update_nginx_configmap(tcp_pod_nginx_info, http_pod_nginx_info)
+    update_traefik_configmap(tcp_proxy_info, http_proxy_info, postgres_proxy_info)
+    #update_nginx_configmap(tcp_pod_conf_info, http_pod_conf_info)
 
 
 def main():

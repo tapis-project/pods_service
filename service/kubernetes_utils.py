@@ -82,18 +82,31 @@ def rm_container(k8_name):
         raise KubernetesError(f"Error removing pod {k8_name}, exception: {str(e)}")
     logger.info(f"delete_namespaced_pod ran for pod {k8_name}.")
 
-def rm_service(service_id):
+def rm_service(service_name):
+    """
+    Remove a container. Async
+    :param service_name:
+    :return:
+    """    
+    try:
+        k8.delete_namespaced_service(name=service_name, namespace=NAMESPACE)
+    except Exception as e:
+        logger.info(f"Got exception trying to remove service: {service_name}. Exception: {e}")
+        raise KubernetesError(f"Error removing service {service_name}, exception: {str(e)}")
+    logger.info(f"delete_namespaced_service ran for service {service_name}.")
+
+def rm_pvc(pvc_name):
     """
     Remove a container. Async
     :param service_id:
     :return:
     """    
     try:
-        k8.delete_namespaced_service(name=service_id, namespace=NAMESPACE)
+        k8.delete_namespaced_persistent_volume_claim(name=pvc_name, namespace=NAMESPACE)
     except Exception as e:
-        logger.info(f"Got exception trying to remove service: {service_id}. Exception: {e}")
-        raise KubernetesError(f"Error removing service {service_id}, exception: {str(e)}")
-    logger.info(f"delete_namespaced_service ran for service {service_id}.")
+        logger.info(f"Got exception trying to remove pvc: {pvc_name}. Exception: {e}")
+        raise KubernetesError(f"Error removing pvc {pvc_name}, exception: {str(e)}")
+    logger.info(f"delete_namespaced_persistent_volume_claim ran for pvc {pvc_name}.")
 
 def list_all_containers():
     """Returns a list of all containers in a particular namespace """
@@ -403,7 +416,7 @@ def create_pod(name: str,
             kind="Pod",
             api_version="v1"
         )
-        k8pod = k8.create_namespaced_pod(
+        k8_pod = k8.create_namespaced_pod(
             namespace=NAMESPACE,
             body=pod_body
         )
@@ -412,7 +425,7 @@ def create_pod(name: str,
         logger.info(msg)
         raise KubernetesError(msg)
     logger.info(f"Pod created successfully.")
-    return k8pod
+    return k8_pod
 
 
 def create_service(name, ports_dict={}):
@@ -441,7 +454,7 @@ def create_service(name, ports_dict={}):
     try:
         service_spec = client.V1ServiceSpec(
             selector={"app": name},
-            type="NodePort",
+            type="clusterIP",
             ports=ports
         )
         service_body = client.V1Service(
@@ -450,7 +463,7 @@ def create_service(name, ports_dict={}):
             kind="Service",
             api_version="v1"
         )
-        k8service = k8.create_namespaced_service(
+        k8_service = k8.create_namespaced_service(
             namespace=NAMESPACE,
             body=service_body
         )
@@ -458,8 +471,39 @@ def create_service(name, ports_dict={}):
         msg = f"Got exception trying to start service with name: {name}. {e}"
         logger.info(msg)
         raise KubernetesError(msg)
-    logger.info(f"Pod started successfully.")
-    return k8service
+    logger.info(f"Pod service started successfully.")
+    return k8_service
+
+
+def create_pvc(name):
+    logger.debug("top of kubernetes_utils.create_pvc().")
+
+    ### Define and create the pvc
+    try:
+        pvc_resources = client.V1ResourceRequirements(
+            requests={"storage": "10Gi"}
+        )
+        pvc_spec = client.V1PersistentVolumeClaimSpec(
+            access_modes=["ReadWriteOnce"],
+            storage_class_name="rbd-new",
+            resources=pvc_resources
+        )
+        pvc_body = client.V1PersistentVolumeClaim(
+            metadata=client.V1ObjectMeta(name=name),
+            spec=pvc_spec,
+            kind="PersistentVolumeClaim",
+            api_version="v1"
+        )
+        k8_pvc = k8.create_namespaced_persistent_volume_claim(
+            namespace=NAMESPACE,
+            body=pvc_body
+        )
+    except Exception as e:
+        msg = f"Got exception trying to start pvc with name: {name}. {e}"
+        logger.info(msg)
+        raise KubernetesError(msg)
+    logger.info(f"Pod pvc started successfully.")
+    return k8_pvc
 
 
 def get_current_instance_ports():
@@ -482,7 +526,7 @@ def get_current_instance_ports():
     return all_instance_ports
 
 
-def update_nginx_configmap(tcp_pod_nginx_info: Dict[str, Dict[str, str]], http_pod_nginx_info: Dict[str, Dict[str, str]]):
+def update_nginx_configmap(tcp_proxy_info: Dict[str, Dict[str, str]], http_proxy_info: Dict[str, Dict[str, str]]):
     """
     Update fn for nginx configmap. Will read kubernetes/db data and create nginx server stanza bits where neccessary.
     Should be site specific.
@@ -493,7 +537,9 @@ def update_nginx_configmap(tcp_pod_nginx_info: Dict[str, Dict[str, str]], http_p
     """
     template_env = Environment(loader=FileSystemLoader("service/templates"))
     template = template_env.get_template('nginx-template.j2')
-    rendered_template = template.render(tcp_pod_nginx_info = tcp_pod_nginx_info, http_pod_nginx_info = http_pod_nginx_info, namespace = NAMESPACE)
+    rendered_template = template.render(tcp_proxy_info = tcp_proxy_info,
+                                        http_proxy_info = http_proxy_info,
+                                        namespace = NAMESPACE)
 
     # Only update the configmap if the current configmap is out of date.
     current_template = k8.read_namespaced_config_map(name='pods-nginx', namespace=NAMESPACE)
@@ -503,3 +549,38 @@ def update_nginx_configmap(tcp_pod_nginx_info: Dict[str, Dict[str, str]], http_p
         config_map = client.V1ConfigMap(data = {"nginx.conf": rendered_template})
         k8.patch_namespaced_config_map(name='pods-nginx', namespace=NAMESPACE, body=config_map)
         # Auto updates nginx pod. Changes take place according to kubelet sync frequency duration (60s default).
+
+
+def update_traefik_configmap(tcp_proxy_info: Dict[str, Dict[str, str]],
+                             http_proxy_info: Dict[str, Dict[str, str]],
+                             postgres_proxy_info: Dict[str, Dict[str, str]]):
+    """
+    Update fn for proxy configmap. Will read kubernetes/db data and create proxy server stanza bits where neccessary.
+    Should be site specific.
+
+    Args:
+        proxy_info ({"pod_id1": {"routing_port": int, "instance_port": int, "url": str}, ..., ...}): Dict of dict that 
+            specifies ports needed to create pod service.
+    """
+    template_env = Environment(loader=FileSystemLoader("service/templates"))
+    template = template_env.get_template('traefik-template.j2')
+    rendered_template = template.render(tcp_proxy_info = tcp_proxy_info,
+                                        http_proxy_info = http_proxy_info,
+                                        postgres_proxy_info = postgres_proxy_info,
+                                        namespace = NAMESPACE)
+
+    # Only update the configmap if the current configmap is out of date.
+    current_template = k8.read_namespaced_config_map(name='pods-traefik-conf', namespace=NAMESPACE)
+    
+    if not current_template.data['traefik-conf.yml'] == rendered_template:
+        # Update the configmap with the new template immediately.
+        config_map = client.V1ConfigMap(data = {"traefik-conf.yml": rendered_template})
+        k8.patch_namespaced_config_map(name='pods-traefik-conf', namespace=NAMESPACE, body=config_map)
+        # Auto updates proxxy pod. Changes take place according to kubelet sync frequency duration (60s default).
+
+def get_traefik_configmap():
+    """
+    """
+    current_template = k8.read_namespaced_config_map(name='pods-traefik-conf', namespace=NAMESPACE)
+    
+    return current_template

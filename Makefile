@@ -87,10 +87,11 @@ up: vars build
 	@echo "  🔥 : Running burnup."
 ifeq ($(DEV_TOOLS),true)
 	@sed -i 's/#DEV//g' *
-	echo "  🔗 : Jupyter Lab URL: $(LCYAN)http://$$(minikube ip):$$(kubectl get service $(SERVICE_NAME)-api-jupyter | grep -o -P '(?<=8888:).*(?=/TCP)')$(NC)"
+	@echo "  🔗 : Jupyter Lab URL: $(LCYAN)http://$$(minikube ip):$$(kubectl get service pods-api-jupyter | grep -o -P '(?<=8888:).*(?=/TCP)')$(NC)"
 # Delete #DEV lines when DEV_TOOLS is set to false. Config can break b/c it has to be proper JSON.
 else
 	@sed -i '/#DEV/d' *
+	@echo "  🔗 : Jupyter Lab URL: dev_tools is set to 'false'"
 endif
 	@echo ""
 	./burnup
@@ -112,17 +113,21 @@ test:
 #: Build core image
 build: vars
 	@echo "Makefile: $(GREEN)build$(NC)"
-	@echo "  🔨 : Running docker build."
-
-ifeq ($(DAEMON),minikube)
+	@echo "  🔨 : Running image build."
 	@echo "  🌎 : Using daemon: $(LCYAN)minikube$(NC)"
 	@echo ""
 	minikube image build -t $(SERVICE_NAME)/pods-api:$$TAG ./
-else ifeq ($(DAEMON),docker)
+	@echo ""
+
+
+# Builds core locally with docker Daemon for publish/local-usage
+#: Build core image in docker for publishing/develop
+build-docker: vars
+	@echo "Makefile: $(GREEN)build$(NC)"
+	@echo "  🔨 : Running image build."
 	@echo "  🌎 : Using daemon: $(LCYAN)docker$(NC)"
 	@echo ""
-	docker build -t $(SERVICE_NAME)/pods-api:$$TAG ./
-endif
+	docker build -t tapis/pods-api:$$TAG ./
 	@echo ""
 
 

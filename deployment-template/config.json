@@ -13,6 +13,10 @@
     "version": "dev",
     "log_file": "",
     "log_level": "DEBUG",
+    "log_filing_strategy": "split",
+    "tapisservice.auth_log_file": "/home/tapis/tapisservice.log",
+    "tapisservice.logs_log_file": "/home/tapis/tapisservice.log",
+    "tapisservice.tenants_log_file": "/home/tapis/tapisservice.log",
     "postgres_user": "$env{POSTGRES_USERNAME}",
     "postgres_pass": "$env{POSTGRES_PASSWORD}",
     "postgres_host": "MAKEFILE_SERVICE_NAME-postgres",
@@ -20,6 +24,11 @@
     "rabbitmq_dash_host": "pods-rabbitmq-dash",
     "rabbitmq_user": "$env{RABBITMQ_USERNAME}",
     "rabbitmq_pass": "$env{RABBITMQ_PASSWORD}",
+    "image_allow_list": [
+        "jstubbs/abaco_test",
+        "tuyamei/smartfoodshed-server",
+        "ssquid/kapp"
+    ],
     "spawner_abaco_conf_host_path": "$env{abaco_host_path}/config-local.json",
     "spawner_host_id": 0,
     "spawner_host_ip": "who knows?",

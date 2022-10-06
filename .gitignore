@@ -130,9 +130,10 @@ dmypy.json
 
 
 
-####CUSTOM FOR KGSERVICE
+####CUSTOM FOR Pods Service
 # Don't need tmp deployment folder ever
 deployment
 # or jupyter cache
 *jupyter
 .bash_history
+.vscode

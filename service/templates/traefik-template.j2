@@ -1,0 +1,83 @@
+entryPoints:
+  web:
+   address: ":80"
+  dash:
+   address: ":8080"
+
+http:
+  middlewares:
+    path-strip-v3:
+      stripPrefix:
+        prefixes:
+         - "/v3"
+    dev-host-headers:
+      headers:
+        customRequestHeaders:
+          host: "localhost:5000"
+        customResponseHeaders:
+          host: "localhost:5000"
+
+  routers:
+    pods-service:
+      rule: "PathPrefix(`/v3/pods`)"
+      middlewares:
+       - "path-strip-v3"
+       - "dev-host-headers"
+      service: pods-service
+
+    {% for pname, pdata in http_proxy_info.items() -%}
+    {{ pname }}:
+      rule: "Host(`{{ pdata.url }}`)"
+      service: "{{ pname }}"
+    {% endfor %}
+
+  services:
+    pods-service:
+      loadBalancer:
+        servers:
+         - url: http://pods-api:8000
+
+    {% for pname, pdata in http_proxy_info.items() -%}
+    {{ pname }}:
+      loadBalancer:
+        servers:
+         - url: http://{{ pname }}
+    {% endfor %}
+
+{% if tcp_proxy_info or postgres_proxy_info -%}
+tcp:
+  routers:{% endif %}
+    {% for pname, pdata in tcp_proxy_info.items() -%}
+    {{ pname }}:
+      rule: "HostSNI(`{{ pdata.url }}`)"
+      service: "{{ pname }}"
+      tls: {}
+    {% endfor %}
+    {% for pname, pdata in postgres_proxy_info.items() -%}
+    {{ pname }}:
+      rule: "HostSNI(`{{ pdata.url }}`)"
+      service: "{{ pname }}"
+      tls:
+        passthrough: true
+    {% endfor %}
+
+  {% if tcp_proxy_info or postgres_proxy_info -%}
+  services:{% endif %}
+    {% for pname, pdata in tcp_proxy_info.items() -%}
+    {{ pname }}:
+      loadBalancer:
+        servers:
+         - address: {{ pname }}:{{ pdata.routing_port }}
+    {% endfor %}
+    {% for pname, pdata in postgres_proxy_info.items() -%}
+    {{ pname }}:
+      startTLS: postgres
+      loadBalancer:
+        servers:
+         - address: {{ pname }}:{{ pdata.routing_port }}
+    {% endfor %}
+
+tls:
+  certificates:
+    - certFile: /tmp/ssl/tls.crt
+      keyFile: /tmp/ssl/tls.key

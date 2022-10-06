@@ -26,7 +26,7 @@ spec:
         - name: nginx
           containerPort: 80
         volumeMounts:
-        - name: MAKEFILE_SERVICE_NAME-nginxconf
+        - name: MAKEFILE_SERVICE_NAME-nginx-conf
           mountPath: /etc/nginx/
         - name: certs
           mountPath: /tmp/ssl
@@ -41,7 +41,7 @@ spec:
           periodSeconds: 30
 
       volumes:
-      - name: MAKEFILE_SERVICE_NAME-nginxconf
+      - name: MAKEFILE_SERVICE_NAME-nginx-conf
         configMap: 
           name: MAKEFILE_SERVICE_NAME-nginx
       - name: certs

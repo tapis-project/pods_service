@@ -23,7 +23,9 @@ RUN wget https://raw.githubusercontent.com/rabbitmq/rabbitmq-management/v3.8.9/b
 RUN chmod +x rabbitmqadmin
 
 ## FILE INITIALIZATION
-# touch config.json
+# Get tapisservice.log ready for logging
+RUN touch /home/tapis/tapisservice.log
+# Get config.json ready for mount
 RUN touch /home/tapis/config.json
 # We overwrite sqlmodel package because it's buggy, but we still want the features.
 COPY SQLMODEL/main.py /usr/local/lib/python3.10/site-packages/sqlmodel/main.py

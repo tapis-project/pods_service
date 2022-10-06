@@ -10,6 +10,7 @@ from auth import authorization, authentication
 from api_pods import router as router_pods
 from api_pods_podid import router as router_pods_podsname
 from api_pods_podid_func import router as router_pods_podsname_func
+from api_misc import router as router_misc
 
 
 description = """
@@ -66,3 +67,4 @@ api = FastAPI(
 api.include_router(router_pods)
 api.include_router(router_pods_podsname)
 api.include_router(router_pods_podsname_func)
+api.include_router(router_misc)

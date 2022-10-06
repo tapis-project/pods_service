@@ -1,0 +1,36 @@
+entryPoints:
+  web:
+   address: ":80"
+
+http:
+  middlewares:
+    path-strip-v3:
+      stripPrefix:
+        prefixes:
+         - "/v3"
+    dev-host-headers:
+      headers:
+        customRequestHeaders:
+          host: "localhost:5000"
+        customResponseHeaders:
+          host: "localhost:5000"
+
+  routers:
+    pods-api:
+      rule: "PathPrefix(`/v3/pods`)"
+      middlewares:
+       - "path-strip-v3"
+       - "dev-host-headers"
+      service: pods-api
+
+  services:
+    pods-api:
+      loadBalancer:
+        servers:
+         - url: http://pods-api:8000
+
+tls:
+  certificates:
+    - certFile: /tmp/ssl/tls.crt
+      keyFile: /tmp/ssl/tls.key
+

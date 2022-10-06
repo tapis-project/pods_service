@@ -100,12 +100,12 @@ def main():
     print(msg)
     # Start spawner
     idx = 0
-    while idx < 6:
+    while idx < 10:
         try:
             sp = Spawner()
             logger.info("spawner made connection to rabbit, entering main loop")
             sp.run()
-        except (rabbitpy.exceptions.ConnectionException, RuntimeError):
+        except (rabbitpy.exceptions.ConnectionException, RuntimeError, rabbitpy.exceptions.ConnectionClosed, Exception):
             # rabbit seems to take a few seconds to come up
             time.sleep(5)
             idx += 1

@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: MAKEFILE_SERVICE_NAME-traefik
+spec:
+  selector:
+    matchLabels:
+      app: MAKEFILE_SERVICE_NAME-traefik
+  template:
+    metadata:
+      labels:
+        app: MAKEFILE_SERVICE_NAME-traefik
+
+    spec:
+      containers:
+      - name: MAKEFILE_SERVICE_NAME-traefik
+        image: notchristiangarcia/traefik-testing:latest
+        resources:
+          requests:
+            cpu: ".5"
+            memory: "1G"
+          limits:
+            cpu: "3"
+            memory: "3G"
+        ports:
+          - name: web
+            containerPort: 80
+          - name: admin
+            containerPort: 8080
+          - name: tcpep
+            containerPort: 8000
+          - name: udpep
+            containerPort: 9000
+        args:
+        - --tracing=false
+        - --api
+        - --api.dashboard
+        - --accesslog=true
+        #- --providers.kubernetesingress=True
+        #- --providers.kubernetescrd
+        #- --providers.kubernetescrd.namespaces=default
+        - --tracing.instana.loglevel=DEBUG
+        - --api.insecure=true
+        - --entrypoints.web.address=:80
+        - --entrypoints.tcpep.address=:8000
+        - --entrypoints.udpep.address=:9000/udp
+        - --tracing.instana=false
+        #- --configFile=/etc/traefik/traefik-conf2.yml
+        #- --providers.file.filename=/etc/traefik/traefik-conf.yml
+        #- --providers.file.directory=/etc/traefik/
+        #- --providers.file.watch=true
+        - --providers.http=true
+        - --providers.http.endpoint=http://pods-api:8000/traefik-config
+        volumeMounts:
+        - name: MAKEFILE_SERVICE_NAME-traefik-conf
+          mountPath: /etc/traefik/
+        - name: certs
+          mountPath: /tmp/ssl
+
+      volumes:
+      - name: MAKEFILE_SERVICE_NAME-traefik-conf
+        configMap: 
+          name: MAKEFILE_SERVICE_NAME-traefik-conf
+      - name: certs
+        secret:
+          secretName: pods-certs

@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysql-test
+spec:
+  selector:
+    matchLabels:
+      app: mysql-test
+  template:
+    metadata:
+      labels:
+        app: mysql-test
+    spec:
+      containers:
+      - name: mysql-test
+        image: mysql 
+        command: ["docker-entrypoint.sh"]
+        args: [
+          "-c", "ssl=on",
+          "-c", "ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem",
+          "-c", "ssl_key_file=/etc/ssl/private/ssl-cert-snakeoil.key"
+        ]
+        imagePullPolicy: Always
+        resources:
+          limits:
+            memory: "4G"
+            cpu: "2"
+        env: #mysql vars: https://dev.mysql.com/doc/refman/5.7/en/environment-variables.html
+        - name: MYSQL_DATABASE
+          value: postgres
+        - name: MYSQL_USER
+          value: test1
+        - name: MYSQL_PASSWORD
+          value: test1
+        #- name: PGSSLMODE
+        #  value: "require"
+
+        ports:
+        - name: postgres
+          containerPort: 5432

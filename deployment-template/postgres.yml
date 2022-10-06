@@ -13,8 +13,14 @@ spec:
     spec:
       containers:
       - name: MAKEFILE_SERVICE_NAME-postgres
-        image: postgres:14-alpine
+        image: postgres:14
         imagePullPolicy: Always
+        command: ["docker-entrypoint.sh"]
+        args: [
+          "-c", "ssl=on",
+          "-c", "ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem",
+          "-c", "ssl_key_file=/etc/ssl/private/ssl-cert-snakeoil.key"
+        ]
         resources:
           requests:
             cpu: ".5"
@@ -32,6 +38,9 @@ spec:
             secretKeyRef:
               name: tapis-MAKEFILE_SERVICE_NAME-secrets
               key: postgres-password
+        - name: PGSSLMODE
+          value: "require"
+
         ports:
         - name: postgres
           containerPort: 5432

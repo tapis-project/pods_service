@@ -1,4 +1,4 @@
-"""init2
+"""init1
 
 Revision ID: a67403ad010a
 Revises: 

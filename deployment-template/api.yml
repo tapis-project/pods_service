@@ -58,6 +58,8 @@ spec:
           subPath: config.json
 #DEV        - name: dev-service
 #DEV          mountPath: /home/tapis/service
+#2DEV        - name: dev-tests
+#2DEV          mountPath: /home/tapis/tests
 #DEV        - name: dev-alembic
 #DEV          mountPath: /home/tapis/alembic
 
@@ -69,6 +71,10 @@ spec:
 #DEV        hostPath:
 #DEV          path: /pods_service/service #NOTE FOR MINIKUBE: Minikube is a vm, you have to minikube mount for hostpath to work
 #DEV          type: Directory
+#2DEV      - name: dev-tests
+#2DEV        hostPath:
+#2DEV          path: /pods_service/tests #NOTE FOR MINIKUBE: Minikube is a vm, you have to minikube mount for hostpath to work
+#2DEV          type: Directory
 #DEV      - name: dev-alembic
 #DEV        hostPath:
 #DEV          path: /pods_service/alembic #NOTE FOR MINIKUBE: Minikube is a vm, you have to minikube mount for hostpath to work
