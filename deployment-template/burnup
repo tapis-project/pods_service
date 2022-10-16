@@ -13,19 +13,15 @@ kubectl apply -f security.yml
 
 # Configs
 kubectl create configmap MAKEFILE_SERVICE_NAME-config --from-file=config.json
-kubectl create configmap MAKEFILE_SERVICE_NAME-nginx --from-file=nginx.conf
-kubectl create configmap MAKEFILE_SERVICE_NAME-traefik-conf --from-file=traefik-conf.yml
-#kubectl create configmap MAKEFILE_SERVICE_NAME-envoy --from-file=envoy-conf.yml
+kubectl create configmap MAKEFILE_SERVICE_NAME-traefik-conf --from-file=traefik.yml
 
 # PVC
-# Nginx config?
 # Postgres
 
 # Deploy
 kubectl apply -f rabbitmq.yml
 kubectl apply -f postgres.yml
-kubectl apply -f nginx.yml
 kubectl apply -f api.yml
 kubectl apply -f spawner.yml
 kubectl apply -f health.yml
-kubectl apply -f traefik.yml
+kubectl apply -f traefik-proxy.yml
