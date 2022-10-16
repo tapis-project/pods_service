@@ -454,7 +454,7 @@ def create_service(name, ports_dict={}):
     try:
         service_spec = client.V1ServiceSpec(
             selector={"app": name},
-            type="clusterIP",
+            type="ClusterIP",
             ports=ports
         )
         service_body = client.V1Service(
@@ -506,51 +506,6 @@ def create_pvc(name):
     return k8_pvc
 
 
-def get_current_instance_ports():
-    """
-    Takes pod name. Calls get_current_k8_pods(). Cross references with database. There's a nginx_ports store.
-    Stores pod name, instance port, routing port. Concat data from all tenants. Create nginx_info from that.
-
-    Store gets updated by pod creation or pod deletion.
-
-    Result
-    """
-    all_instance_ports = []
-
-    stmt = select(Pod.instance_port)
-    result_list = pg_store['tacc']['tacc'].run("execute", stmt, all=True)
-    for result in result_list:
-        if result[0]:
-            all_instance_ports.append(result[0])
-    
-    return all_instance_ports
-
-
-def update_nginx_configmap(tcp_proxy_info: Dict[str, Dict[str, str]], http_proxy_info: Dict[str, Dict[str, str]]):
-    """
-    Update fn for nginx configmap. Will read kubernetes/db data and create nginx server stanza bits where neccessary.
-    Should be site specific.
-
-    Args:
-        pod_nginx_info ({"pod_id1": {"routing_port": int, "instance_port": int}, ..., ...}): Dict of dict that 
-            specifies ports needed to create pod service.
-    """
-    template_env = Environment(loader=FileSystemLoader("service/templates"))
-    template = template_env.get_template('nginx-template.j2')
-    rendered_template = template.render(tcp_proxy_info = tcp_proxy_info,
-                                        http_proxy_info = http_proxy_info,
-                                        namespace = NAMESPACE)
-
-    # Only update the configmap if the current configmap is out of date.
-    current_template = k8.read_namespaced_config_map(name='pods-nginx', namespace=NAMESPACE)
-    
-    if not current_template.data['nginx.conf'] == rendered_template:
-        # Update the configmap with the new template immediately.
-        config_map = client.V1ConfigMap(data = {"nginx.conf": rendered_template})
-        k8.patch_namespaced_config_map(name='pods-nginx', namespace=NAMESPACE, body=config_map)
-        # Auto updates nginx pod. Changes take place according to kubelet sync frequency duration (60s default).
-
-
 def update_traefik_configmap(tcp_proxy_info: Dict[str, Dict[str, str]],
                              http_proxy_info: Dict[str, Dict[str, str]],
                              postgres_proxy_info: Dict[str, Dict[str, str]]):
@@ -559,8 +514,8 @@ def update_traefik_configmap(tcp_proxy_info: Dict[str, Dict[str, str]],
     Should be site specific.
 
     Args:
-        proxy_info ({"pod_id1": {"routing_port": int, "instance_port": int, "url": str}, ..., ...}): Dict of dict that 
-            specifies ports needed to create pod service.
+        proxy_info ({"pod_id1": {"routing_port": int, "url": str}, ...}): Dict of dict that 
+            specifies routing port + url needed to create pod service.
     """
     template_env = Environment(loader=FileSystemLoader("service/templates"))
     template = template_env.get_template('traefik-template.j2')
@@ -572,9 +527,9 @@ def update_traefik_configmap(tcp_proxy_info: Dict[str, Dict[str, str]],
     # Only update the configmap if the current configmap is out of date.
     current_template = k8.read_namespaced_config_map(name='pods-traefik-conf', namespace=NAMESPACE)
     
-    if not current_template.data['traefik-conf.yml'] == rendered_template:
+    if not current_template.data['traefik.yml'] == rendered_template:
         # Update the configmap with the new template immediately.
-        config_map = client.V1ConfigMap(data = {"traefik-conf.yml": rendered_template})
+        config_map = client.V1ConfigMap(data = {"traefik.yml": rendered_template})
         k8.patch_namespaced_config_map(name='pods-traefik-conf', namespace=NAMESPACE, body=config_map)
         # Auto updates proxxy pod. Changes take place according to kubelet sync frequency duration (60s default).
 
