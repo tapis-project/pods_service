@@ -97,16 +97,16 @@ def main():
     # Ensure Mongo can connect.
     msg = "Spawner started. Connecting to rabbitmq..."
     logger.debug(msg)
-    print(msg)
     # Start spawner
     idx = 0
     while idx < 10:
         try:
             sp = Spawner()
-            logger.info("spawner made connection to rabbit, entering main loop")
+            logger.info("Spawner made connection to rabbit, entering main loop")
             sp.run()
         except (rabbitpy.exceptions.ConnectionException, RuntimeError, rabbitpy.exceptions.ConnectionClosed, Exception):
             # rabbit seems to take a few seconds to come up
+            logger.info(f"Attempt to connect to rabbit again. idx {idx} of 10.")
             time.sleep(5)
             idx += 1
     logger.critical("spawner could not connect to rabbitMQ. Shutting down!")
