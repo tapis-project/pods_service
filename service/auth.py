@@ -139,7 +139,8 @@ def authorization(request):
     if (request.url.path == '/redoc' or
         request.url.path == '/docs' or
         request.url.path == '/openapi.json' or
-        request.url.path == '/traefik-config'):
+        request.url.path == '/traefik-config' or
+        request.url.path.startswith('/error-handler/')):
         logger.debug(f"Spec, Docs, Traefik conf doesn't need auth. Skipping. url.path: {request.url.path}")
         return
     elif (request.url.path == '/pods' or 
@@ -264,5 +265,6 @@ def authentication(request):
     if (request.url.path == '/redoc' or
         request.url.path == '/docs' or
         request.url.path == '/openapi.json' or
-        request.url.path == '/traefik-config'):
+        request.url.path == '/traefik-config' or
+        request.url.path.startswith('/error-handler/')):
         pass

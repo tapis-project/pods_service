@@ -37,7 +37,7 @@ Generally devs will use `make clean up` over and over again. This will clean up 
 ### Explanation of what's happening during `up`.
 The Makefile `up` target is the most complex. This is a light explainer.
 `up` takes the deployment-template directory, copies it, replaces (with sed) variables using the Makefile variables (such as image tag, k8 namespace, service_password).
-Once the new deployment directory is created. We then run `./burnup`, which starts the following pods: `api`, `health`, `spawner`, `postgres`, `nginx`, `rabbitmq`.
+Once the new deployment directory is created. We then run `./burnup`, which starts the following pods: `api`, `health`, `spawner`, `postgres`, `traefik`, `rabbitmq`.
 The `api` pod contains the server and also initializes the postgres database (using an alembic migration) and rabbitmq (using rabbitmqadmin script).
 
 ### Dev Containers

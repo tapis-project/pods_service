@@ -50,7 +50,6 @@ class Pod(TapisModel, table=True, validate=True):
     start_ts: datetime | None = Field(datetime.utcnow(), description = "Time (UTC) that this pod was started.")
     server_protocol: str = Field("http", description = "Protocol to route server with. tcp or http.")
     routing_port: int = Field(5000, description = "Port Nginx points to in Pod.")
-    instance_port: int = Field(1, description = "Port that Nginx uses internally to route calls. 52001-52999, 1, or -1.")
     logs: str = Field("", description = "Logs from kubernetes pods, useful for debugging and reading results.")
     permissions: List[str] = Field([], description = "Pod permissions for each user.", sa_column=Column(ARRAY(String, dimensions=1)))
 
@@ -82,16 +81,6 @@ class Pod(TapisModel, table=True, validate=True):
     @validator('site_id')
     def check_site_id(cls, v):
         return g.site_id
-
-    @validator('instance_port')
-    def check_instance_port(cls, v):
-        # Ports 49152-65535 are for private/dynamic use.
-        # We don't need that many, going to use 52001-52999.
-        # port = 1: Indicates to health.py that port should be set there (so it's atomic)
-        # port = -1: Indicates that port is not set in the case that pod is STOPPED
-        if v not in range(52001, 52999) and v not in [1, -1]:
-            raise ValueError(f"instance_port must be in range 52001-52999, 1, or -1.")
-        return v
 
     @validator('permissions')
     def check_permissions(cls, v):
@@ -179,7 +168,6 @@ class Pod(TapisModel, table=True, validate=True):
     def display(self):
         display = self.dict()
         display.pop('logs')
-        display.pop('instance_port')
         display.pop('routing_port')
         display.pop('k8_name')
         display.pop('tenant_id')
