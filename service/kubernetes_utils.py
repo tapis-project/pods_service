@@ -485,7 +485,7 @@ def create_pvc(name):
         )
         pvc_spec = client.V1PersistentVolumeClaimSpec(
             access_modes=["ReadWriteOnce"],
-            storage_class_name="rbd-new",
+            storage_class_name=conf.pvc_storage_class_name,
             resources=pvc_resources
         )
         pvc_body = client.V1PersistentVolumeClaim(

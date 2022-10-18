@@ -18,7 +18,6 @@ async def error_handler(request: Request, exc):
     response = None
     status_code: int = -1
     if conf.show_traceback:
-    #if False:
         logger.debug(f"building traceback for exception...")
         logger.debug(f"error type is: {type(exc).__name__}")
         try:
@@ -42,7 +41,7 @@ async def error_handler(request: Request, exc):
         elif isinstance(exc, RequestValidationError) or isinstance(exc, ValidationError):
             error_list = []
             for error_dict in exc.errors():
-                error_list.append(f"{', '.join(error_dict['loc'])}: {error_dict['msg']}")
+                error_list.append(f"{', '.join(str(err) for err in error_dict['loc'])}: {error_dict['msg']}")
             response = error(msg=error_list)
             status_code = 400
         else:

@@ -19,7 +19,7 @@ http:
     error-handler:
       errors:
         status:
-          - "401-599"
+          - "500-599"
         service: pods-service
         query: "/error-handler/{status}"
 

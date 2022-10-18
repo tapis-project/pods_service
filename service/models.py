@@ -29,14 +29,18 @@ class Pod(TapisModel, table=True, validate=True):
 
     # Optional
     description: str = Field("", description = "Description of this pod.")
+    command: List[str] | None = Field(None, description = "Command to run in pod.")
     environment_variables: Dict = Field({}, description = "Environment variables to inject into k8 pod; Only for custom pods.", sa_column=Column(JSON))
     data_requests: List[str] = Field([], description = "Requested pod names.", sa_column=Column(ARRAY(String)))
     roles_required: List[str] = Field([], description = "Roles required to view this pod.", sa_column=Column(ARRAY(String)))
     status_requested: str = Field("ON", description = "Status requested by user, ON or OFF.")
     persistent_volume: Dict = Field({}, description = "Key: Volume name. Value: List of strs specifying volume folders/files to mount in pod", sa_column=Column(JSON))
-    time_to_run: int = Field(43200, description = "Time (sec) for pod to run after start_ts. -1 for unlimited. 12 hour default.")
+    time_to_stop_default: int = Field(43200, description = "Default time (sec) for pod to run from instance start. -1 for unlimited. 12 hour default.")
+    time_to_stop_instance: int | None = Field(None, description = "Time (sec) for pod to run from instance start. Reset each time instance is started. -1 for unlimited. None uses default.")
+    routing_port: int = Field(5000, description = "Port proxy points to in Pod.")
 
     # Provided
+    time_to_stop_ts: datetime | None = Field(None, description = "Time (UTC) that this pod is scheduled to be stopped. Change with time_to_stop_instance.")
     tenant_id: str = Field(g.request_tenant_id, description = "Tapis tenant used during creation of this pod.")
     site_id: str = Field(g.site_id, description = "Tapis site used during creation of this pod.")
     k8_name: str = Field(None, description = "Name to use for Kubernetes name.")
@@ -47,9 +51,8 @@ class Pod(TapisModel, table=True, validate=True):
     roles_inherited: List[str] = Field([], description = "Inherited roles required to view this pod", sa_column=Column(ARRAY(String)))
     creation_ts: datetime | None = Field(datetime.utcnow(), description = "Time (UTC) that this pod was created.")
     update_ts: datetime | None = Field(datetime.utcnow(), description = "Time (UTC) that this pod was updated.")
-    start_ts: datetime | None = Field(datetime.utcnow(), description = "Time (UTC) that this pod was started.")
+    start_instance_ts: datetime | None = Field(None, description = "Time (UTC) that this pod instance was started.")
     server_protocol: str = Field("http", description = "Protocol to route server with. tcp or http.")
-    routing_port: int = Field(5000, description = "Port Nginx points to in Pod.")
     logs: str = Field("", description = "Logs from kubernetes pods, useful for debugging and reading results.")
     permissions: List[str] = Field([], description = "Pod permissions for each user.", sa_column=Column(ARRAY(String, dimensions=1)))
 
@@ -110,7 +113,7 @@ class Pod(TapisModel, table=True, validate=True):
                 if not isinstance(vol_name, str):
                     raise TypeError(f"persistent_volume key must be str. Got {type(vol_name).__name__}.")
                 if not isinstance(vol_mounts, list):
-                    raise TypeError(f"persistent_volume val must be str. Got {type(vol_mounts).__name__}.")
+                    raise TypeError(f"persistent_volume val must be list. Got {type(vol_mounts).__name__}.")
                 if not vol_mounts:
                     raise ValueError(f"persistent_volume val must be list of str specifying path to mount, got empty list. Got {type(vol_mounts).__name__}.")
                 for mount in vol_mounts:
@@ -131,10 +134,22 @@ class Pod(TapisModel, table=True, validate=True):
             raise ValueError(f"pod_template must be one of the following: {templates}.")
         return v
 
-    @validator('time_to_run')
-    def check_time_to_run(cls, v):
-        if v != -1 and v < 600:
-            raise ValueError(f"Pod time_to_run must be -1 or be greater than 600 seconds.")
+    @validator('time_to_stop_default')
+    def check_time_to_stop_default(cls, v):
+        if v != -1 and v < 300:
+            raise ValueError(f"Pod time_to_stop_default must be -1 or be greater than 300 seconds.")
+        return v
+
+    @validator('time_to_stop_instance')
+    def check_time_to_stop_instance(cls, v):
+        if v and v != -1 and v < 300:
+            raise ValueError(f"Pod time_to_stop_instance must be -1 or be greater than 300 seconds.")
+        return v
+
+    @validator('routing_port')
+    def check_routing_port(cls, v):
+        if v > 99999 or v < 1000:
+            raise ValueError(f"Pod routing_port must be an int with 4 or 5 digits.")
         return v
 
     @root_validator(pre=False)
@@ -168,7 +183,6 @@ class Pod(TapisModel, table=True, validate=True):
     def display(self):
         display = self.dict()
         display.pop('logs')
-        display.pop('routing_port')
         display.pop('k8_name')
         display.pop('tenant_id')
         display.pop('server_protocol')
@@ -216,11 +230,14 @@ class NewPod(TapisApiModel):
 
     # Optional
     description: str = Field("", description = "Description of this pod.")
+    command: List[str] | None = Field(None, description = "Command to run in pod.")
     environment_variables: Dict = Field({}, description = "Environment variables to inject into k8 pod; Only for custom pods.", sa_column=Column(JSON))
     data_requests: List[str] = Field([], description = "Requested pod names.")
     roles_required: List[str] = Field([], description = "Roles required to view this pod")
-    persistent_volume: Dict = Field({}, description = "Key: Volume name. Value: List of strs specifying volume path to mount in pod")
-    time_to_run: int = Field(43200, description = "Time (sec) for pod to run after start_ts. -1 for unlimited. 12 hour default.")
+    persistent_volume: Dict = Field({}, description = "Key: Volume name. Value: List of strs specifying volume folders/files to mount in pod", sa_column=Column(JSON))
+    time_to_stop_default: int = Field(43200, description = "Default time (sec) for pod to run from instance start. -1 for unlimited. 12 hour default.")
+    time_to_stop_instance: int | None = Field(None, description = "Time (sec) for pod to run from instance start. Reset each time instance is started. -1 for unlimited. 12 hour default.")
+    routing_port: int = Field(5000, description = "Port proxy points to in Pod.")
 
 
 class UpdatePod(TapisApiModel):
@@ -233,16 +250,19 @@ class UpdatePod(TapisApiModel):
 
     # Optional
     description: str = Field("", description = "Description of this pod.")
+    command: List[str] | None = Field(None, description = "Command to run in pod.")
     data_requests: List[str] = Field([], description = "Requested pod names.")
     roles_required: List[str] = Field([], description = "Roles required to view this pod")
-    persistent_volume: Dict = Field({}, description = "Key: Volume name. Value: List of strs specifying volume path to mount in pod")
-    time_to_run: int = Field(43200, description = "Time (sec) for pod to run after start_ts. -1 for unlimited. 12 hour default.")
+    persistent_volume: Dict = Field({}, description = "Key: Volume name. Value: List of strs specifying volume folders/files to mount in pod", sa_column=Column(JSON))
+    time_to_stop_instance: int | None = Field(None, description = "Time (sec) for pod to run from instance start. Reset each time instance is started. -1 for unlimited. 12 hour default.")
+    routing_port: int = Field(5000, description = "Port proxy points to in Pod.")
 
 
 class PodResponseModel(TapisApiModel):
     pod_id: str = Field(..., description = "Name of this pod.", primary_key = True)
     pod_template: str = Field(..., description = "Which pod template to use, or which custom image to run, must be on allowlist.")
     description: str = Field("", description = "Description of this pod.")
+    command: List[str] | None = Field(None, description = "Command to run in pod.")
     environment_variables: Dict = Field({}, description = "Environment variables to inject into k8 pod; Only for custom pods.", sa_column=Column(JSON))
     data_requests: List[str] = Field([], description = "Requested pod names.", sa_column=Column(ARRAY(String)))
     roles_required: List[str] = Field([], description = "Roles required to view this pod.", sa_column=Column(ARRAY(String)))
@@ -254,9 +274,12 @@ class PodResponseModel(TapisApiModel):
     roles_inherited: List[str] = Field([], description = "Inherited roles required to view this pod", sa_column=Column(ARRAY(String)))
     creation_ts: datetime | None = Field(None, description = "Time (UTC) that this node was created.")
     update_ts: datetime | None = Field(None, description = "Time (UTC) that this node was updated.")
-    start_ts: datetime | None = Field(None, description = "Time (UTC) that this pod was started.")
-    persistent_volume: Dict = Field({}, description = "Key: Volume name. Value: List of strs specifying volume folders/files to mount in pod")
-    time_to_run: int = Field(43200, description = "Time (sec) for pod to run after start_ts. -1 for unlimited. 12 hour default.")
+    start_instance_ts: datetime | None = Field(None, description = "Time (UTC) that this pod instance was started.")
+    persistent_volume: Dict = Field({}, description = "Key: Volume name. Value: List of strs specifying volume folders/files to mount in pod", sa_column=Column(JSON))
+    time_to_stop_default: int = Field(43200, description = "Default time (sec) for pod to run from instance start. -1 for unlimited. 12 hour default.")
+    time_to_stop_instance: int | None = Field(None, description = "Time (sec) for pod to run from instance start. Reset each time instance is started. -1 for unlimited. 12 hour default.")
+    time_to_stop_ts: datetime | None = Field(None, description = "Time (UTC) that this pod is scheduled to be stopped. Change with time_to_stop_instance.")
+    routing_port: int = Field(5000, description = "Port proxy points to in Pod.")
 
 
 #schema https://pydantic-docs.helpmanual.io/usage/schema/

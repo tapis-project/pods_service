@@ -27,8 +27,10 @@
     "image_allow_list": [
         "jstubbs/abaco_test",
         "tuyamei/smartfoodshed-server",
-        "ssquid/kapp"
+        "ssquid/kapp",
+        "av11/sd-webui-auto-bulk"
     ],
+    "pvc_storage_class_name": "standard",
     "spawner_abaco_conf_host_path": "$env{abaco_host_path}/config-local.json",
     "spawner_host_id": 0,
     "spawner_host_ip": "who knows?",

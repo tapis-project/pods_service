@@ -25,6 +25,9 @@ rules:
 - apiGroups: [""]
   resources: ["configmaps"]
   verbs: ["list", "get", "patch"]
+- apiGroups: [""]
+  resources: ["persistentvolumeclaims"]
+  verbs: ["list", "get", "create"]
 
 ---
 kind: RoleBinding

@@ -1,7 +1,7 @@
 from codes import ERROR, SPAWNER_SETUP, CREATING_CONTAINER, \
     REQUESTED, SHUTTING_DOWN
 from models import Pod, Password
-from kubernetes_utils import create_pod, create_service, KubernetesError
+from kubernetes_utils import create_pod, create_service, create_pvc, KubernetesError
 from kubernetes import client, config
 
 from tapisservice.config import conf
@@ -46,8 +46,8 @@ def start_postgres_pod(pod, revision: int):
             "POSTGRES_PASSWORD": password.user_password
         },
         "mounts": [volumes, volume_mounts],
-        "mem_request": "1G",
-        "cpu_request": "1000",
+        "mem_request": "250M",
+        "cpu_request": "500",
         "mem_limit": "4G",
         "cpu_limit": "3000",
     }
@@ -104,8 +104,8 @@ def start_neo4j_pod(pod, revision: int):
             "apoc.initializer.system.2": f"CREATE USER {password.user_username} SET PLAINTEXT PASSWORD '{password.user_password}' SET PASSWORD CHANGE NOT REQUIRED"
         },
         "mounts": [volumes, volume_mounts],
-        "mem_request": "1G",
-        "cpu_request": "1000",
+        "mem_request": "250M",
+        "cpu_request": "500",
         "mem_limit": "4G",
         "cpu_limit": "3000",
         "user": None
@@ -119,17 +119,29 @@ def start_neo4j_pod(pod, revision: int):
 def start_generic_pod(pod, custom_image, revision: int):
     logger.debug(f"Attempting to start generic pod; name: {pod.k8_name}; revision: {revision}")
 
+    # Volumes
+    volumes = []
+    volume_mounts = []
+
+    # Create PVC if requested.
+    if pod.persistent_volume:
+        create_pvc(name = pod.k8_name)
+        persistent_volume = client.V1PersistentVolumeClaimVolumeSource(claim_name=pod.k8_name)
+        volumes.append(client.V1Volume(name='user-volume', persistent_volume_claim = persistent_volume))
+        volume_mounts.append(client.V1VolumeMount(name="user-volume", mount_path="/user_volume"))
+
     container = {
         "name": pod.k8_name,
+        "command": pod.command,
         "revision": revision,
         "image": custom_image,
         "ports_dict": {
-            "http": 5000
+            "http": pod.routing_port
         },
         "environment": pod.environment_variables.copy(),
-        "mounts": [],
-        "mem_request": "1G",
-        "cpu_request": "1000",
+        "mounts": [volumes, volume_mounts],
+        "mem_request": "250M",
+        "cpu_request": "500",
         "mem_limit": "4G",
         "cpu_limit": "3000",
         "user": None
