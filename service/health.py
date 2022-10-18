@@ -33,9 +33,10 @@ Running mode, either:
 
 import time
 import random
+from datetime import datetime, timedelta
 from kubernetes import client, config
 from kubernetes_utils import get_current_k8_services, get_current_k8_pods, rm_container, \
-    get_current_k8_pods, rm_service, KubernetesError, update_nginx_configmap, update_traefik_configmap, get_k8_logs
+    get_current_k8_pods, rm_service, KubernetesError, update_traefik_configmap, get_k8_logs
 from codes import RUNNING, SHUTTING_DOWN, STOPPED, ERROR, COMPLETE, RESTART, ON, OFF
 from stores import pg_store, SITE_TENANT_DICT
 from models import Pod, ExportedData
@@ -82,17 +83,16 @@ def graceful_rm_pod(pod):
 
     return rm_pod(pod.k8_name)
 
-def check_k8_pods():
+def check_k8_pods(k8_pods):
     # This is all for only the site specified in conf.site_id.
     # Each site should get it's own health pod.
     # Go through live containers first as it's "truth". Set database from that info. (error if needed, update statuses)
-    k8_pods = get_current_k8_pods() # Returns {pod_info, site, tenant, pod_id}
 
     # Check each pod.
     for k8_pod in k8_pods:
         logger.info(f"Checking pod health for pod_id: {k8_pod['pod_id']}")
 
-        # Check for found pod in database.
+        # Check if pod is found in database.
         pod = Pod.db_get_with_pk(k8_pod['pod_id'], k8_pod['tenant_id'], k8_pod['site_id'])
         # We've found a pod without a database entry. Shut it and potential service down.
         if not pod:
@@ -155,6 +155,13 @@ def check_k8_pods():
                 elif c_state.running:
                     status_container['message'] = "Pod is running."
                     pod.status_container = status_container
+                    # This is the first time pod is in RUNNING. Update start_instance_ts.
+                    if pod.status != RUNNING:
+                        pod.start_instance_ts = datetime.utcnow()
+                        if isinstance(pod.time_to_stop_instance, int):
+                            pod.time_to_stop_ts = datetime.utcnow() + timedelta(seconds=pod.time_to_stop_instance)
+                        else:
+                            pod.time_to_stop_ts = datetime.utcnow() + timedelta(seconds=pod.time_to_stop_default)
                     pod.status = RUNNING
                     pod.db_update()
             else:
@@ -185,7 +192,7 @@ def check_k8_services():
             rm_pod(k8_service['k8_name'])
             continue
 
-def check_db_pods():
+def check_db_pods(k8_pods):
     """Go through database for all tenants in this site. Delete/Create whatever is needed. Do proxy config stuff.
     """
     all_pods = []
@@ -193,8 +200,9 @@ def check_db_pods():
     for tenant in SITE_TENANT_DICT[conf.site_id]:
         all_pods += pg_store[conf.site_id][tenant].run("execute", stmt, scalars=True, all=True)
 
-    ### Delete pods with status_requested = OFF or RESTART
+    ### Go through all pod entries in the database
     for pod in all_pods:
+        ### Delete pods with status_requested = OFF or RESTART
         if pod.status_requested in [OFF, RESTART] and pod.status != STOPPED:
             logger.info(f"pod_id: {pod.pod_id} found with status_requested: {pod.status_requested}. Gracefully shutting pod down.")
             container_exists, service_exists = graceful_rm_pod(pod)
@@ -202,51 +210,55 @@ def check_db_pods():
             if not container_exists and not service_exists:
                 logger.info(f"pod_id: {pod.pod_id} found with container and service stopped. Moving to status = STOPPED.")
                 pod.status = STOPPED
+                pod.start_instance_ts = None
+                pod.time_to_stop_ts = None
+                pod.time_to_stop_instance = None
                 pod.status_container = {}
                 if pod.status_requested == RESTART:
                     logger.info(f"pod_id: {pod.pod_id} in RESTART. Now in STOPPED, so switching status_requested back to ON.")
                     pod.status_requested = ON
                 pod.db_update()
-                
+        
+        ### DB entries without a running pod should be updated to STOPPED.
+        if pod.status_requested in ['ON'] and pod.status in [RUNNING, SHUTTING_DOWN]:
+            k8_pod_found = False
+            for k8_pod in k8_pods:
+                if pod.pod_id in k8_pod['pod_id']:
+                    k8_pod_found = True
+            if not k8_pod_found:
+                logger.info(f"pod_id: {pod.pod_id} found with no running pods. Setting status = STOPPED.")
+                pod.status = STOPPED
+                pod.start_instance_ts = None
+                pod.time_to_stop_ts = None
+                pod.time_to_stop_instance = None
+                pod.status_container = {}
+                pod.db_update()
+
+        ### Sets pods to status_requested = OFF when current time > time_to_stop_ts.
+        if pod.status_requested in ['ON'] and pod.time_to_stop_ts and pod.time_to_stop_ts < datetime.utcnow():
+            logger.info(f"pod_id: {pod.pod_id} time_to_stop trigger passed. Current time: {datetime.utcnow()} > time_to_stop_ts: {pod.time_to_stop_ts}")
+            pod.status_requested = OFF
+            pod.db_update()
+        
     ### Proxy ports and config changes
-    # pod_info = {pod.k8_name: {instance_port, routing_port, url}, ...}
-    # Get unused_instance_ports for proxy (nginx or traefik) later.
-    unused_instance_ports = list(range(52001, 52999))
-    for pod in all_pods:
-        try:
-            unused_instance_ports.remove(pod.instance_port)
-        except ValueError:
-            pass
+    # pod_info = {pod.k8_name: {routing_port, url}, ...}
     # for proxy config later
     tcp_proxy_info = {}
     http_proxy_info = {}
     postgres_proxy_info = {}
     for pod in all_pods:
-        # Check for shutting down status
-        # check for 1 or -1 in instance_ports to set/delete port.
-        # 1 means we need to assign an instance_port.
-        if pod.instance_port == 1:
-            new_port = random.choice(unused_instance_ports)
-            unused_instance_ports.remove(new_port)
-            pod.instance_port = new_port
-            pod.db_update()
-        
-        if pod.instance_port > 52000:
-            template_info = {"instance_port": pod.instance_port,
-                             "routing_port": pod.routing_port,
-                             "url": pod.url}
-            match pod.server_protocol:
-                case "tcp":
-                    tcp_proxy_info[pod.k8_name] = template_info
-                case "http":
-                    http_proxy_info[pod.k8_name] = template_info
-                case "postgres":
-                    postgres_proxy_info[pod.k8_name] = template_info
-
+        template_info = {"routing_port": pod.routing_port,
+                         "url": pod.url}
+        match pod.server_protocol:
+            case "tcp":
+                tcp_proxy_info[pod.k8_name] = template_info
+            case "http":
+                http_proxy_info[pod.k8_name] = template_info
+            case "postgres":
+                postgres_proxy_info[pod.k8_name] = template_info
 
     # This functions only updates if config is out of date.
     update_traefik_configmap(tcp_proxy_info, http_proxy_info, postgres_proxy_info)
-    #update_nginx_configmap(tcp_pod_conf_info, http_pod_conf_info)
 
 
 def main():
@@ -255,7 +267,8 @@ def main():
     idx = 0
     while idx < 12:
         try:
-            check_db_pods()
+            k8_pods = get_current_k8_pods() # Returns {pod_info, site, tenant, pod_id}
+            check_db_pods(k8_pods)
             logger.info("Successfully connected to dbs.")
             break
         except Exception as e:
@@ -269,9 +282,11 @@ def main():
 
     while True:
         logger.info(f"Running pods health checks. Now: {time.time()}")
-        check_k8_pods()
+        k8_pods = get_current_k8_pods() # Returns {pod_info, site, tenant, pod_id}
+
+        check_k8_pods(k8_pods)
         check_k8_services()
-        check_db_pods()
+        check_db_pods(k8_pods)
         ########
         #######
         # Go through database for each tenant in site now.
