@@ -83,6 +83,32 @@ def test_get_permissions(headers):
 
     assert result['permissions']
 
+def test_desc_length(headers):
+    rsp = client.post("/pods",
+                     data=json.dumps({"pod_id": test_pod_2,
+                                      "pod_template": "neo4j",
+                                      "description": "Test"*200}),
+                     headers=headers)
+
+    data = response_format(rsp)
+
+    # test for 400 error status code due to exceeding description length
+    assert rsp.status_code == 400
+
+    # test for right error message
+    assert 'description: description field must be less than 255 characters.' in data['message']
+
+def test_desc_char(headers):
+    rsp = client.post("/pods",
+                     data=json.dumps({"pod_id": test_pod_2,
+                                      "pod_template": "neo4j",
+                                      "description": "Test~~~"}),
+                     headers=headers)
+
+    data = response_format(rsp)
+    assert rsp.status_code == 400
+    assert 'description: description field must only contain alphanumeric values or the following special characters: !.?@#' in data['message']
+
 
 # Clean up
 def test_delete_pods(headers):

@@ -152,6 +152,21 @@ class Pod(TapisModel, table=True, validate=True):
             raise ValueError(f"Pod routing_port must be an int with 4 or 5 digits.")
         return v
 
+
+    @validator('description')
+    def check_description(cls, v):
+        # make sure only regular characters used 
+        r = list(string.ascii_lowercase + string.ascii_uppercase + string.hexdigits + '!.?@#')
+        spaceless_v = "".join(v.split())
+        for character in spaceless_v:
+            if character not in r:
+                raise ValueError(f"description field must only contain alphanumeric values or the following special characters: !.?@#")
+        # make sure description < 255 characters
+        if len(v) > 255:
+            raise ValueError(f"description field must be less than 255 characters.")
+        return v
+
+
     @root_validator(pre=False)
     def set_url_and_k8_name(cls, values):
         # NOTE: Pydantic loops during validation, so for a few calls, tenant_id and site_id will be NONE.
