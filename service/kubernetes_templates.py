@@ -75,7 +75,7 @@ def start_neo4j_pod(pod, revision: int):
     container = {
         "name": pod.k8_name,
         "revision": revision,
-        "image": "neo4j",
+        "image": "neo4j:4.4",
         "command": [
             '/bin/bash',
             '-c',

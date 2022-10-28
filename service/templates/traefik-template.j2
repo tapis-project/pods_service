@@ -40,6 +40,7 @@ http:
     {{ pname }}:
       rule: "Host(`{{ pdata.url }}`)"
       service: "{{ pname }}"
+      tls: {}
     {% endfor %}
 
   services:
@@ -52,7 +53,7 @@ http:
     {{ pname }}:
       loadBalancer:
         servers:
-         - url: http://{{ pname }}
+         - url: http://{{ pname }}:{{ pdata.routing_port }}
     {% endfor %}
 
 {% if tcp_proxy_info or postgres_proxy_info -%}
