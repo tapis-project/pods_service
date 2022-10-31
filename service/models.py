@@ -1,4 +1,7 @@
+from asyncio import protocols
+import http
 import re
+from sre_constants import ANY
 from string import ascii_letters, digits
 from secrets import choice
 from datetime import datetime
@@ -22,6 +25,38 @@ from sqlmodel import Field, Session, SQLModel, select, JSON, Column, String
 from models_base import TapisModel, TapisApiModel
 
 
+class Networking(TapisModel):
+    protocol: str =  Field("http", description = "Whether to use http or tcp routing for requests to this pod.")
+    port: int = Field(5000, description = "Pod port to expose via networking.url in this networking object.")
+    url: str = Field("", description = "URL used to access the port of the pod defined in this networking object.")
+
+    @validator('protocol')
+    def check_protocol(cls, v):
+        v = v.lower()
+        valid_protocols = ['http', 'tcp', 'postgres']
+        if v not in valid_protocols:
+            raise ValueError(f"networking.protocol must be one of the following: {valid_protocols}.")
+        return v
+
+    @validator('port')
+    def check_port(cls, v):
+        if 10 > v  or v > 99999:
+            raise ValueError(f"networking.port must be an int with 2 to 5 digits. Got port: {v}")
+        return v
+
+    @validator('url')
+    def check_url(cls, v):
+        if v:
+            # Regex match to ensure url is safe with only [A-z0-9.-] chars.
+            res = re.fullmatch(r'[a-z][a-z0-9.-]+', v)
+            if not res:
+                raise ValueError(f"networking.url can only contain lowercase alphanumeric characters, periods, and hyphens.")
+            # pod_id char limit = 64
+            if len(v) > 128:
+                raise ValueError(f"networking.url length must be below 128 characters. Inputted length: {len(v)}")
+        return v
+
+
 class Pod(TapisModel, table=True, validate=True):
     # Required
     pod_id: str = Field(..., description = "Name of this pod.", primary_key = True)
@@ -29,22 +64,21 @@ class Pod(TapisModel, table=True, validate=True):
 
     # Optional
     description: str = Field("", description = "Description of this pod.")
-    command: List[str] | None = Field(None, description = "Command to run in pod.")
-    environment_variables: Dict = Field({}, description = "Environment variables to inject into k8 pod; Only for custom pods.", sa_column=Column(JSON))
+    command: List[str] | None = Field(None, description = "Command to run in pod.", sa_column=Column(ARRAY(String)))
+    environment_variables: Dict[str, Any] = Field({}, description = "Environment variables to inject into k8 pod; Only for custom pods.", sa_column=Column(JSON))
     data_requests: List[str] = Field([], description = "Requested pod names.", sa_column=Column(ARRAY(String)))
     roles_required: List[str] = Field([], description = "Roles required to view this pod.", sa_column=Column(ARRAY(String)))
     status_requested: str = Field("ON", description = "Status requested by user, ON or OFF.")
-    persistent_volume: Dict = Field({}, description = "Key: Volume name. Value: List of strs specifying volume folders/files to mount in pod", sa_column=Column(JSON))
+    persistent_volume: Dict[str, str] = Field({}, description = "Key: Volume name. Value: List of strs specifying volume folders/files to mount in pod", sa_column=Column(JSON))
     time_to_stop_default: int = Field(43200, description = "Default time (sec) for pod to run from instance start. -1 for unlimited. 12 hour default.")
     time_to_stop_instance: int | None = Field(None, description = "Time (sec) for pod to run from instance start. Reset each time instance is started. -1 for unlimited. None uses default.")
-    routing_port: int = Field(5000, description = "Port proxy points to in Pod.")
+    networking: Dict[str, Networking] = Field({"default": {"protocol": "http", "port": 5000}}, description = "Networking information. {'url_suffix': {'protocol': 'http'  'tcp', 'port': int}/}", sa_column=Column(JSON))
 
     # Provided
     time_to_stop_ts: datetime | None = Field(None, description = "Time (UTC) that this pod is scheduled to be stopped. Change with time_to_stop_instance.")
-    tenant_id: str = Field(g.request_tenant_id, description = "Tapis tenant used during creation of this pod.")
-    site_id: str = Field(g.site_id, description = "Tapis site used during creation of this pod.")
-    k8_name: str = Field(None, description = "Name to use for Kubernetes name.")
-    url: str = Field(None, description = "Url used to access this database if it is running.")
+    tenant_id: str = Field("", description = "Tapis tenant used during creation of this pod.")
+    site_id: str = Field("", description = "Tapis site used during creation of this pod.")
+    k8_name: str = Field("", description = "Name to use for Kubernetes name.")
     status: str = Field("STOPPED", description = "Current status of pod.")
     status_container: Dict = Field({}, description = "Status of container if exists. Gives phase.", sa_column=Column(JSON))
     data_attached: List[str] = Field([], description = "Data attached.", sa_column=Column(ARRAY(String)))
@@ -52,7 +86,6 @@ class Pod(TapisModel, table=True, validate=True):
     creation_ts: datetime | None = Field(datetime.utcnow(), description = "Time (UTC) that this pod was created.")
     update_ts: datetime | None = Field(datetime.utcnow(), description = "Time (UTC) that this pod was updated.")
     start_instance_ts: datetime | None = Field(None, description = "Time (UTC) that this pod instance was started.")
-    server_protocol: str = Field("http", description = "Protocol to route server with. tcp or http.")
     logs: str = Field("", description = "Logs from kubernetes pods, useful for debugging and reading results.")
     permissions: List[str] = Field([], description = "Pod permissions for each user.", sa_column=Column(ARRAY(String, dimensions=1)))
 
@@ -73,8 +106,8 @@ class Pod(TapisModel, table=True, validate=True):
         if not res:
             raise ValueError(f"pod_id must be lowercase alphanumeric. First character must be alpha.")
         # pod_id char limit = 64
-        if len(v) > 64:
-            raise ValueError(f"pod_id must be less than 64 characters. Inputted length: {len(v)}")
+        if len(v) > 64 or len(v) < 3:
+            raise ValueError(f"pod_id length must be between 3-64 characters. Inputted length: {len(v)}")
         return v
 
     @validator('tenant_id')
@@ -146,14 +179,37 @@ class Pod(TapisModel, table=True, validate=True):
             raise ValueError(f"Pod time_to_stop_instance must be -1 or be greater than 300 seconds.")
         return v
 
-    @validator('routing_port')
-    def check_routing_port(cls, v):
-        if v > 99999 or v < 1000:
-            raise ValueError(f"Pod routing_port must be an int with 4 or 5 digits.")
+    @validator('networking')
+    def check_networking(cls, v):
+        if v:
+            # Only allow 3 url:port pairs per pod. Trying to keep services minimal.
+            # I have uses for 2 ports, not 3, but might as well keep it available.
+            if len(v) > 3:
+                raise ValueError(f"networking dictionary may only contain up to 3 stanzas")
+
+            # Check keys in networking dict
+            # Check key is str, and properly formatted, this should be suffix to urls. "default" means no suffix.
+            for env_key, env_val in v.items():
+                if not isinstance(env_key, str):
+                    raise TypeError(f"networking key must be str. Got type {type(env_key).__name__}.")
+                res = re.fullmatch(r'[a-z0-9]+', env_key)
+                if not res:
+                    raise ValueError(f"networking key must be lowercase alphanumeric. Default if 'default'.")
+                if len(env_key) > 64 or len(env_key) < 3:
+                    raise ValueError(f"networking key length must be between 3-64 characters. Inputted length: {len(v)}")
         return v
 
     @root_validator(pre=False)
-    def set_url_and_k8_name(cls, values):
+    def set_networking(cls, values):
+        pod_template = values.get('pod_template')
+        if pod_template == "neo4j":
+            values['networking'] = {"default": Networking(protocol='tcp', port='7687')}
+        if pod_template == "postgres":
+            values['networking'] = {"default": Networking(protocol='postgres', port='5432')}
+        return values
+
+    @root_validator(pre=False)
+    def set_k8_name_and_networking_urls(cls, values):
         # NOTE: Pydantic loops during validation, so for a few calls, tenant_id and site_id will be NONE.
         # Must account for this. By end of loop, everything will be set properly.
         # In this case "tacc" tenant is backup.
@@ -162,22 +218,30 @@ class Pod(TapisModel, table=True, validate=True):
         pod_id = values.get('pod_id')
         ### k8_name: pods-<site>-<tenant>-<pod_id>
         values['k8_name'] = f"pods-{site_id}-{tenant_id}-{pod_id}"
-        ### url: podname.pods.tacc.develop.tapis.io
+        ### url: podname-networking_name.pods.tacc.develop.tapis.io
         # base_url in the form of https://tacc.develop.tapis.io.
+        logger.debug("Fetching base_url for k8_name Pod root_validator from tenant_cache")
         base_url = t.tenant_cache.get_tenant_config(tenant_id=tenant_id).base_url
-        # new url in the form of pod_id.tacc.develop.tapis.io
-        values['url'] = base_url.replace("https://", f"{pod_id}.pods.")
-        return values
 
-    @root_validator(pre=False)
-    def set_routing_port_and_protocol_for_templates(cls, values):
-        pod_template = values.get('pod_template')
-        if pod_template == "neo4j":
-            values['routing_port'] = 7687
-            values['server_protocol'] = "tcp"
-        if pod_template == "postgres":
-            values['routing_port'] = 5432
-            values['server_protocol'] = "postgres"
+        # Ensure the object already exists, this function loops a lot before value is set.
+        if values.get('networking'):
+            for net_name, net_info in values['networking'].items():
+                # The Networking model needs to be transformed to a dict if it's being used. When we get with alchemy
+                # the entire object is already a dict though. So we always expect a dict.
+                if not isinstance(net_info, dict):
+                    net_info = net_info.dict()
+
+                # if networking.name is specified we add it to the pod_name of our url after a hyphen. 'default' does not do this.
+                # i.e. "podname-networkname" instead of just "podname" when networking.name == 'default'
+                if net_name == 'default':
+                    url = base_url.replace("https://", f"{pod_id}.pods.")
+                else:
+                    url = base_url.replace("https://", f"{pod_id}-{net_name}.pods.")
+
+                # Set value to Networking object.
+                values['networking'][net_name] = Networking(protocol=net_info['protocol'],
+                                                            port=net_info['port'],
+                                                            url=url)
         return values
 
     def display(self):
@@ -185,7 +249,6 @@ class Pod(TapisModel, table=True, validate=True):
         display.pop('logs')
         display.pop('k8_name')
         display.pop('tenant_id')
-        display.pop('server_protocol')
         display.pop('permissions')
         display.pop('site_id')
         display.pop('data_attached')
@@ -230,14 +293,14 @@ class NewPod(TapisApiModel):
 
     # Optional
     description: str = Field("", description = "Description of this pod.")
-    command: List[str] | None = Field(None, description = "Command to run in pod.")
+    command: List[str] | None = Field(None, description = "Command to run in pod.", sa_column=Column(ARRAY(String)))
+    networking: Dict[str, Networking] = Field({"default": {"protocol": "http", "port": 5000}}, description = "Networking information. {'url_suffix': {'protocol': 'http'  'tcp', 'port': int}/}", sa_column=Column(JSON))
     environment_variables: Dict = Field({}, description = "Environment variables to inject into k8 pod; Only for custom pods.", sa_column=Column(JSON))
     data_requests: List[str] = Field([], description = "Requested pod names.")
     roles_required: List[str] = Field([], description = "Roles required to view this pod")
     persistent_volume: Dict = Field({}, description = "Key: Volume name. Value: List of strs specifying volume folders/files to mount in pod", sa_column=Column(JSON))
     time_to_stop_default: int = Field(43200, description = "Default time (sec) for pod to run from instance start. -1 for unlimited. 12 hour default.")
     time_to_stop_instance: int | None = Field(None, description = "Time (sec) for pod to run from instance start. Reset each time instance is started. -1 for unlimited. 12 hour default.")
-    routing_port: int = Field(5000, description = "Port proxy points to in Pod.")
 
 
 class UpdatePod(TapisApiModel):
@@ -250,24 +313,24 @@ class UpdatePod(TapisApiModel):
 
     # Optional
     description: str = Field("", description = "Description of this pod.")
-    command: List[str] | None = Field(None, description = "Command to run in pod.")
+    command: List[str] | None = Field(None, description = "Command to run in pod.", sa_column=Column(ARRAY(String)))
+    networking: Dict[str, Networking] = Field({"default": {"protocol": "http", "port": 5000}}, description = "Networking information. {'url_suffix': {'protocol': 'http'  'tcp', 'port': int}/}", sa_column=Column(JSON))
     data_requests: List[str] = Field([], description = "Requested pod names.")
     roles_required: List[str] = Field([], description = "Roles required to view this pod")
     persistent_volume: Dict = Field({}, description = "Key: Volume name. Value: List of strs specifying volume folders/files to mount in pod", sa_column=Column(JSON))
     time_to_stop_instance: int | None = Field(None, description = "Time (sec) for pod to run from instance start. Reset each time instance is started. -1 for unlimited. 12 hour default.")
-    routing_port: int = Field(5000, description = "Port proxy points to in Pod.")
 
 
 class PodResponseModel(TapisApiModel):
     pod_id: str = Field(..., description = "Name of this pod.", primary_key = True)
     pod_template: str = Field(..., description = "Which pod template to use, or which custom image to run, must be on allowlist.")
     description: str = Field("", description = "Description of this pod.")
-    command: List[str] | None = Field(None, description = "Command to run in pod.")
+    command: List[str] | None = Field(None, description = "Command to run in pod.", sa_column=Column(ARRAY(String)))
+    networking: Dict[str, Networking] = Field({"default": {"protocol": "http", "port": 5000}}, description = "Networking information. {'url_suffix': {'protocol': 'http'  'tcp', 'port': int}/}", sa_column=Column(JSON))
     environment_variables: Dict = Field({}, description = "Environment variables to inject into k8 pod; Only for custom pods.", sa_column=Column(JSON))
     data_requests: List[str] = Field([], description = "Requested pod names.", sa_column=Column(ARRAY(String)))
     roles_required: List[str] = Field([], description = "Roles required to view this pod.", sa_column=Column(ARRAY(String)))
     status_requested: str = Field("ON", description = "Status requested by user, ON or OFF.")
-    url: str = Field(None, description = "Url used to access this database if it is running.")
     status: str = Field("STOPPED", description = "Current status of pod.")
     status_container: Dict = Field({}, description = "Status of container if exists. Gives phase.", sa_column=Column(JSON))
     data_attached: List[str] = Field([], description = "Data attached.", sa_column=Column(ARRAY(String)))
@@ -279,7 +342,6 @@ class PodResponseModel(TapisApiModel):
     time_to_stop_default: int = Field(43200, description = "Default time (sec) for pod to run from instance start. -1 for unlimited. 12 hour default.")
     time_to_stop_instance: int | None = Field(None, description = "Time (sec) for pod to run from instance start. Reset each time instance is started. -1 for unlimited. 12 hour default.")
     time_to_stop_ts: datetime | None = Field(None, description = "Time (UTC) that this pod is scheduled to be stopped. Change with time_to_stop_instance.")
-    routing_port: int = Field(5000, description = "Port proxy points to in Pod.")
 
 
 #schema https://pydantic-docs.helpmanual.io/usage/schema/

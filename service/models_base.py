@@ -6,7 +6,6 @@ from typing import List, Dict, Literal, Any, Set
 from pydantic import BaseModel, Field, validator, root_validator
 
 from stores import pg_store
-from tapisservice.tapisfastapi.utils import g
 from tapisservice.logs import get_logger
 logger = get_logger(__name__)
 
@@ -31,6 +30,7 @@ class TapisModel(SQLModel):
         # functions with self can provide self, otherwise provide tenant and site.
         tenant_id = tenant or getattr(obj, 'tenant_id', None) or 'tacc'
         site_id = site or getattr(obj, 'site_id', None) or 'tacc'
+        logger.info(f"Getting tenant pg obj. Using site: {site_id}; tenant: {tenant_id}")
         store = pg_store[site_id][tenant_id]
         logger.info(f"Using site: {site_id}; tenant: {tenant_id}; Session: {Session}.")
         return site_id, tenant_id, store

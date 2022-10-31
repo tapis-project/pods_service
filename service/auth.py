@@ -160,7 +160,7 @@ def authorization(request):
     # Set g.site_id and g.roles
     get_user_site_id()
     get_user_sk_roles()
-
+    
     ### Set admin
     # if codes.ADMIN_ROLE in g.roles:
     #     g.admin = True

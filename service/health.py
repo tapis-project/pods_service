@@ -13,6 +13,7 @@ Does the following:
 
 2. Go through database. 
   a. Deletes pods with status_requested = OFF
+     i. Delete pods with status_requested = OFF. Then sets status_requested = ON.
   b. Deletes pods in error status. (Maybe not?)
   c. Updates pod status.
   d. Ensures all database pods exist (For this site)
@@ -241,21 +242,22 @@ def check_db_pods(k8_pods):
             pod.db_update()
         
     ### Proxy ports and config changes
-    # pod_info = {pod.k8_name: {routing_port, url}, ...}
-    # for proxy config later
+    # For proxy config later. proxy_info_x = {pod.k8_name: {routing_port, url}, ...} 
     tcp_proxy_info = {}
     http_proxy_info = {}
     postgres_proxy_info = {}
     for pod in all_pods:
-        template_info = {"routing_port": pod.routing_port,
-                         "url": pod.url}
-        match pod.server_protocol:
-            case "tcp":
-                tcp_proxy_info[pod.k8_name] = template_info
-            case "http":
-                http_proxy_info[pod.k8_name] = template_info
-            case "postgres":
-                postgres_proxy_info[pod.k8_name] = template_info
+        # Each pod can have up to 3 networking objects with custom filled port/protocol/name
+        for net_name, net_info in pod.networking.items():
+            template_info = {"routing_port": net_info['port'],
+                             "url": net_info['url']}
+            match net_info['protocol']:
+                case "tcp":
+                    tcp_proxy_info[pod.k8_name] = template_info
+                case "http":
+                    http_proxy_info[pod.k8_name] = template_info
+                case "postgres":
+                    postgres_proxy_info[pod.k8_name] = template_info
 
     # This functions only updates if config is out of date.
     update_traefik_configmap(tcp_proxy_info, http_proxy_info, postgres_proxy_info)

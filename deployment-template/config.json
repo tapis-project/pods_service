@@ -28,7 +28,10 @@
         "jstubbs/abaco_test",
         "tuyamei/smartfoodshed-server",
         "ssquid/kapp",
-        "av11/sd-webui-auto-bulk"
+        "av11/sd-webui-auto-bulk",
+        "jolibrain/deepdetect_cpu",
+        "notchristiangarcia/vaapi-v1-f",
+        "notchristiangarcia/vaapi-v1-b"
     ],
     "pvc_storage_class_name": "standard",
     "spawner_abaco_conf_host_path": "$env{abaco_host_path}/config-local.json",

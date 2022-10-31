@@ -22,7 +22,7 @@ class SpawnerException(BaseTapisError):
 
 class Spawner(object):
     def __init__(self):
-        self.queue = os.environ.get('queue', 'tacc')
+        self.queue = os.environ.get('queue', 'tacc') # Which site is being worked on by this spawner.
         self.cmd_ch = CommandChannel(name=self.queue)
         self.host_id = conf.spawner_host_id
 

@@ -130,14 +130,21 @@ def start_generic_pod(pod, custom_image, revision: int):
         volumes.append(client.V1Volume(name='user-volume', persistent_volume_claim = persistent_volume))
         volume_mounts.append(client.V1VolumeMount(name="user-volume", mount_path="/user_volume"))
 
+    # Each pod can have up to 3 networking objects with custom filled port/protocol/name
+    # net_dict takes net_name:port.
+    ports_dict = {}
+    for net_name, net_info in pod.networking.items():
+        if not isinstance(net_info, dict):
+            net_info = net_info.dict()
+
+        ports_dict.update({net_name: net_info['port']})
+
     container = {
         "name": pod.k8_name,
         "command": pod.command,
         "revision": revision,
         "image": custom_image,
-        "ports_dict": {
-            "http": pod.routing_port
-        },
+        "ports_dict": ports_dict,
         "environment": pod.environment_variables.copy(),
         "mounts": [volumes, volume_mounts],
         "mem_request": "250M",
@@ -149,4 +156,4 @@ def start_generic_pod(pod, custom_image, revision: int):
 
     # Create init_container, container, and service.
     create_pod(**container)
-    create_service(name = pod.k8_name, ports_dict = container["ports_dict"])
+    create_service(name = pod.k8_name, ports_dict = ports_dict)

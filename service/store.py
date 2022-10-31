@@ -20,8 +20,23 @@ from tapisservice.config import conf
 from tapisservice.logs import get_logger
 logger = get_logger(__name__)
 
+from fastapi.encoders import jsonable_encoder
+
 from sqlmodel import create_engine, Session, select
 from sqlalchemy.orm import sessionmaker
+
+def custom_serializer(d):
+    """https://github.com/tiangolo/sqlmodel/issues/63
+
+    Custom serializer for sqlalchemy so that we can have pydantic models inside of other
+    pydantic models. Without this sqlalchemy complains that it can't serialize the specific 
+    internal pydantic model.
+
+    There's also the following, but this encoder doesn't seem to work with sqlalchemy.
+    from fastapi.encoders import jsonable_encoder
+    """
+    # changed from github issue's `v.json()` to `v.dict()` for dicts to work properly.
+    return json.dumps(d, default=lambda v: v.dict())
 
 class PostgresStore():
     """
@@ -58,7 +73,7 @@ class PostgresStore():
         logger.info(f"Using conninfo: {conninfo}, with kwargs: {kwargs}")
 
         # We create SQLAlchemy objects using future=True to get ready for SA:2.0 (we follow that style)
-        self.engine = create_engine(conninfo, future=True)
+        self.engine = create_engine(conninfo, future=True, json_serializer=custom_serializer)
         # expire_on_commit is more of a opinion than something bad according to docs.
         # I believe it's good to keep information. Session.begin flushes.
         self.session = sessionmaker(self.engine, future=True, expire_on_commit=False)
