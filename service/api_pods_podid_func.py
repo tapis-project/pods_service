@@ -230,10 +230,10 @@ async def start_pod(pod_id):
     response_model=PodResponse)
 async def restart_pod(pod_id):
     """
-    Restart a pod. CURRENTLY WORK IN PROGRESS. BROKEN.
+    Restart a pod.
 
     Note:
-    - Sets status_requested to OFF. If pod status gets to STOPPED, status_requested will be flipped to ON.
+    - Sets status_requested to RESTART. If pod status gets to STOPPED, status_requested will be flipped to ON. Health should then create new pod.
 
     Returns updated pod object.
     """

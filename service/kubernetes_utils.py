@@ -26,8 +26,7 @@ config.load_incluster_config()
 k8 = client.CoreV1Api()
 
 host_id = os.environ.get('SPAWNER_HOST_ID', conf.spawner_host_id)
-host_ip = conf.spawner_host_ip
-logger.debug(f"host_id: {host_id}; host_ip: {host_ip}")
+logger.debug(f"host_id: {host_id};")
 
 class KubernetesError(Exception):
     def __init__(self, message):
@@ -341,13 +340,13 @@ def create_pod(name: str,
     # Limits
     resource_limits = {}
     if mem_limit:
-        resource_limits["memory"] = mem_limit
+        resource_limits["memory"] = f"{mem_limit}Mi"
     if cpu_limit:
         resource_limits["cpu"] = f"{cpu_limit}m"
     # Requests
     resource_requests = {}
     if mem_request:
-        resource_requests["memory"] = mem_request
+        resource_requests["memory"] = f"{mem_request}Mi"
     if cpu_request:
         resource_requests["cpu"] = f"{cpu_request}m"
     # Define resource requirements if resource limits specified

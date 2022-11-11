@@ -57,12 +57,12 @@ class Spawner(object):
         
         status = getattr(pod, 'status', '')
         if not status == REQUESTED:
-            logger.debug(f"Spawner found pod NOT in REQUESTED status as expected. status: {status}. Returning and not processing command.")
+            logger.debug(f"Spawner found pod NOT in REQUESTED status as expected. status: {status}. Returning and ignoring command.")
             return
 
         status_requested = getattr(pod, 'status_requested', '')
         if not status_requested == ON:
-            logger.debug(f"Spawner found pod not requesting ON as expected. status_requested: {status_requested}. Returning and not processing command.")
+            logger.debug(f"Spawner found pod not requesting ON as expected. status_requested: {status_requested}. Returning and ignoring command.")
             return
 
         # Pod status was REQUESTED and status_requested was ON; moving on to SPAWNER_SETUP ----
@@ -101,6 +101,7 @@ def main():
     idx = 0
     while idx < 10:
         try:
+            time.sleep(10)
             sp = Spawner()
             logger.info("Spawner made connection to rabbit, entering main loop")
             sp.run()

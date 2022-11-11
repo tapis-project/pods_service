@@ -7,7 +7,7 @@ from secrets import choice
 from datetime import datetime
 from typing import List, Dict, Literal, Any, Set
 from wsgiref import validate
-from pydantic import BaseModel, Field, validator, root_validator
+from pydantic import BaseModel, Field, validator, root_validator, conint
 from codes import PERMISSION_LEVELS, PermissionLevel
 
 from stores import pg_store
@@ -56,6 +56,48 @@ class Networking(TapisModel):
                 raise ValueError(f"networking.url length must be below 128 characters. Inputted length: {len(v)}")
         return v
 
+class Resources(TapisModel):
+    # CPU/Mem defaults are set in configschema.json
+    cpu_request: int = Field(conf.default_pod_cpu_request, description = "CPU allocation pod requests at startup. In millicpus (m). 1000 = 1 cpu.")
+    cpu_limit: int = Field(conf.default_pod_cpu_limit, description = "CPU allocation pod is allowed to use. In millicpus (m). 1000 = 1 cpu.")
+    mem_request: int = Field(conf.default_pod_mem_request, description = "Memory allocation pod requests at startup. In megabytes (Mi)")
+    mem_limit: int = Field(conf.default_pod_mem_limit, description = "Memory allocation pod is allowed to use. In megabytes (Mi)")
+
+    @validator('cpu_request', 'cpu_limit')
+    def check_cpu_resources(cls, v):
+        if conf.minimum_pod_cpu_val > v  or v > conf.maximum_pod_cpu_val:
+            raise ValueError(
+                f"resources.cpu_x out of bounds. Received: {v}. Maximum: {conf.maximum_pod_cpu_val}. Minimum: {conf.minimum_pod_cpu_val}.",
+                 " User requires extra role to break bounds. Contact admin."
+                )
+        return v
+
+    @validator('mem_request', 'mem_limit')
+    def check_mem_resources(cls, v):
+        if conf.minimum_pod_mem_val > v  or v > conf.maximum_pod_mem_val:
+            raise ValueError(
+                f"resources.mem_x out of bounds. Received: {v}. Maximum: {conf.minimum_pod_mem_val}. Minimum: {conf.maximum_pod_mem_val}.",
+                 " User requires extra role to break bounds. Contact admin."
+                )
+        return v
+
+    @root_validator(pre=False)
+    def ensure_request_lessthan_limit(cls, values):
+        cpu_request = values.get("cpu_request")
+        cpu_limit = values.get("cpu_limit")
+        mem_request = values.get("mem_request")
+        mem_limit = values.get("mem_limit")
+
+        # Check cpu values
+        if cpu_request and cpu_limit and cpu_request > cpu_limit:
+            raise ValueError(f"resources.cpu_x found cpu_request({cpu_request}) > cpu_limit({cpu_limit}). Request must be less than limit.")
+
+        # Check mem values
+        if mem_request and mem_limit and mem_request > mem_limit:
+            raise ValueError(f"resources.mem_x found mem_request({mem_request}) > mem_limit({mem_limit}). Request must be less than limit.")
+
+        return values
+
 
 class Pod(TapisModel, table=True, validate=True):
     # Required
@@ -73,6 +115,7 @@ class Pod(TapisModel, table=True, validate=True):
     time_to_stop_default: int = Field(43200, description = "Default time (sec) for pod to run from instance start. -1 for unlimited. 12 hour default.")
     time_to_stop_instance: int | None = Field(None, description = "Time (sec) for pod to run from instance start. Reset each time instance is started. -1 for unlimited. None uses default.")
     networking: Dict[str, Networking] = Field({"default": {"protocol": "http", "port": 5000}}, description = "Networking information. {'url_suffix': {'protocol': 'http'  'tcp', 'port': int}/}", sa_column=Column(JSON))
+    resources: Resources = Field({}, description = "Pod reesource management", sa_column=Column(JSON))
 
     # Provided
     time_to_stop_ts: datetime | None = Field(None, description = "Time (UTC) that this pod is scheduled to be stopped. Change with time_to_stop_instance.")
@@ -301,6 +344,7 @@ class NewPod(TapisApiModel):
     persistent_volume: Dict = Field({}, description = "Key: Volume name. Value: List of strs specifying volume folders/files to mount in pod", sa_column=Column(JSON))
     time_to_stop_default: int = Field(43200, description = "Default time (sec) for pod to run from instance start. -1 for unlimited. 12 hour default.")
     time_to_stop_instance: int | None = Field(None, description = "Time (sec) for pod to run from instance start. Reset each time instance is started. -1 for unlimited. 12 hour default.")
+    resources: Resources = Field({}, description = "Pod reesource management", sa_column=Column(JSON))
 
 
 class UpdatePod(TapisApiModel):
@@ -319,6 +363,7 @@ class UpdatePod(TapisApiModel):
     roles_required: List[str] = Field([], description = "Roles required to view this pod")
     persistent_volume: Dict = Field({}, description = "Key: Volume name. Value: List of strs specifying volume folders/files to mount in pod", sa_column=Column(JSON))
     time_to_stop_instance: int | None = Field(None, description = "Time (sec) for pod to run from instance start. Reset each time instance is started. -1 for unlimited. 12 hour default.")
+    resources: Resources = Field({}, description = "Pod reesource management", sa_column=Column(JSON))
 
 
 class PodResponseModel(TapisApiModel):
@@ -342,26 +387,7 @@ class PodResponseModel(TapisApiModel):
     time_to_stop_default: int = Field(43200, description = "Default time (sec) for pod to run from instance start. -1 for unlimited. 12 hour default.")
     time_to_stop_instance: int | None = Field(None, description = "Time (sec) for pod to run from instance start. Reset each time instance is started. -1 for unlimited. 12 hour default.")
     time_to_stop_ts: datetime | None = Field(None, description = "Time (UTC) that this pod is scheduled to be stopped. Change with time_to_stop_instance.")
-
-
-#schema https://pydantic-docs.helpmanual.io/usage/schema/
-class ExportedData(TapisModel, table=False, validate=True):
-    # Required
-    source_pod: str | None = Field(None, description = "Time (UTC) that this node was created.", primary_key = True)
-
-    # Optional
-    tag: List[str] = Field([], description = "Roles required to view this pod")
-    description: str | None = Field(None, description = "Time (UTC) that this node was created.")
-    roles_required: List[str] = Field([], description = "Roles required to view this pod")
-
-    # Provided
-    tenant_id: str = Field(None, description = "Tapis tenant used during creation of this pod.")
-    site_id: str = Field(None, description = "Tapis site used during creation of this pod.")
-    creation_ts: datetime | None = Field(None, description = "Time (UTC) that this node was created.")
-    update_ts: datetime | None = Field(None, description = "Time (UTC) that this node was created.")
-    roles_inherited: List[str] = Field([], description = "Inherited roles required to view this pod")
-    export_path: str | None = Field(None, description = "Time (UTC) that this node was created.")
-    source_owner: str | None = Field(None, description = "Time (UTC) that this node was created.")
+    resources: Resources = Field({}, description = "Pod reesource management", sa_column=Column(JSON))
 
 
 class Password(TapisModel, table=True, validate=True):

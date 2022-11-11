@@ -10,8 +10,7 @@
       "rabbitmq_uri",
       "global_tenant_object",
       "global_site_object",
-      "spawner_host_id",
-      "spawner_max_cmd_length"
+      "spawner_host_id"
     ],
     "properties": {
       "python_framework_type": {
@@ -23,59 +22,64 @@
         "type": "string",
         "description": "The namespace for kubernetes to create workers and execution pods. Only relevant to spawner and health. Meaning the config should be changed on each new namespace to match."
       },
-      "container_backend": {
-        "type": "string",
-        "pattern": "kubernetes|docker",
-        "default": "docker",
-        "description": "Container backend to use when creating workers/execs."
-      },
       "rabbitmq_uri": {
         "type": "string",
         "description": "URI for rabbitMQ."
+      },
+      "pvc_storage_class_name": {
+        "type": "string",
+        "description": "Which kubernetes storage class to use when creating default persistent volume claims."
+      },
+      "default_pod_cpu_limit": {
+        "type": "integer",
+        "description": "Default CPU allocation pod is allowed to use. In millicpus (m). 1000 = 1 cpu.",
+        "default": 2000
+      },
+      "default_pod_cpu_request": {
+        "type": "integer",
+        "description": "Default CPU allocation pod requests at startup. In millicpus (m). 1000 = 1 cpu.",
+        "default": 250
+      },
+      "maximum_pod_cpu_val":{
+        "type": "integer",
+        "description": "Maximum CPU allocation pod is allowed to have as limit or request. In millicpus (m). 1000 = 1 cpu.",
+        "default": 6000
+      },
+      "minimum_pod_cpu_val":{
+        "type": "integer",
+        "description": "Minimum CPU allocation pod is allowed to have as limit or request. In millicpus (m). 1000 = 1 cpu.",
+        "default": 250
+      },
+      "default_pod_mem_limit": {
+        "type": "integer",
+        "description": "Default memory allocation pod is allowed to use. In megabytes (Mi).",
+        "default": 3072
+      },
+      "default_pod_mem_request": {
+        "type": "integer",
+        "description": "Default memory allocation pod requests at startup. In megabytes (Mi)",
+        "default": 256
+      },
+      "maximum_pod_mem_val":{
+        "type": "integer",
+        "description": "Maximum memory allocation pod is allowed to have as limit or request. In megabytes (Mi)",
+        "default": 12288
+      },
+      "minimum_pod_mem_val":{
+        "type": "integer",
+        "description": "Minimum memory allocation pod is allowed to have as limit or request. In megabytes (Mi)",
+        "default": 256
       },
       "spawner_host_id": {
         "type": "integer",
         "description": "Unique host_id for worker host. Each host should have at least one spawner and health check worker."
       },
-      "spawner_host_ip": {
-        "type": "string",
-        "description": "An addressable IP for the spawner's host. (Not currently used)"
-      },
-      "spawner_max_cmd_length": {
-        "type": "integer",
-        "description": "Maximum number of messages that the autoscaler should put on the default command channel.",
-        "default": 10
-      },
-      "spawner_abaco_conf_host_path": {
-        "type": "string",
-        "description": "Sets abaco conf host path if it is not set by environment variable"
-      },
-      "web_access_control": {
-        "type": "string",
-        "description": "Type of access control for web front end.",
-        "pattern": "jwt|none"
-      },
-      "web_user_role": {
-        "type": "string",
-        "description": "The role required for 'base level' access to the service. Only used with JWT access control."
-      },
-      "web_accept_nonce": {
-        "type": "boolean",
-        "description": "Enables use of nonce for auth with API. x-nonce param is only checked in absence of a JWT header."
-      },
-      "web_apim_public_key": {
-        "type": "string",
-        "description": "Public key for the apim instance when deployed behind apim (jwt access control)"
-      },
-      "web_show_traceback": {
-        "type": "boolean",
-        "description": "Whether the web apps return a stacktrace or a nice JSON object on an APIException.",
-        "default":false
-      },
-      "web_case": {
-        "type": "string",
-        "description": "Either to use camel or snake case. Changes return responses. Default is snake.",
-        "pattern": "camel|snake"
+      "image_allow_list": {
+        "type": "array",
+        "description": "Docker images that users are allowed to use.",
+        "items": {
+          "type": "string"
+        }
       },
       "global_tenant_object": {
         "type": "object",

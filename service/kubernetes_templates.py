@@ -46,10 +46,10 @@ def start_postgres_pod(pod, revision: int):
             "POSTGRES_PASSWORD": password.user_password
         },
         "mounts": [volumes, volume_mounts],
-        "mem_request": "250M",
-        "cpu_request": "500",
-        "mem_limit": "4G",
-        "cpu_limit": "3000",
+        "mem_request": pod.resources.get("mem_request"),
+        "cpu_request": pod.resources.get("cpu_request"),
+        "mem_limit": pod.resources.get("mem_limit"),
+        "cpu_limit": pod.resources.get("cpu_limit"),
     }
 
     # Create init_container, container, and service.
@@ -104,10 +104,10 @@ def start_neo4j_pod(pod, revision: int):
             "apoc.initializer.system.2": f"CREATE USER {password.user_username} SET PLAINTEXT PASSWORD '{password.user_password}' SET PASSWORD CHANGE NOT REQUIRED"
         },
         "mounts": [volumes, volume_mounts],
-        "mem_request": "250M",
-        "cpu_request": "500",
-        "mem_limit": "4G",
-        "cpu_limit": "3000",
+        "mem_request": pod.resources.get("mem_request"),
+        "cpu_request": pod.resources.get("cpu_request"),
+        "mem_limit": pod.resources.get("mem_limit"),
+        "cpu_limit": pod.resources.get("cpu_limit"),
         "user": None
     }
 
@@ -147,10 +147,10 @@ def start_generic_pod(pod, custom_image, revision: int):
         "ports_dict": ports_dict,
         "environment": pod.environment_variables.copy(),
         "mounts": [volumes, volume_mounts],
-        "mem_request": "250M",
-        "cpu_request": "500",
-        "mem_limit": "4G",
-        "cpu_limit": "3000",
+        "mem_request": pod.resources.get("mem_request"),
+        "cpu_request": pod.resources.get("cpu_request"),
+        "mem_limit": pod.resources.get("mem_limit"),
+        "cpu_limit": pod.resources.get("cpu_limit"),
         "user": None
     }
 

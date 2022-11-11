@@ -216,4 +216,4 @@ if __name__ == "__main__":
     print("\n\n\n\n\nAlembic Upgrade -- Initial Init")
     subprocess.run("alembic upgrade head", shell=True)
     print("\n\n\n\n\nAlembic Revision Autogenerate")
-    subprocess.run("alembic revision -m 'init4' --autogenerate", shell=True) #Dev step for new migrations
+    subprocess.run("alembic revision -m 'init5' --autogenerate", shell=True) #Dev step for new migrations

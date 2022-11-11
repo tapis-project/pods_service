@@ -35,12 +35,13 @@ Running mode, either:
 import time
 import random
 from datetime import datetime, timedelta
+from channels import CommandChannel
 from kubernetes import client, config
 from kubernetes_utils import get_current_k8_services, get_current_k8_pods, rm_container, \
     get_current_k8_pods, rm_service, KubernetesError, update_traefik_configmap, get_k8_logs
-from codes import RUNNING, SHUTTING_DOWN, STOPPED, ERROR, COMPLETE, RESTART, ON, OFF
+from codes import RUNNING, SHUTTING_DOWN, STOPPED, ERROR, REQUESTED, COMPLETE, RESTART, ON, OFF
 from stores import pg_store, SITE_TENANT_DICT
-from models import Pod, ExportedData
+from models import Pod #, ExportedData
 from sqlmodel import select
 from tapisservice.config import conf
 from tapisservice.logs import get_logger
@@ -109,7 +110,7 @@ def check_k8_pods(k8_pods):
 
         k8_pod_phase = k8_pod['pod_info'].status.phase
         status_container = {"phase": k8_pod_phase,
-                            "start_time": str(k8_pod['pod_info'].status.start_time),
+                            "start_time": k8_pod['pod_info'].status.start_time.isoformat().replace('+00:00', '.000000'),
                             "message": ""}
         
         # Get pod container state
@@ -160,9 +161,13 @@ def check_k8_pods(k8_pods):
                     if pod.status != RUNNING:
                         pod.start_instance_ts = datetime.utcnow()
                         if isinstance(pod.time_to_stop_instance, int):
-                            pod.time_to_stop_ts = datetime.utcnow() + timedelta(seconds=pod.time_to_stop_instance)
+                            # If set to -1, we don't do ttl.
+                            if not pod.time_to_stop_instance == -1:
+                                pod.time_to_stop_ts = datetime.utcnow() + timedelta(seconds=pod.time_to_stop_instance)
                         else:
-                            pod.time_to_stop_ts = datetime.utcnow() + timedelta(seconds=pod.time_to_stop_default)
+                            # If set to -1, we don't do ttl.
+                            if not pod.time_to_stop_default == -1:
+                                pod.time_to_stop_ts = datetime.utcnow() + timedelta(seconds=pod.time_to_stop_default)
                     pod.status = RUNNING
                     pod.db_update()
             else:
@@ -241,6 +246,22 @@ def check_db_pods(k8_pods):
             pod.status_requested = OFF
             pod.db_update()
         
+        ### Start pods here by putting command setting status="REQUESTED", if status_requested = ON and status = STOPPED.
+        if pod.status_requested in ['ON'] and pod.status == STOPPED:
+            logger.info(f"pod_id: {pod.pod_id} found status_requested = ON and status = STOPPED. Starting.")
+
+            pod.status = REQUESTED
+            pod.db_update()
+
+            # Send command to start new pod
+            ch = CommandChannel(name=pod.site_id)
+            ch.put_cmd(pod_id=pod.pod_id,
+                    tenant_id=pod.tenant_id,
+                    site_id=pod.site_id)
+            ch.close()
+            logger.debug(f"Command Channel - Added msg for pod_id: {pod.pod_id}.")
+
+
     ### Proxy ports and config changes
     # For proxy config later. proxy_info_x = {pod.k8_name: {routing_port, url}, ...} 
     tcp_proxy_info = {}
@@ -249,6 +270,9 @@ def check_db_pods(k8_pods):
     for pod in all_pods:
         # Each pod can have up to 3 networking objects with custom filled port/protocol/name
         for net_name, net_info in pod.networking.items():
+            if not isinstance(net_info, dict):
+                net_info = net_info.dict()
+
             template_info = {"routing_port": net_info['port'],
                              "url": net_info['url']}
             match net_info['protocol']:
@@ -289,8 +313,8 @@ def main():
         check_k8_pods(k8_pods)
         check_k8_services()
         check_db_pods(k8_pods)
+
         ########
-        #######
         # Go through database for each tenant in site now.
         logger.info(f"Health going through all tenants in site: {conf.site_id}")
         for tenant, store in pg_store[conf.site_id].items():
