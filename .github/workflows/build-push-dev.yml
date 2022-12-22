@@ -8,7 +8,7 @@
 #   DOCKERHUB_USERNAME: username for tuyami
 #   DOCKERHUB_TOKEN: token for tuyamei
 
-name: Build, push, deploy images
+name: Build & Push - develop
 on:
   push:
     branches: [ dev ]
@@ -38,6 +38,5 @@ jobs:
       - uses: docker/build-push-action@v3
         name: Build & push tagged Docker backend image
         with:
-          context: backend
           push: true
           tags: tapis/pods-api:dev,tapis/pods-api:${{ steps.date.outputs.date }}
