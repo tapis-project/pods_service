@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 from models import Pod, NewPod, UpdatePod, Password, SetPermission, DeletePermission, PodResponse, PodPermissionsResponse, PodCredentialsResponse, PodLogsResponse
 from channels import CommandChannel
-from codes import OFF, ON, RESTART, REQUESTED
+from codes import OFF, ON, RESTART, REQUESTED, STOPPED
 from tapisservice.tapisfastapi.utils import g, ok
 
 from tapisservice.logs import get_logger
@@ -207,17 +207,23 @@ async def start_pod(pod_id):
     logger.info(f"GET /pods/{pod_id}/start - Top of start_pod.")
 
     pod = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
-    pod.status_requested = ON
-    pod.status = REQUESTED
-    pod.db_update()
 
-    # Send command to start new pod
-    ch = CommandChannel(name=pod.site_id)
-    ch.put_cmd(pod_id=pod.pod_id,
-                tenant_id=pod.tenant_id,
-                site_id=pod.site_id)
-    ch.close()
-    logger.debug(f"Command Channel - Added msg for pod_id: {pod.pod_id}.")
+    # Only run start_pod from status=STOPPED
+    if not pod.status in [STOPPED]:
+        raise RuntimeError(f"Pod must be in 'STOPPED' status to run 'start_pod'. Please run 'stop_pod' or 'restart_pod' instead.")
+    else:
+        pod.status_requested = ON
+        pod.status = REQUESTED
+
+        # Send command to start new pod
+        ch = CommandChannel(name=pod.site_id)
+        ch.put_cmd(pod_id=pod.pod_id,
+                    tenant_id=pod.tenant_id,
+                    site_id=pod.site_id)
+        ch.close()
+        logger.debug(f"Command Channel - Added msg for pod_id: {pod.pod_id}.")
+
+        pod.db_update()
 
     return ok(result=pod.display(), msg = "Updated pod's status_requested to ON and requested pod.")
 
