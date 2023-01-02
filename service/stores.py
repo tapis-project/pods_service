@@ -213,7 +213,7 @@ if __name__ == "__main__":
     role_init()
     import subprocess
     time.sleep(3)
-    print("\n\n\n\n\nAlembic Upgrade -- Initial Init")
+    print("\n\n\n\n\nAlembic -- Updating with current migration files")
     subprocess.run("alembic upgrade head", shell=True)
-    print("\n\n\n\n\nAlembic Revision Autogenerate")
+    print("\n\n\n\n\nAlembic -- Running revision autogeneration")
     subprocess.run("alembic revision -m 'init5' --autogenerate", shell=True) #Dev step for new migrations
