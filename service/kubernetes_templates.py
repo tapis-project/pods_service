@@ -66,6 +66,17 @@ def start_neo4j_pod(pod, revision: int):
     volumes = []
     volume_mounts = []
 
+    # Create PVC if requested.
+    if pod.persistent_volume:
+        try:
+            create_pvc(name = pod.k8_name)
+        except:
+            # Could already exist. This needs to be vastly improved.
+            pass
+        persistent_volume = client.V1PersistentVolumeClaimVolumeSource(claim_name=pod.k8_name)
+        volumes.append(client.V1Volume(name='user-volume', persistent_volume_claim = persistent_volume))
+        volume_mounts.append(client.V1VolumeMount(name="user-volume", mount_path="/var/lib/neo4j/data"))
+
     # Create and mount certs neccessary for bolt TLS.
     secret_volume = client.V1SecretVolumeSource(secret_name='pods-certs')
     volumes.append(client.V1Volume(name='certs', secret = secret_volume))
@@ -99,9 +110,9 @@ def start_neo4j_pod(pod, revision: int):
             "NEO4J_apoc_export_file_enabled": "true",
             # Create users here with env and apoc. Different format than Neo4J. Kinda borked, might change. github.com/neo4j-contrib/neo4j-apoc-procedures/issues/2120
             # Pods admin user
-            "apoc.initializer.system.1": f"CREATE USER {password.admin_username} SET PLAINTEXT PASSWORD '{password.admin_password}' SET PASSWORD CHANGE NOT REQUIRED",
+            "apoc.initializer.system.1": f"CREATE USER {password.admin_username} IF NOT EXISTS SET PLAINTEXT PASSWORD '{password.admin_password}' SET PASSWORD CHANGE NOT REQUIRED",
             # Users user
-            "apoc.initializer.system.2": f"CREATE USER {password.user_username} SET PLAINTEXT PASSWORD '{password.user_password}' SET PASSWORD CHANGE NOT REQUIRED"
+            "apoc.initializer.system.2": f"CREATE USER {password.user_username} IF NOT EXISTS SET PLAINTEXT PASSWORD '{password.user_password}' SET PASSWORD CHANGE NOT REQUIRED"
         },
         "mounts": [volumes, volume_mounts],
         "mem_request": pod.resources.get("mem_request"),
