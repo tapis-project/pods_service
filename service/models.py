@@ -111,11 +111,11 @@ class Pod(TapisModel, table=True, validate=True):
     data_requests: List[str] = Field([], description = "Requested pod names.", sa_column=Column(ARRAY(String)))
     roles_required: List[str] = Field([], description = "Roles required to view this pod.", sa_column=Column(ARRAY(String)))
     status_requested: str = Field("ON", description = "Status requested by user, ON or OFF.")
-    persistent_volume: Dict[str, str] = Field({}, description = "Key: Volume name. Value: List of strs specifying volume folders/files to mount in pod", sa_column=Column(JSON))
+    persistent_volume: Dict[str, list] = Field({}, description = "Key: Volume name. Value: List of strs specifying volume folders/files to mount in pod", sa_column=Column(JSON))
     time_to_stop_default: int = Field(43200, description = "Default time (sec) for pod to run from instance start. -1 for unlimited. 12 hour default.")
     time_to_stop_instance: int | None = Field(None, description = "Time (sec) for pod to run from instance start. Reset each time instance is started. -1 for unlimited. None uses default.")
     networking: Dict[str, Networking] = Field({"default": {"protocol": "http", "port": 5000}}, description = "Networking information. {'url_suffix': {'protocol': 'http'  'tcp', 'port': int}/}", sa_column=Column(JSON))
-    resources: Resources = Field({}, description = "Pod reesource management", sa_column=Column(JSON))
+    resources: Resources = Field({}, description = "Pod resource management", sa_column=Column(JSON))
 
     # Provided
     time_to_stop_ts: datetime | None = Field(None, description = "Time (UTC) that this pod is scheduled to be stopped. Change with time_to_stop_instance.")
@@ -202,6 +202,12 @@ class Pod(TapisModel, table=True, validate=True):
     def check_pod_template(cls, v):
         templates = ["neo4j", "postgres"]
         custom_allow_list = conf.image_allow_list or []
+
+        #templates/neo4j
+        #tuyamei/xx:ANY
+        #postgres:ANY
+        # config -> health -> update service db
+        # api -> special role -> update "tenant" db
 
         if v.startswith("custom-"):
             if v.replace("custom-", "") not in custom_allow_list:
