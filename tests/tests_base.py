@@ -1,7 +1,6 @@
 import os
 import sys
 
-#from service.api_pods_podid import delete_pod
 # Allows us to import actor's modules.
 sys.path.append('/home/tapis/service')
 

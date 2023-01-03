@@ -80,6 +80,15 @@ def run_migrations_online():
     and associate a connection with the context.
 
     """
+    # This callback is used to prevent an auto-migration from being generated when
+    # there are no changes to the schema https://stackoverflow.com/questions/70203927
+    def process_revision_directives(context, revision, directives):
+        if config.cmd_opts.autogenerate:
+            script = directives[0]
+            if script.upgrade_ops.is_empty():
+                directives[:] = []
+                print('No changes in schema detected.')
+
     # Create transactions/connections here so we can rollback/close later.
     connections = []
     transactions = []
@@ -111,6 +120,7 @@ def run_migrations_online():
                 upgrade_token=f"upgrade_alltenants",
                 downgrade_token=f"downgrade_alltenants",
                 target_metadata=target_metadata,
+                process_revision_directives=process_revision_directives
             )
             context.run_migrations(engine_name=name)
 
