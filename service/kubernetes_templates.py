@@ -86,7 +86,7 @@ def start_neo4j_pod(pod, revision: int):
     container = {
         "name": pod.k8_name,
         "revision": revision,
-        "image": "neo4j:4.4",
+        "image": "notchristiangarcia/neo4j:4.4",
         "command": [
             '/bin/bash',
             '-c',
@@ -98,7 +98,7 @@ def start_neo4j_pod(pod, revision: int):
             "bolt": 7687
         },
         "environment": {
-            "NEO4JLABS_PLUGINS": '["apoc", "n10s"]',
+            #"NEO4JLABS_PLUGINS": '["apoc", "n10s"]', # not needed with custom notchristiangarcia/neo4j image
             "NEO4J_dbms_ssl_policy_bolt_enabled": "true",
             "NEO4J_dbms_ssl_policy_bolt_base__directory": "/certificates/bolt", # Can't mount anything to /var/lib/neo4j. Neo4j attempts chown, read-only. So change dir.
             "NEO4J_dbms_ssl_policy_bolt_private__key": "tls.key",
