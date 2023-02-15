@@ -29,7 +29,7 @@ jobs:
       - name: Get tag name from branch. SED removes `release-`, replaces `prod` with `prod, tapis/pods-api:latest`.
         id: get_tag_name
         shell: bash
-        run: echo "tag_name=$(echo ${GITHUB_REF#refs/heads/} | sed 's/prod/prod, tapis\/pods-api:latest/g' | sed 's/release-//g') >> $GITHUB_OUTPUT"
+        run: echo "tag_name=$(echo ${GITHUB_REF#refs/heads/} | sed 's/prod/prod, tapis\/pods-api:latest/g' | sed 's/release-//g')" >> $GITHUB_OUTPUT
         
       - name: Checkout repo
         uses: actions/checkout@v3
