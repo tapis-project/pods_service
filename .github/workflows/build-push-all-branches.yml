@@ -6,17 +6,18 @@
 # and `DOCKERHUB_TOKEN`.
 # The action pulls the repo and builds the tapis/pods-api image and uses branch name as the
 # docker tag. In instance of `release-1.2.0`, sed will delete `release-`, leaving `1.2.0`.
+# If branch = prod, tag becomes `prod, tapis/pods-api:latest` so prod and latest are built.
 #
 # NOVEMBER 29th:
 #   DOCKERHUB_USERNAME: username for cgarcia
 #   DOCKERHUB_TOKEN: token for cgarcia
 
-name: Build & Push - develop, stage, release-*
+name: Build & Push - All Branches
 on:
   push:
-    branches: [ dev, stage, release-* ]
+    branches: [ dev, stage, prod, release-* ]
   pull_request:
-    branches: [ dev, stage, release-* ]
+    branches: [ dev, stage, prod, release-* ]
   workflow_dispatch:
     environment: docker
 
@@ -27,7 +28,7 @@ jobs:
     steps:
       - name: Get tag name from branch. SED removes `release-` if in branch name
         shell: bash
-        run: echo "##[set-output name=tag_name;]$(echo ${GITHUB_REF#refs/heads/} | sed 's/release-//g')"
+        run: echo "##[set-output name=tag_name;]$(echo ${GITHUB_REF#refs/heads/} | sed 's/prod/prod, tapis\/pods-api:latest/g' | sed 's/release-//g') "
         id: get_tag_name
 
       - name: Checkout repo
