@@ -1,0 +1,49 @@
+### Set Up by: Christian Garcia (TACC)
+### Release-* methodology originally authored by Nathan Freeman (TACC) here:
+### https://github.com/tapis-project/tapis-workflows/blob/prod/.github/workflows/ci.yml#L59
+# Description. This Github action runs when there are new commits to dev, stage, or release-*.
+# The action logs into Docker with the Github action environment secrets `DOCKERHUB_USERNAME`
+# and `DOCKERHUB_TOKEN`.
+# The action pulls the repo and builds the tapis/pods-api image and uses branch name as the
+# docker tag. In instance of `release-1.2.0`, sed will delete `release-`, leaving `1.2.0`.
+#
+# NOVEMBER 29th:
+#   DOCKERHUB_USERNAME: username for cgarcia
+#   DOCKERHUB_TOKEN: token for cgarcia
+
+name: Build & Push - develop, stage, release-*
+on:
+  push:
+    branches: [ dev, stage, release-* ]
+  pull_request:
+    branches: [ dev, stage, release-* ]
+  workflow_dispatch:
+    environment: docker
+
+jobs:
+  build-and-push-images:
+    runs-on: ubuntu-latest
+    environment: docker
+    steps:
+      - name: Get tag name from branch. SED removes `release-` if in branch name
+        shell: bash
+        run: echo "##[set-output name=tag_name;]$(echo ${GITHUB_REF#refs/heads/} | sed 's/release-//g')"
+        id: get_tag_name
+
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Log in to Docker
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+        
+      - name: Build & push tagged Docker backend image
+        uses: docker/build-push-action@v3
+        with:
+          push: true
+          tags: tapis/pods-api:${{ steps.get_tag_name.outputs.tag_name }}
