@@ -26,11 +26,11 @@ jobs:
     runs-on: ubuntu-latest
     environment: docker
     steps:
-      - name: Get tag name from branch. SED removes `release-` if in branch name
-        shell: bash
-        run: echo "##[set-output name=tag_name;]$(echo ${GITHUB_REF#refs/heads/} | sed 's/prod/prod, tapis\/pods-api:latest/g' | sed 's/release-//g') "
+      - name: Get tag name from branch. SED removes `release-`, replaces `prod` with `prod, tapis/pods-api:latest`.
         id: get_tag_name
-
+        shell: bash
+        run: echo "tag_name=$(echo ${GITHUB_REF#refs/heads/} | sed 's/prod/prod, tapis\/pods-api:latest/g' | sed 's/release-//g') >> $GITHUB_OUTPUT"
+        
       - name: Checkout repo
         uses: actions/checkout@v3
 
