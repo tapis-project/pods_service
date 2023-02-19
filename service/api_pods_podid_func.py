@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from models import Pod, NewPod, UpdatePod, Password, SetPermission, DeletePermission, PodResponse, PodPermissionsResponse, PodCredentialsResponse, PodLogsResponse
+from models_pods import Pod, NewPod, UpdatePod, Password, SetPermission, DeletePermission, PodResponse, PodPermissionsResponse, PodCredentialsResponse, PodLogsResponse
 from channels import CommandChannel
 from codes import OFF, ON, RESTART, REQUESTED, STOPPED
 from tapisservice.tapisfastapi.utils import g, ok
@@ -217,9 +217,10 @@ async def start_pod(pod_id):
 
         # Send command to start new pod
         ch = CommandChannel(name=pod.site_id)
-        ch.put_cmd(pod_id=pod.pod_id,
-                    tenant_id=pod.tenant_id,
-                    site_id=pod.site_id)
+        ch.put_cmd(object_id=pod.pod_id,
+                   object_type="pod",
+                   tenant_id=pod.tenant_id,
+                   site_id=pod.site_id)
         ch.close()
         logger.debug(f"Command Channel - Added msg for pod_id: {pod.pod_id}.")
 

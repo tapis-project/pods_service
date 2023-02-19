@@ -23,6 +23,7 @@ from sqlalchemy.inspection import inspect
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlmodel import Field, Session, SQLModel, select, JSON, Column, String
 from models_base import TapisModel, TapisApiModel
+from models_misc import PermissionsModel, CredentialsModel, LogsModel
 
 
 class Networking(TapisModel):
@@ -350,7 +351,7 @@ class NewPod(TapisApiModel):
     persistent_volume: Dict = Field({}, description = "Key: Volume name. Value: List of strs specifying volume folders/files to mount in pod", sa_column=Column(JSON))
     time_to_stop_default: int = Field(43200, description = "Default time (sec) for pod to run from instance start. -1 for unlimited. 12 hour default.")
     time_to_stop_instance: int | None = Field(None, description = "Time (sec) for pod to run from instance start. Reset each time instance is started. -1 for unlimited. 12 hour default.")
-    resources: Resources = Field({}, description = "Pod reesource management", sa_column=Column(JSON))
+    resources: Resources = Field({}, description = "Pod resource management", sa_column=Column(JSON))
 
 
 class UpdatePod(TapisApiModel):
@@ -369,7 +370,7 @@ class UpdatePod(TapisApiModel):
     roles_required: List[str] = Field([], description = "Roles required to view this pod")
     persistent_volume: Dict = Field({}, description = "Key: Volume name. Value: List of strs specifying volume folders/files to mount in pod", sa_column=Column(JSON))
     time_to_stop_instance: int | None = Field(None, description = "Time (sec) for pod to run from instance start. Reset each time instance is started. -1 for unlimited. 12 hour default.")
-    resources: Resources = Field({}, description = "Pod reesource management", sa_column=Column(JSON))
+    resources: Resources = Field({}, description = "Pod resource management", sa_column=Column(JSON))
 
 
 class PodResponseModel(TapisApiModel):
@@ -393,7 +394,7 @@ class PodResponseModel(TapisApiModel):
     time_to_stop_default: int = Field(43200, description = "Default time (sec) for pod to run from instance start. -1 for unlimited. 12 hour default.")
     time_to_stop_instance: int | None = Field(None, description = "Time (sec) for pod to run from instance start. Reset each time instance is started. -1 for unlimited. 12 hour default.")
     time_to_stop_ts: datetime | None = Field(None, description = "Time (UTC) that this pod is scheduled to be stopped. Change with time_to_stop_instance.")
-    resources: Resources = Field({}, description = "Pod reesource management", sa_column=Column(JSON))
+    resources: Resources = Field({}, description = "Pod resource management", sa_column=Column(JSON))
 
 
 class Password(TapisModel, table=True, validate=True):
@@ -478,10 +479,6 @@ class DeletePodResponse(TapisApiModel):
     version: str
 
 
-class PermissionsModel(TapisApiModel):
-    permissions: List[str] = Field([], description = "Pod permissions for each user.")
-
-
 class PodPermissionsResponse(TapisApiModel):
     message: str
     metadata: Dict
@@ -490,21 +487,12 @@ class PodPermissionsResponse(TapisApiModel):
     version: str
 
 
-class LogsModel(TapisApiModel):
-    logs: str = Field("", description = "Logs from kubernetes pods, useful for debugging and reading results.")
-
-
 class PodLogsResponse(TapisApiModel):
     message: str
     metadata: Dict
     result: LogsModel
     status: str
     version: str
-
-
-class CredentialsModel(TapisApiModel):
-    user_username: str
-    user_password: str
 
 
 class PodCredentialsResponse(TapisApiModel):

@@ -3,7 +3,7 @@ from fastapi.responses import JSONResponse
 from tapisservice.errors import BaseTapisError
 from tapisservice.tapisfastapi.utils import g, ok, error
 from kubernetes_utils import get_traefik_configmap
-from models import TapisApiModel
+from models_pods import TapisApiModel
 import yaml
 
 router = APIRouter()

@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from models import Pod, NewPod, Password, PodsResponse, PodResponse
+from models_pods import Pod, NewPod, Password, PodsResponse, PodResponse
 from channels import CommandChannel
 from tapisservice.tapisfastapi.utils import g, ok
 from codes import REQUESTED, ON
@@ -73,7 +73,8 @@ async def create_pod(new_pod: NewPod):
 
         # Send command to start new pod
         ch = CommandChannel(name=pod.site_id)
-        ch.put_cmd(pod_id=pod.pod_id,
+        ch.put_cmd(object_id=pod.pod_id,
+                   object_type="pod",
                    tenant_id=pod.tenant_id,
                    site_id=pod.site_id)
         ch.close()

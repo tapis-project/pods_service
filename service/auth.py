@@ -16,7 +16,7 @@ from tapisservice.config import conf
 logger = get_logger(__name__)
 
 from errors import ResourceError, PermissionsException
-from models import Pod
+from models_pods import Pod
 
 
 TOKEN_RE = re.compile('Bearer (.+)')

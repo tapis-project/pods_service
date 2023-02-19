@@ -19,7 +19,7 @@ from codes import RUNNING, CREATING_CONTAINER
 from stores import SITE_TENANT_DICT
 from stores import pg_store
 from sqlmodel import select
-from models import Pod
+from models_pods import Pod
 
 # k8 client creation
 config.load_incluster_config()

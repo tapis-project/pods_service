@@ -37,11 +37,11 @@ import random
 from datetime import datetime, timedelta
 from channels import CommandChannel
 from kubernetes import client, config
-from kubernetes_utils import get_current_k8_services, get_current_k8_pods, rm_container, \
+from kubernetes_utils import get_current_k8_services, get_current_k8_pods, rm_container, rm_pvc, \
     get_current_k8_pods, rm_service, KubernetesError, update_traefik_configmap, get_k8_logs
 from codes import RUNNING, SHUTTING_DOWN, STOPPED, ERROR, REQUESTED, COMPLETE, RESTART, ON, OFF
 from stores import pg_store, SITE_TENANT_DICT
-from models import Pod #, ExportedData
+from models_pods import Pod #, ExportedData
 from sqlmodel import select
 from tapisservice.config import conf
 from tapisservice.logs import get_logger
@@ -71,10 +71,21 @@ def rm_pod(k8_name):
 
     return container_exists, service_exists
 
+def rm_volume(k8_name):
+    volume_exists = True
+    try:
+        rm_pvc(k8_name)
+    except KubernetesError:
+        # volume not found
+        volume_exists = False
+        pass
+
+    return volume_exists
+
 def graceful_rm_pod(pod):
     """
     This is async. Commands run, but deletion takes some time.
-    Needs to delete pod, delete service, and change caddy to "offline" response.
+    Needs to delete pod, delete service, and change traefik to "offline" response.
     TODO Set status to shutting down. Something else will put into "STOPPED".
     """
     logger.info(f"Top of shutdown pod for pod: {pod.k8_name}")
@@ -84,6 +95,20 @@ def graceful_rm_pod(pod):
     logger.debug(f"spawner has updated pod status to SHUTTING_DOWN")
 
     return rm_pod(pod.k8_name)
+
+def graceful_rm_volume(volume):
+    """
+    This is async. Commands run, but deletion takes some time.
+    Needs to delete volume, delete volume, and change traefik to "offline" response.
+    TODO Set status to shutting down. Something else will put into "STOPPED".
+    """
+    logger.info(f"Top of shutdown volume for volume: {volume.k8_name}")
+    # Change pod status to SHUTTING DOWN
+    volume.status = SHUTTING_DOWN
+    volume.db_update()
+    logger.debug(f"spawner has updated volume status to SHUTTING_DOWN")
+
+    return rm_volume(volume.k8_name)
 
 def check_k8_pods(k8_pods):
     # This is all for only the site specified in conf.site_id.
@@ -255,9 +280,10 @@ def check_db_pods(k8_pods):
 
             # Send command to start new pod
             ch = CommandChannel(name=pod.site_id)
-            ch.put_cmd(pod_id=pod.pod_id,
-                    tenant_id=pod.tenant_id,
-                    site_id=pod.site_id)
+            ch.put_cmd(object_id=pod.pod_id,
+                       object_type="pod",
+                       tenant_id=pod.tenant_id,
+                       site_id=pod.site_id)
             ch.close()
             logger.debug(f"Command Channel - Added msg for pod_id: {pod.pod_id}.")
 

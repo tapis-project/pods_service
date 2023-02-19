@@ -1,6 +1,6 @@
 from codes import ERROR, SPAWNER_SETUP, CREATING_CONTAINER, \
     REQUESTED, SHUTTING_DOWN
-from models import Pod, Password
+from models_pods import Pod, Password
 from kubernetes_utils import create_pod, create_service, create_pvc, KubernetesError
 from kubernetes import client, config
 
