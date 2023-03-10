@@ -25,7 +25,7 @@ async def get_pods():
     """
     logger.info("GET /pods - Top of get_pods.")
 
-    # TODO .display(), search, permissions
+    # TODO search
     pods =  Pod.db_get_all_with_permission(user=g.username, level='READ', tenant=g.request_tenant_id, site=g.site_id)
 
     pods_to_show = []

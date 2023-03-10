@@ -25,7 +25,7 @@ spec:
             cpu: "3"
             memory: "3G"
         env:
-        - name: pods-component
+        - name: PODS_COMPONENT
           value: health
         - name: SERVICE_PASSWORD
           valueFrom:

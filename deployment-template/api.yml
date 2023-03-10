@@ -31,7 +31,7 @@ spec:
 #DEV        - name: jupyter
 #DEV          containerPort: 8888
         env:
-        - name: pods-component
+        - name: PODS_COMPONENT
           value: api
         - name: SERVICE_PASSWORD
           valueFrom:
