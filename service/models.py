@@ -201,7 +201,7 @@ class Pod(TapisModel, table=True, validate=True):
     @validator('pod_template')
     def check_pod_template(cls, v):
         templates = ["neo4j", "postgres"]
-        custom_allow_list = conf.image_allow_list or []
+        custom_allow_list = conf.get('image_allow_list') or []
 
         #templates/neo4j
         #tuyamei/xx:ANY
