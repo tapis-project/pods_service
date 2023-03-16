@@ -6,7 +6,7 @@
 # and `DOCKERHUB_TOKEN`.
 # The action pulls the repo and builds the tapis/pods-api image and uses branch name as the
 # docker tag. In instance of `release-1.2.0`, sed will delete `release-`, leaving `1.2.0`.
-# If branch = prod, tag becomes `prod, tapis/pods-api:latest` so prod and latest are built.
+# If branch = prod, tag becomes `latest` so latest is built.
 #
 # NOVEMBER 29th:
 #   DOCKERHUB_USERNAME: username for cgarcia
@@ -15,9 +15,9 @@
 name: Build & Push - All Branches
 on:
   push:
-    branches: [ dev, stage, prod, release-* ]
+    branches: [ dev, staging, prod, release-* ]
   pull_request:
-    branches: [ dev, stage, prod, release-* ]
+    branches: [ dev, staging, prod, release-* ]
   workflow_dispatch:
     environment: docker
 
@@ -26,10 +26,10 @@ jobs:
     runs-on: ubuntu-latest
     environment: docker
     steps:
-      - name: Get tag name from branch. SED removes `release-`, replaces `prod` with `prod, tapis/pods-api:latest`.
+      - name: Get tag name from branch. SED removes `release-`, replaces `prod` with `latest`.
         id: get_tag_name
         shell: bash
-        run: echo "tag_name=$(echo ${GITHUB_REF#refs/heads/} | sed 's/prod/prod, tapis\/pods-api:latest/g' | sed 's/release-//g')" >> $GITHUB_OUTPUT
+        run: echo "tag_name=$(echo ${GITHUB_REF#refs/heads/} | sed 's/prod/latest/g' | sed 's/release-//g')" >> $GITHUB_OUTPUT
         
       - name: Checkout repo
         uses: actions/checkout@v3
@@ -40,7 +40,7 @@ jobs:
       - name: Log in to Docker
         uses: docker/login-action@v2
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
         
       - name: Build & push tagged Docker backend image

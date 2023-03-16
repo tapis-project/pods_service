@@ -100,6 +100,24 @@ class Resources(TapisModel):
         return values
 
 
+class VolumeMount(TapisModel):
+    type: str =  Field(..., description = "Type of volume to attach.")
+    mount_path: str = Field(..., description = "Path to mount volume to.")
+    sub_path: str = Field(..., description = "Path to mount volume to.")
+
+    @validator('type')
+    def check_type(cls, v):
+        v = v.lower()
+        valid_types = ['tapisvolume', 'pvc']
+        if v not in valid_types:
+            raise ValueError(f"volumemount.type must be one of the following: {valid_types}.")
+        return v
+
+    @validator('sub_path')
+    def check_sub_path(cls, v):
+        return v
+
+
 class Pod(TapisModel, table=True, validate=True):
     # Required
     pod_id: str = Field(..., description = "Name of this pod.", primary_key = True)
@@ -112,7 +130,7 @@ class Pod(TapisModel, table=True, validate=True):
     data_requests: List[str] = Field([], description = "Requested pod names.", sa_column=Column(ARRAY(String)))
     roles_required: List[str] = Field([], description = "Roles required to view this pod.", sa_column=Column(ARRAY(String)))
     status_requested: str = Field("ON", description = "Status requested by user, ON or OFF.")
-    persistent_volume: Dict[str, list] = Field({}, description = "Key: Volume name. Value: List of strs specifying volume folders/files to mount in pod", sa_column=Column(JSON))
+    volume_mounts: Dict[str, VolumeMount] = Field({}, description = "Key: Volume name. Value: List of strs specifying volume folders/files to mount in pod", sa_column=Column(JSON))
     time_to_stop_default: int = Field(43200, description = "Default time (sec) for pod to run from instance start. -1 for unlimited. 12 hour default.")
     time_to_stop_instance: int | None = Field(None, description = "Time (sec) for pod to run from instance start. Reset each time instance is started. -1 for unlimited. None uses default.")
     networking: Dict[str, Networking] = Field({"default": {"protocol": "http", "port": 5000}}, description = "Networking information. {'url_suffix': {'protocol': 'http'  'tcp', 'port': int}/}", sa_column=Column(JSON))
@@ -181,21 +199,19 @@ class Pod(TapisModel, table=True, validate=True):
                     raise TypeError(f"environment_variable val must be str. Got {type(env_val).__name__}.")
         return v
 
-    @validator('persistent_volume')
-    def check_persistent_volume(cls, v):
+    @validator('volume_mounts')
+    def check_volume_mounts(cls, v):
         if v:
             if not isinstance(v, dict):
-                raise TypeError(f"persistent_volume must be dict. Got {type(v).__name__}.")
+                raise TypeError(f"volume_mounts must be dict. Got {type(v).__name__}.")
             for vol_name, vol_mounts in v.items():
                 if not isinstance(vol_name, str):
-                    raise TypeError(f"persistent_volume key must be str. Got {type(vol_name).__name__}.")
-                if not isinstance(vol_mounts, list):
-                    raise TypeError(f"persistent_volume val must be list. Got {type(vol_mounts).__name__}.")
+                    raise TypeError(f"volume_mounts key must be str. Got {type(vol_name).__name__}.")
                 if not vol_mounts:
-                    raise ValueError(f"persistent_volume val must be list of str specifying path to mount, got empty list. Got {type(vol_mounts).__name__}.")
-                for mount in vol_mounts:
-                    if not isinstance(mount, str):
-                        raise TypeError(f"persistent_volume mount list must consists of only str. Got {type(vol_mounts).__name__}.")
+                    raise ValueError(f"volume_mounts val must exist")
+                vol_name_regex = re.fullmatch(r'[a-z][a-z0-9]+', vol_name)
+                if not vol_name_regex:
+                    raise ValueError(f"volume_mounts key must be lowercase alphanumeric. First character must be alpha.")
         return v
 
 
@@ -324,7 +340,7 @@ class Pod(TapisModel, table=True, validate=True):
             permission_list.append(f"{user}:{authed_level}")
 
         # Create statement
-        stmt = select(Pod).where(Pod.permissions.overlap(permission_list))   
+        stmt = select(Pod).where(Pod.permissions.overlap(permission_list))
 
         # Run command
         results = store.run("execute", stmt, scalars=True, all=True)
@@ -348,7 +364,7 @@ class NewPod(TapisApiModel):
     environment_variables: Dict = Field({}, description = "Environment variables to inject into k8 pod; Only for custom pods.", sa_column=Column(JSON))
     data_requests: List[str] = Field([], description = "Requested pod names.")
     roles_required: List[str] = Field([], description = "Roles required to view this pod")
-    persistent_volume: Dict = Field({}, description = "Key: Volume name. Value: List of strs specifying volume folders/files to mount in pod", sa_column=Column(JSON))
+    volume_mounts: Dict[str, VolumeMount] = Field({}, description = "Key: Volume name. Value: List of strs specifying volume folders/files to mount in pod", sa_column=Column(JSON))
     time_to_stop_default: int = Field(43200, description = "Default time (sec) for pod to run from instance start. -1 for unlimited. 12 hour default.")
     time_to_stop_instance: int | None = Field(None, description = "Time (sec) for pod to run from instance start. Reset each time instance is started. -1 for unlimited. 12 hour default.")
     resources: Resources = Field({}, description = "Pod resource management", sa_column=Column(JSON))
@@ -368,7 +384,7 @@ class UpdatePod(TapisApiModel):
     networking: Dict[str, Networking] = Field({"default": {"protocol": "http", "port": 5000}}, description = "Networking information. {'url_suffix': {'protocol': 'http'  'tcp', 'port': int}/}", sa_column=Column(JSON))
     data_requests: List[str] = Field([], description = "Requested pod names.")
     roles_required: List[str] = Field([], description = "Roles required to view this pod")
-    persistent_volume: Dict = Field({}, description = "Key: Volume name. Value: List of strs specifying volume folders/files to mount in pod", sa_column=Column(JSON))
+    volume_mounts: Dict[str, VolumeMount] = Field({}, description = "Key: Volume name. Value: List of strs specifying volume folders/files to mount in pod", sa_column=Column(JSON))
     time_to_stop_instance: int | None = Field(None, description = "Time (sec) for pod to run from instance start. Reset each time instance is started. -1 for unlimited. 12 hour default.")
     resources: Resources = Field({}, description = "Pod resource management", sa_column=Column(JSON))
 
@@ -390,7 +406,7 @@ class PodResponseModel(TapisApiModel):
     creation_ts: datetime | None = Field(None, description = "Time (UTC) that this node was created.")
     update_ts: datetime | None = Field(None, description = "Time (UTC) that this node was updated.")
     start_instance_ts: datetime | None = Field(None, description = "Time (UTC) that this pod instance was started.")
-    persistent_volume: Dict = Field({}, description = "Key: Volume name. Value: List of strs specifying volume folders/files to mount in pod", sa_column=Column(JSON))
+    volume_mounts: Dict[str, VolumeMount] = Field({}, description = "Key: Volume name. Value: List of strs specifying volume folders/files to mount in pod", sa_column=Column(JSON))
     time_to_stop_default: int = Field(43200, description = "Default time (sec) for pod to run from instance start. -1 for unlimited. 12 hour default.")
     time_to_stop_instance: int | None = Field(None, description = "Time (sec) for pod to run from instance start. Reset each time instance is started. -1 for unlimited. 12 hour default.")
     time_to_stop_ts: datetime | None = Field(None, description = "Time (UTC) that this pod is scheduled to be stopped. Change with time_to_stop_instance.")
@@ -431,28 +447,6 @@ class Password(TapisModel, table=True, validate=True):
     def set_user_username(cls, values):
         values['user_username'] = values.get('pod_id')
         return values
-
-
-class SetPermission(TapisApiModel):
-    """
-    Object with fields that users are allowed to specify for the Pod class.
-    """
-    # Required
-    user: str = Field(..., description = "User to modify permissions for.")
-    level: str = Field(..., description = "Permission level to give the user.")
-
-    @validator('level')
-    def check_level(cls, v):
-        if v not in PERMISSION_LEVELS:
-            raise ValueError(f"level must be in {PERMISSION_LEVELS}")
-        return v
-
-class DeletePermission(TapisApiModel):
-    """
-    Object with fields that users are allowed to specify for the Pod class.
-    """
-    # Required
-    user: str = Field(..., description = "User to delete permissions from.")
 
 
 class PodResponse(TapisApiModel):
