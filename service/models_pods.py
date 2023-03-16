@@ -2,7 +2,7 @@ from asyncio import protocols
 import http
 import re
 from sre_constants import ANY
-from string import ascii_letters, digits
+from string import ascii_letters, digits, ascii_lowercase, ascii_uppercase, hexdigits
 from secrets import choice
 from datetime import datetime
 from typing import List, Dict, Literal, Any, Set
@@ -263,6 +263,16 @@ class Pod(TapisModel, table=True, validate=True):
                     raise ValueError(f"networking key must be lowercase alphanumeric. Default if 'default'.")
                 if len(env_key) > 64 or len(env_key) < 3:
                     raise ValueError(f"networking key length must be between 3-64 characters. Inputted length: {len(v)}")
+        return v
+
+    @validator('description')
+    def check_description(cls, v):
+        # ensure description is all ascii
+        if not v.isascii():
+            raise ValueError(f"description field may only contain ASCII characters.")            
+        # make sure description < 255 characters
+        if len(v) > 255:
+            raise ValueError(f"description field must be less than 255 characters. Inputted length: {len(v)}")
         return v
 
     @root_validator(pre=False)
