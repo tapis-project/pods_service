@@ -248,20 +248,15 @@ class Pod(TapisModel, table=True, validate=True):
                     raise ValueError(f"networking key length must be between 3-64 characters. Inputted length: {len(v)}")
         return v
 
-
     @validator('description')
     def check_description(cls, v):
-        # make sure only regular characters used 
-        r = list(ascii_lowercase + ascii_uppercase + hexdigits + '!.?@#')
-        spaceless_v = "".join(v.split())
-        for character in spaceless_v:
-            if character not in r:
-                raise ValueError(f"description field must only contain alphanumeric values or the following special characters: !.?@#")
+        # ensure description is all ascii
+        if not v.isascii():
+            raise ValueError(f"description field may only contain ASCII characters.")            
         # make sure description < 255 characters
         if len(v) > 255:
             raise ValueError(f"description field must be less than 255 characters. Inputted length: {len(v)}")
         return v
-
 
     @root_validator(pre=False)
     def set_networking(cls, values):
