@@ -252,7 +252,7 @@ class Pod(TapisModel, table=True, validate=True):
     @validator('description')
     def check_description(cls, v):
         # make sure only regular characters used 
-        r = list(string.ascii_lowercase + string.ascii_uppercase + string.hexdigits + '!.?@#')
+        r = list(ascii_lowercase + ascii_uppercase + hexdigits + '!.?@#')
         spaceless_v = "".join(v.split())
         for character in spaceless_v:
             if character not in r:
