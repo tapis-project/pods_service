@@ -2,7 +2,7 @@ from asyncio import protocols
 import http
 import re
 from sre_constants import ANY
-from string import ascii_letters, digits
+from string import ascii_letters, digits, ascii_lowercase, ascii_uppercase, hexdigits
 from secrets import choice
 from datetime import datetime
 from typing import List, Dict, Literal, Any, Set
@@ -259,7 +259,7 @@ class Pod(TapisModel, table=True, validate=True):
                 raise ValueError(f"description field must only contain alphanumeric values or the following special characters: !.?@#")
         # make sure description < 255 characters
         if len(v) > 255:
-            raise ValueError(f"description field must be less than 255 characters.")
+            raise ValueError(f"description field must be less than 255 characters. Inputted length: {len(v)}")
         return v
 
 
