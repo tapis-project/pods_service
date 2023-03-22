@@ -40,7 +40,7 @@ class KubernetesStopContainerError(KubernetesError):
     pass
 
 
-def get_kubernetes_namespace():
+def get_kubernetes_namespaces():
     """
     Attempt to get namespace from filesystem
     Should be in file /var/run/secrets/kubernetes.io/serviceaccount/namespace
@@ -49,6 +49,8 @@ def get_kubernetes_namespace():
     config should usually be empty.
     """
     namespace = conf.get("kubernetes_namespace", None)
+    deploy_namespace = conf.get("kubernetes_deploy_namespace", None)
+
     if not namespace:
         try:
             logger.debug("Attempting to get kubernetes_namespace from file.")
@@ -59,14 +61,18 @@ def get_kubernetes_namespace():
             logger.debug(f"Couldn't grab kubernetes namespace from filesystem. e: {e}")
         
     if not namespace:
-        msg = "In get_kubernetes_namespace(). Failed to get namespace."
+        msg = "In get_kubernetes_namespaces(). Failed to get namespace."
         logger.debug(msg)
         raise KubernetesError(msg)
-    logger.debug(f"In get_kubernetes_namespace(). Got namespace: {namespace}.")
-    return namespace
+    
+    if not deploy_namespace:
+        deploy_namespace = namespace
+
+    logger.debug(f"In get_kubernetes_namespaces(). Got namespace: {namespace}, deploy_namespace: {deploy_namespace}")
+    return namespace, deploy_namespace
 
 # Get k8 namespace for future use.
-NAMESPACE = get_kubernetes_namespace()
+NAMESPACE, DEPLOY_NAMESPACE = get_kubernetes_namespaces()
 
 def rm_container(k8_name):
     """
@@ -75,7 +81,7 @@ def rm_container(k8_name):
     :return:
     """    
     try:
-        k8.delete_namespaced_pod(name=k8_name, namespace=NAMESPACE)
+        k8.delete_namespaced_pod(name=k8_name, namespace=DEPLOY_NAMESPACE)
     except Exception as e:
         logger.info(f"Got exception trying to remove pod: {k8_name}. Exception: {e}")
         raise KubernetesError(f"Error removing pod {k8_name}, exception: {str(e)}")
@@ -88,7 +94,7 @@ def rm_service(service_name):
     :return:
     """    
     try:
-        k8.delete_namespaced_service(name=service_name, namespace=NAMESPACE)
+        k8.delete_namespaced_service(name=service_name, namespace=DEPLOY_NAMESPACE)
     except Exception as e:
         logger.info(f"Got exception trying to remove service: {service_name}. Exception: {e}")
         raise KubernetesError(f"Error removing service {service_name}, exception: {str(e)}")
@@ -101,7 +107,7 @@ def rm_pvc(pvc_name):
     :return:
     """    
     try:
-        k8.delete_namespaced_persistent_volume_claim(name=pvc_name, namespace=NAMESPACE)
+        k8.delete_namespaced_persistent_volume_claim(name=pvc_name, namespace=DEPLOY_NAMESPACE)
     except Exception as e:
         logger.info(f"Got exception trying to remove pvc: {pvc_name}. Exception: {e}")
         raise KubernetesError(f"Error removing pvc {pvc_name}, exception: {str(e)}")
@@ -109,12 +115,12 @@ def rm_pvc(pvc_name):
 
 def list_all_containers():
     """Returns a list of all containers in a particular namespace """
-    pods = k8.list_namespaced_pod(NAMESPACE).items
+    pods = k8.list_namespaced_pod(DEPLOY_NAMESPACE).items
     return pods
 
 def list_all_services():
     """Returns a list of all containers in a particular namespace """
-    services = k8.list_namespaced_service(NAMESPACE).items
+    services = k8.list_namespaced_service(DEPLOY_NAMESPACE).items
     return services
 
 def get_current_k8_pods(service_name: str = "pods", site_id: str = conf.site_id):
@@ -191,7 +197,7 @@ def get_current_k8_services(service_name: str = "pods", site_id: str = conf.site
 
 def get_k8_logs(name: str):
     try:
-        logs = k8.read_namespaced_pod_log(namespace=NAMESPACE, name=name)
+        logs = k8.read_namespaced_pod_log(namespace=DEPLOY_NAMESPACE, name=name)
         return logs
     except Exception as e:
         return ""
@@ -214,7 +220,7 @@ def container_running(name: str):
     if not name:
         raise KeyError(f"kubernetes_utils.container_running received name: {name}")
     try:
-        if k8.read_namespaced_pod(namespace=NAMESPACE, name=name).status.phase == 'Running':
+        if k8.read_namespaced_pod(namespace=DEPLOY_NAMESPACE, name=name).status.phase == 'Running':
             return True
     except client.ApiException:
         # pod not found
@@ -244,7 +250,7 @@ def stop_container(name: str):
     i = 0
     while i < 10:        
         try:
-            k8.delete_namespaced_pod(namespace=NAMESPACE, name=name)
+            k8.delete_namespaced_pod(namespace=DEPLOY_NAMESPACE, name=name)
             return True
         except client.ApiException:
             # pod not found
@@ -416,7 +422,7 @@ def create_pod(name: str,
             api_version="v1"
         )
         k8_pod = k8.create_namespaced_pod(
-            namespace=NAMESPACE,
+            namespace=DEPLOY_NAMESPACE,
             body=pod_body
         )
     except Exception as e:
@@ -463,7 +469,7 @@ def create_service(name, ports_dict={}):
             api_version="v1"
         )
         k8_service = k8.create_namespaced_service(
-            namespace=NAMESPACE,
+            namespace=DEPLOY_NAMESPACE,
             body=service_body
         )
     except Exception as e:
@@ -494,7 +500,7 @@ def create_pvc(name):
             api_version="v1"
         )
         k8_pvc = k8.create_namespaced_persistent_volume_claim(
-            namespace=NAMESPACE,
+            namespace=DEPLOY_NAMESPACE,
             body=pvc_body
         )
     except Exception as e:
