@@ -1,6 +1,17 @@
 # Change Log
 All notable changes to this project will be documented in this file.
 
+## 1.3.0 - 2023-03-09
+
+### Breaking Changes:
+- Yes.
+
+### New features:
+- Since last changelog, now using Traefik as backend, Postgres workaround, Graphdb workarounds as well.
+
+### Bug fixes:
+- Yes.
+
 
 ## 0.30.4 - 2022-06-09
 
