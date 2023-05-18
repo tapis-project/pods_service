@@ -1,7 +1,7 @@
 from fastapi import APIRouter
-from models_pods import Pod, NewPod, UpdatePod, PodResponse, Password, DeletePodResponse
+from models_pods import Pod, UpdatePod, PodResponse, Password, DeletePodResponse
 from channels import CommandChannel
-from tapisservice.tapisfastapi.utils import g, ok
+from tapisservice.tapisfastapi.utils import g, ok, error
 
 from tapisservice.logs import get_logger
 logger = get_logger(__name__)
@@ -19,7 +19,7 @@ router = APIRouter()
     response_model=PodResponse)
 async def update_pod(pod_id, update_pod: UpdatePod):
     """
-    Update a pod. CURRENTLY WORK IN PROGRESS. BROKEN.
+    Update a pod.
 
     Note:
     - Pod will not be restarted, you must restart the pod for any pod-related changes to proliferate.
@@ -28,15 +28,26 @@ async def update_pod(pod_id, update_pod: UpdatePod):
     """
     logger.info(f"UPDATE /pods/{pod_id} - Top of update_pod.")
 
-    pod = Pod.db_get_DAO(pod_id)
+    pod = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
+    
+    pre_update_pod = pod.copy()
 
-    # Do checks here, ensure pod exists. etc.
+    # Pod existence is already checked above. Now we validate update and update with values that are set.
+    input_data = update_pod.dict(exclude_unset=True)
+    for key, value in input_data.items():
+        setattr(pod, key, value)
 
-    pod = Pod(**update_pod.dict())
-
-    # Do more update things.
-
-    return ok("update_pod - Not yet implemented.")
+    # Only update if there's a change
+    if pod != pre_update_pod:
+        pod.db_update()
+    else:
+        return error(result=pod.display(), msg="Incoming data made no changes to pod. Is incoming data equal to current data?")
+        
+    return ok(
+        result=pod.display(),
+        msg="Pod updated successfully.",
+        metadata={"note":("Pod will require restart when updating command, environment_variables,",
+                          "status_requested, volume_mounts, networking, or resources.")})
 
 
 @router.delete(

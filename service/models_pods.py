@@ -2,12 +2,12 @@ from asyncio import protocols
 import http
 import re
 from sre_constants import ANY
-from string import ascii_letters, digits, ascii_lowercase, ascii_uppercase, hexdigits
+from string import ascii_letters, digits
 from secrets import choice
 from datetime import datetime
-from typing import List, Dict, Literal, Any, Set
+from typing import List, Dict, Literal, Any, Set, Optional
 from wsgiref import validate
-from pydantic import BaseModel, Field, validator, root_validator, conint
+from pydantic import BaseModel, Field, validator, root_validator, create_model
 from codes import PERMISSION_LEVELS, PermissionLevel
 
 from stores import pg_store
@@ -22,8 +22,46 @@ from sqlalchemy import UniqueConstraint
 from sqlalchemy.inspection import inspect
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlmodel import Field, Session, SQLModel, select, JSON, Column, String
+from models_admin import Template
 from models_base import TapisModel, TapisApiModel
 from models_misc import PermissionsModel, CredentialsModel, LogsModel
+from models_volumes import Volume
+from models_snapshots import Snapshot
+
+class Password(TapisModel, table=True, validate=True):
+    # Required
+    pod_id: str = Field(..., description = "Name of this pod.", primary_key = True)
+    # Provided
+    admin_username: str = Field("podsservice", description = "Admin username for pod.")
+    admin_password: str = Field(None, description = "Admin password for pod.")
+    user_username: str = Field(None, description = "User username for pod.")
+    user_password: str = Field(None, description = "User password for pod.")
+    # Provided
+    tenant_id: str = Field(g.request_tenant_id, description = "Tapis tenant used during creation of this password's pod.")
+    site_id: str = Field(g.site_id, description = "Tapis site used during creation of this password's pod.")
+
+    @validator('tenant_id')
+    def check_tenant_id(cls, v):
+        return g.request_tenant_id
+
+    @validator('site_id')
+    def check_site_id(cls, v):
+        return g.site_id
+
+    @validator('admin_password')
+    def add_admin_password(cls, v):
+        password = ''.join(choice(ascii_letters + digits) for i in range(30))
+        return password
+
+    @validator('user_password')
+    def add_user_password(cls, v):
+        password = ''.join(choice(ascii_letters + digits) for i in range(30))
+        return password
+
+    @root_validator(pre=False)
+    def set_user_username(cls, values):
+        values['user_username'] = values.get('pod_id')
+        return values
 
 
 class Networking(TapisModel):
@@ -101,16 +139,20 @@ class Resources(TapisModel):
 
 
 class VolumeMount(TapisModel):
-    type: str =  Field(..., description = "Type of volume to attach.")
-    mount_path: str = Field(..., description = "Path to mount volume to.")
-    sub_path: str = Field(..., description = "Path to mount volume to.")
+    type: str =  Field("", description = "Type of volume to attach.")
+    mount_path: str = Field("/tapis_volume_mount", description = "Path to mount volume to.")
+    sub_path: str = Field("", description = "Path to mount volume to.")
 
     @validator('type')
     def check_type(cls, v):
         v = v.lower()
-        valid_types = ['tapisvolume', 'pvc']
+        valid_types = ['tapisvolume', 'tapissnapshot', 'pvc']
         if v not in valid_types:
             raise ValueError(f"volumemount.type must be one of the following: {valid_types}.")
+        return v
+
+    @validator('mount_path')
+    def check_mount_path(cls, v):
         return v
 
     @validator('sub_path')
@@ -118,7 +160,7 @@ class VolumeMount(TapisModel):
         return v
 
 
-class Pod(TapisModel, table=True, validate=True):
+class PodBase(TapisApiModel):
     # Required
     pod_id: str = Field(..., description = "Name of this pod.", primary_key = True)
     pod_template: str = Field(..., description = "Which pod template to use, or which custom image to run, must be on allowlist.")
@@ -136,11 +178,10 @@ class Pod(TapisModel, table=True, validate=True):
     networking: Dict[str, Networking] = Field({"default": {"protocol": "http", "port": 5000}}, description = "Networking information. {'url_suffix': {'protocol': 'http'  'tcp', 'port': int}/}", sa_column=Column(JSON))
     resources: Resources = Field({}, description = "Pod resource management", sa_column=Column(JSON))
 
+
+class PodBaseRead(PodBase):
     # Provided
     time_to_stop_ts: datetime | None = Field(None, description = "Time (UTC) that this pod is scheduled to be stopped. Change with time_to_stop_instance.")
-    tenant_id: str = Field("", description = "Tapis tenant used during creation of this pod.")
-    site_id: str = Field("", description = "Tapis site used during creation of this pod.")
-    k8_name: str = Field("", description = "Name to use for Kubernetes name.")
     status: str = Field("STOPPED", description = "Current status of pod.")
     status_container: Dict = Field({}, description = "Status of container if exists. Gives phase.", sa_column=Column(JSON))
     data_attached: List[str] = Field([], description = "Data attached.", sa_column=Column(ARRAY(String)))
@@ -148,15 +189,21 @@ class Pod(TapisModel, table=True, validate=True):
     creation_ts: datetime | None = Field(datetime.utcnow(), description = "Time (UTC) that this pod was created.")
     update_ts: datetime | None = Field(datetime.utcnow(), description = "Time (UTC) that this pod was updated.")
     start_instance_ts: datetime | None = Field(None, description = "Time (UTC) that this pod instance was started.")
+
+
+class PodBaseFull(PodBaseRead):
+    # Provided
+    tenant_id: str = Field("", description = "Tapis tenant used during creation of this pod.")
+    site_id: str = Field("", description = "Tapis site used during creation of this pod.")
+    k8_name: str = Field("", description = "Name to use for Kubernetes name.")
     logs: str = Field("", description = "Logs from kubernetes pods, useful for debugging and reading results.")
     permissions: List[str] = Field([], description = "Pod permissions for each user.", sa_column=Column(ARRAY(String, dimensions=1)))
 
-    # attempt_naive_import:
-    # naive_import_command: str | None = None
-    # custom_import_command:
-    # custom_refresh_command:
-    # auto_refresh: bool
 
+TapisPodBaseFull = create_model("TapisPodBaseFull", __base__= type("_ComboModel", (PodBaseFull, TapisModel), {}))
+
+
+class Pod(TapisPodBaseFull, table=True, validate=True):
     @validator('pod_id')
     def check_pod_id(cls, v):
         # In case we want to add reserved keywords.
@@ -212,25 +259,50 @@ class Pod(TapisModel, table=True, validate=True):
                 vol_name_regex = re.fullmatch(r'[a-z][a-z0-9]+', vol_name)
                 if not vol_name_regex:
                     raise ValueError(f"volume_mounts key must be lowercase alphanumeric. First character must be alpha.")
+                
+                if vol_mounts.type == "tapisvolume":
+                    volume = Volume.db_get_with_pk(vol_name, tenant=g.request_tenant_id, site=g.site_id)
+                    if not volume:
+                        raise ValueError(f"volume_mounts key must be a valid volume_id when type == 'tapisvolume'. Could not find volume_id: {vol_name}.")
+                if vol_mounts.type == "tapissnapshot":
+                    snapshot = Snapshot.db_get_with_pk(vol_name, tenant=g.request_tenant_id, site=g.site_id)
+                    if not snapshot:
+                        raise ValueError(f"volume_mounts key must be a valid snapshot_id when type == 'tapissnapshot'. Could not find snapshot_id: {vol_name}.")
         return v
 
 
     @validator('pod_template')
     def check_pod_template(cls, v):
-        templates = ["neo4j", "postgres"]
-        custom_allow_list = conf.image_allow_list or []
+        # Get rid of tag, we don't check that at all.
+        if v.count(":") > 1:
+            raise ValueError("pod_template cannot have more than one ':' in the string. Should be used to separate the tag from the image name.")
+        if ":" in v:
+            v = v.split(":")[0]
+        
+        templates = ["template/neo4j", "template/postgres"]
 
-        #templates/neo4j
+        #template/neo4j
         #tuyamei/xx:ANY
         #postgres:ANY
         # config -> health -> update service db
         # api -> special role -> update "tenant" db
 
-        if v.startswith("custom-"):
-            if v.replace("custom-", "") not in custom_allow_list:
-                raise ValueError(f"Custom pod_template images must be in allowlist.")
-        elif v not in templates:
+        # We search the siteadmintables schema for the templates that our tenant is allowed to use.
+        all_templates = Template.db_get_all(tenant="siteadmintables", site=g.site_id)
+        custom_allow_list = []
+        for template in all_templates:
+            if g.tenant_id in template.tenants or "*" in template.tenants:
+                custom_allow_list.append(template.object_name)
+        # Then we add templates from the conf.image_allow_list
+        custom_allow_list += conf.image_allow_list or []
+
+        custom_allow_list += templates
+
+        if v.startswith("templates/") and v not in templates:
             raise ValueError(f"pod_template must be one of the following: {templates}.")
+        elif v not in custom_allow_list:
+            raise ValueError(f"Custom pod_template images must be in allowlist. Speak to admin")
+
         return v
 
     @validator('time_to_stop_default')
@@ -243,6 +315,16 @@ class Pod(TapisModel, table=True, validate=True):
     def check_time_to_stop_instance(cls, v):
         if v and v != -1 and v < 300:
             raise ValueError(f"Pod time_to_stop_instance must be -1 or be greater than 300 seconds.")
+        return v
+
+    @validator('description')
+    def check_description(cls, v):
+        # ensure description is all ascii
+        if not v.isascii():
+            raise ValueError(f"description field may only contain ASCII characters.")            
+        # make sure description < 255 characters
+        if len(v) > 255:
+            raise ValueError(f"description field must be less than 255 characters. Inputted length: {len(v)}")
         return v
 
     @validator('networking')
@@ -265,22 +347,12 @@ class Pod(TapisModel, table=True, validate=True):
                     raise ValueError(f"networking key length must be between 3-64 characters. Inputted length: {len(v)}")
         return v
 
-    @validator('description')
-    def check_description(cls, v):
-        # ensure description is all ascii
-        if not v.isascii():
-            raise ValueError(f"description field may only contain ASCII characters.")            
-        # make sure description < 255 characters
-        if len(v) > 255:
-            raise ValueError(f"description field must be less than 255 characters. Inputted length: {len(v)}")
-        return v
-
     @root_validator(pre=False)
     def set_networking(cls, values):
         pod_template = values.get('pod_template')
-        if pod_template == "neo4j":
+        if pod_template == "template/neo4j":
             values['networking'] = {"default": Networking(protocol='tcp', port='7687')}
-        if pod_template == "postgres":
+        if pod_template == "template/postgres":
             values['networking'] = {"default": Networking(protocol='postgres', port='5432')}
         return values
 
@@ -359,104 +431,36 @@ class Pod(TapisModel, table=True, validate=True):
         return results
 
 
-class NewPod(TapisApiModel):
+class NewPod(PodBase):
     """
     Object with fields that users are allowed to specify for the Pod class.
     """
-    # Required
-    pod_id: str = Field(..., description = "Name of this pod.")
-    pod_template: str = Field(..., description = "Which pod template to use, or which custom image to run, must be on allowlist.")
-
-    # Optional
-    description: str = Field("", description = "Description of this pod.")
-    command: List[str] | None = Field(None, description = "Command to run in pod.", sa_column=Column(ARRAY(String)))
-    networking: Dict[str, Networking] = Field({"default": {"protocol": "http", "port": 5000}}, description = "Networking information. {'url_suffix': {'protocol': 'http'  'tcp', 'port': int}/}", sa_column=Column(JSON))
-    environment_variables: Dict = Field({}, description = "Environment variables to inject into k8 pod; Only for custom pods.", sa_column=Column(JSON))
-    data_requests: List[str] = Field([], description = "Requested pod names.")
-    roles_required: List[str] = Field([], description = "Roles required to view this pod")
-    volume_mounts: Dict[str, VolumeMount] = Field({}, description = "Key: Volume name. Value: List of strs specifying volume folders/files to mount in pod", sa_column=Column(JSON))
-    time_to_stop_default: int = Field(43200, description = "Default time (sec) for pod to run from instance start. -1 for unlimited. 12 hour default.")
-    time_to_stop_instance: int | None = Field(None, description = "Time (sec) for pod to run from instance start. Reset each time instance is started. -1 for unlimited. 12 hour default.")
-    resources: Resources = Field({}, description = "Pod resource management", sa_column=Column(JSON))
+    pass
 
 
 class UpdatePod(TapisApiModel):
     """
     Object with fields that users are allowed to specify for the Pod class.
     """
-    # Required
-    pod_id: str = Field(..., description = "Name of this pod.")
-    pod_template: str = Field(..., description = "Which pod template to use, or which custom image to run, must be on allowlist.")
-
     # Optional
-    description: str = Field("", description = "Description of this pod.")
-    command: List[str] | None = Field(None, description = "Command to run in pod.", sa_column=Column(ARRAY(String)))
-    networking: Dict[str, Networking] = Field({"default": {"protocol": "http", "port": 5000}}, description = "Networking information. {'url_suffix': {'protocol': 'http'  'tcp', 'port': int}/}", sa_column=Column(JSON))
-    data_requests: List[str] = Field([], description = "Requested pod names.")
-    roles_required: List[str] = Field([], description = "Roles required to view this pod")
-    volume_mounts: Dict[str, VolumeMount] = Field({}, description = "Key: Volume name. Value: List of strs specifying volume folders/files to mount in pod", sa_column=Column(JSON))
-    time_to_stop_instance: int | None = Field(None, description = "Time (sec) for pod to run from instance start. Reset each time instance is started. -1 for unlimited. 12 hour default.")
-    resources: Resources = Field({}, description = "Pod resource management", sa_column=Column(JSON))
+    description: Optional[str] = Field("", description = "Description of this pod.")
+    command: Optional[List[str]] = Field(None, description = "Command to run in pod.", sa_column=Column(ARRAY(String)))
+    environment_variables: Optional[Dict[str, Any]] = Field({}, description = "Environment variables to inject into k8 pod; Only for custom pods.", sa_column=Column(JSON))
+    data_requests: Optional[List[str]] = Field([], description = "Requested pod names.", sa_column=Column(ARRAY(String)))
+    roles_required: Optional[List[str]] = Field([], description = "Roles required to view this pod.", sa_column=Column(ARRAY(String)))
+    status_requested: Optional[str] = Field("ON", description = "Status requested by user, ON or OFF.")
+    volume_mounts: Optional[Dict[str, VolumeMount]] = Field({}, description = "Key: Volume name. Value: List of strs specifying volume folders/files to mount in pod", sa_column=Column(JSON))
+    time_to_stop_default: Optional[int] = Field(43200, description = "Default time (sec) for pod to run from instance start. -1 for unlimited. 12 hour default.")
+    time_to_stop_instance: Optional[int] = Field(None, description = "Time (sec) for pod to run from instance start. Reset each time instance is started. -1 for unlimited. None uses default.")
+    networking: Optional[Dict[str, Networking]] = Field({"default": {"protocol": "http", "port": 5000}}, description = "Networking information. {'url_suffix': {'protocol': 'http'  'tcp', 'port': int}/}", sa_column=Column(JSON))
+    resources: Optional[Resources] = Field({}, description = "Pod resource management", sa_column=Column(JSON))
 
 
-class PodResponseModel(TapisApiModel):
-    pod_id: str = Field(..., description = "Name of this pod.", primary_key = True)
-    pod_template: str = Field(..., description = "Which pod template to use, or which custom image to run, must be on allowlist.")
-    description: str = Field("", description = "Description of this pod.")
-    command: List[str] | None = Field(None, description = "Command to run in pod.", sa_column=Column(ARRAY(String)))
-    networking: Dict[str, Networking] = Field({"default": {"protocol": "http", "port": 5000}}, description = "Networking information. {'url_suffix': {'protocol': 'http'  'tcp', 'port': int}/}", sa_column=Column(JSON))
-    environment_variables: Dict = Field({}, description = "Environment variables to inject into k8 pod; Only for custom pods.", sa_column=Column(JSON))
-    data_requests: List[str] = Field([], description = "Requested pod names.", sa_column=Column(ARRAY(String)))
-    roles_required: List[str] = Field([], description = "Roles required to view this pod.", sa_column=Column(ARRAY(String)))
-    status_requested: str = Field("ON", description = "Status requested by user, ON or OFF.")
-    status: str = Field("STOPPED", description = "Current status of pod.")
-    status_container: Dict = Field({}, description = "Status of container if exists. Gives phase.", sa_column=Column(JSON))
-    data_attached: List[str] = Field([], description = "Data attached.", sa_column=Column(ARRAY(String)))
-    roles_inherited: List[str] = Field([], description = "Inherited roles required to view this pod", sa_column=Column(ARRAY(String)))
-    creation_ts: datetime | None = Field(None, description = "Time (UTC) that this node was created.")
-    update_ts: datetime | None = Field(None, description = "Time (UTC) that this node was updated.")
-    start_instance_ts: datetime | None = Field(None, description = "Time (UTC) that this pod instance was started.")
-    volume_mounts: Dict[str, VolumeMount] = Field({}, description = "Key: Volume name. Value: List of strs specifying volume folders/files to mount in pod", sa_column=Column(JSON))
-    time_to_stop_default: int = Field(43200, description = "Default time (sec) for pod to run from instance start. -1 for unlimited. 12 hour default.")
-    time_to_stop_instance: int | None = Field(None, description = "Time (sec) for pod to run from instance start. Reset each time instance is started. -1 for unlimited. 12 hour default.")
-    time_to_stop_ts: datetime | None = Field(None, description = "Time (UTC) that this pod is scheduled to be stopped. Change with time_to_stop_instance.")
-    resources: Resources = Field({}, description = "Pod resource management", sa_column=Column(JSON))
-
-
-class Password(TapisModel, table=True, validate=True):
-    # Required
-    pod_id: str = Field(..., description = "Name of this pod.", primary_key = True)
-    # Provided
-    admin_username: str = Field("podsservice", description = "Admin username for pod.")
-    admin_password: str = Field(None, description = "Admin password for pod.")
-    user_username: str = Field(None, description = "User username for pod.")
-    user_password: str = Field(None, description = "User password for pod.")
-    # Provided
-    tenant_id: str = Field(g.request_tenant_id, description = "Tapis tenant used during creation of this password's pod.")
-    site_id: str = Field(g.site_id, description = "Tapis site used during creation of this password's pod.")
-
-    @validator('tenant_id')
-    def check_tenant_id(cls, v):
-        return g.request_tenant_id
-
-    @validator('site_id')
-    def check_site_id(cls, v):
-        return g.site_id
-
-    @validator('admin_password')
-    def add_admin_password(cls, v):
-        password = ''.join(choice(ascii_letters + digits) for i in range(30))
-        return password
-
-    @validator('user_password')
-    def add_user_password(cls, v):
-        password = ''.join(choice(ascii_letters + digits) for i in range(30))
-        return password
-
-    @root_validator(pre=False)
-    def set_user_username(cls, values):
-        values['user_username'] = values.get('pod_id')
-        return values
+class PodResponseModel(PodBaseRead):
+    """
+    Response object for Pod class.
+    """
+    pass
 
 
 class PodResponse(TapisApiModel):

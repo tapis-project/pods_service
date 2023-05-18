@@ -1,5 +1,5 @@
-from codes import ERROR, SPAWNER_SETUP, CREATING_CONTAINER, \
-    REQUESTED, SHUTTING_DOWN
+from codes import ERROR, SPAWNER_SETUP, CREATING, \
+    REQUESTED, DELETING
 from models_pods import Pod, Password
 from kubernetes_utils import create_pod, create_service, create_pvc, KubernetesError
 from kubernetes import client, config
@@ -7,6 +7,8 @@ from kubernetes import client, config
 from tapisservice.config import conf
 from tapisservice.logs import get_logger
 from tapisservice.errors import BaseTapisError
+from volume_utils import get_nfs_ips
+
 logger = get_logger(__name__)
 
 # k8 client creation
@@ -22,6 +24,37 @@ def start_postgres_pod(pod, revision: int):
     # Volumes
     volumes = []
     volume_mounts = []
+
+    nfs_ssh_ip, nfs_nfs_ip = get_nfs_ips()
+
+    # Create PVC if requested.
+    if pod.volume_mounts:
+        for vol_name, vol_info in pod.volume_mounts.items():
+            full_k8_name = f"{pod.k8_name}--{vol_name}"
+            match vol_info.get("type"):
+                case "tapisvolume":
+                    if conf.nfs_develop_mode:
+                        logger.debug("Skipping nfs volume mount as nfs_develop_mode is set to True")
+                    else:
+                        nfs_volume = client.V1NFSVolumeSource(path = f"/", server = nfs_nfs_ip) # f"/podsnfs/{pod.tenant_id}/volumes/{vol_name}"
+                        volumes.append(client.V1Volume(name = full_k8_name, nfs = nfs_volume))
+                        volume_mounts.append(client.V1VolumeMount(name = full_k8_name, mount_path = vol_info.get("mount_path"), sub_path = f"{pod.tenant_id}/volumes/{vol_name}")) # vol_info.get("sub_path")))
+                case "tapissnapshot":
+                    if conf.nfs_develop_mode:
+                        logger.debug("Skipping nfs volume mount as nfs_develop_mode is set to True")
+                    else:
+                        nfs_volume = client.V1NFSVolumeSource(path = f"/", server = nfs_nfs_ip) # f"/podsnfs/{pod.tenant_id}/snapshots/{vol_name}"
+                        volumes.append(client.V1Volume(name = full_k8_name, nfs = nfs_volume))
+                        volume_mounts.append(client.V1VolumeMount(name = full_k8_name, mount_path = vol_info.get("mount_path"), sub_path = f"{pod.tenant_id}/snapshots/{vol_name}")) # vol_info.get("sub_path")))
+                case "pvc":
+                    create_pvc(name = full_k8_name)
+                    persistent_volume = client.V1PersistentVolumeClaimVolumeSource(claim_name = full_k8_name)
+                    volumes.append(client.V1Volume(name = full_k8_name, persistent_volume_claim = persistent_volume))
+                    volume_mounts.append(client.V1VolumeMount(name = full_k8_name, mount_path = vol_info.get("mount_path"), sub_path = f"{pod.tenant_id}/volumes/{vol_name}"))
+                case _:
+                    pass
+                    #error!
+
 
     # Create and mount certs neccessary for bolt TLS.
     secret_volume = client.V1SecretVolumeSource(secret_name='pods-certs')
@@ -67,15 +100,46 @@ def start_neo4j_pod(pod, revision: int):
     volume_mounts = []
 
     # Create PVC if requested.
-    if pod.persistent_volume:
-        try:
-            create_pvc(name = pod.k8_name)
-        except:
-            # Could already exist. This needs to be vastly improved.
-            pass
-        persistent_volume = client.V1PersistentVolumeClaimVolumeSource(claim_name=pod.k8_name)
-        volumes.append(client.V1Volume(name='user-volume', persistent_volume_claim = persistent_volume))
-        volume_mounts.append(client.V1VolumeMount(name="user-volume", mount_path="/var/lib/neo4j/data"))
+    # if pod.persistent_volume:
+    #     try:
+    #         create_pvc(name = pod.k8_name)
+    #     except:
+    #         # Could already exist. This needs to be vastly improved.
+    #         pass
+    #     persistent_volume = client.V1PersistentVolumeClaimVolumeSource(claim_name=pod.k8_name)
+    #     volumes.append(client.V1Volume(name='user-volume', persistent_volume_claim = persistent_volume))
+    #     volume_mounts.append(client.V1VolumeMount(name="user-volume", mount_path="/var/lib/neo4j/data"))
+
+    nfs_ssh_ip, nfs_nfs_ip = get_nfs_ips()
+
+    # Create PVC if requested.
+    if pod.volume_mounts:
+        for vol_name, vol_info in pod.volume_mounts.items():
+            full_k8_name = f"{pod.k8_name}--{vol_name}"
+            match vol_info.get("type"):
+                case "tapisvolume":
+                    if conf.nfs_develop_mode:
+                        logger.debug("Skipping nfs volume mount as nfs_develop_mode is set to True")
+                    else:
+                        nfs_volume = client.V1NFSVolumeSource(path = f"/", server = nfs_nfs_ip) # f"/podsnfs/{pod.tenant_id}/volumes/{vol_name}"
+                        volumes.append(client.V1Volume(name = full_k8_name, nfs = nfs_volume))
+                        volume_mounts.append(client.V1VolumeMount(name = full_k8_name, mount_path = vol_info.get("mount_path"), sub_path = f"{pod.tenant_id}/volumes/{vol_name}")) # vol_info.get("sub_path")))
+                case "tapissnapshot":
+                    if conf.nfs_develop_mode:
+                        logger.debug("Skipping nfs volume mount as nfs_develop_mode is set to True")
+                    else:
+                        nfs_volume = client.V1NFSVolumeSource(path = f"/", server = nfs_nfs_ip) # f"/podsnfs/{pod.tenant_id}/snapshots/{vol_name}"
+                        volumes.append(client.V1Volume(name = full_k8_name, nfs = nfs_volume))
+                        volume_mounts.append(client.V1VolumeMount(name = full_k8_name, mount_path = vol_info.get("mount_path"), sub_path = f"{pod.tenant_id}/snapshots/{vol_name}")) # vol_info.get("sub_path")))
+                case "pvc":
+                    create_pvc(name = full_k8_name)
+                    persistent_volume = client.V1PersistentVolumeClaimVolumeSource(claim_name = full_k8_name)
+                    volumes.append(client.V1Volume(name = full_k8_name, persistent_volume_claim = persistent_volume))
+                    volume_mounts.append(client.V1VolumeMount(name = full_k8_name, mount_path = vol_info.get("mount_path"), sub_path = f"{pod.tenant_id}/volumes/{vol_name}"))
+                case _:
+                    pass
+                    #error!
+
 
     # Create and mount certs neccessary for bolt TLS.
     secret_volume = client.V1SecretVolumeSource(secret_name='pods-certs')
@@ -127,19 +191,42 @@ def start_neo4j_pod(pod, revision: int):
     create_service(name = pod.k8_name, ports_dict = container["ports_dict"])
 
 
-def start_generic_pod(pod, custom_image, revision: int):
+def start_generic_pod(pod, image, revision: int):
     logger.debug(f"Attempting to start generic pod; name: {pod.k8_name}; revision: {revision}")
 
     # Volumes
     volumes = []
     volume_mounts = []
 
+    nfs_ssh_ip, nfs_nfs_ip = get_nfs_ips()
+
     # Create PVC if requested.
-    if pod.persistent_volume:
-        create_pvc(name = pod.k8_name)
-        persistent_volume = client.V1PersistentVolumeClaimVolumeSource(claim_name=pod.k8_name)
-        volumes.append(client.V1Volume(name='user-volume', persistent_volume_claim = persistent_volume))
-        volume_mounts.append(client.V1VolumeMount(name="user-volume", mount_path="/user_volume"))
+    if pod.volume_mounts:
+        for vol_name, vol_info in pod.volume_mounts.items():
+            full_k8_name = f"{pod.k8_name}--{vol_name}"
+            match vol_info.get("type"):
+                case "tapisvolume":
+                    if conf.nfs_develop_mode:
+                        logger.debug("Skipping nfs volume mount as nfs_develop_mode is set to True")
+                    else:
+                        nfs_volume = client.V1NFSVolumeSource(path = f"/", server = nfs_nfs_ip) # f"/podsnfs/{pod.tenant_id}/volumes/{vol_name}"
+                        volumes.append(client.V1Volume(name = full_k8_name, nfs = nfs_volume))
+                        volume_mounts.append(client.V1VolumeMount(name = full_k8_name, mount_path = vol_info.get("mount_path"), sub_path = f"{pod.tenant_id}/volumes/{vol_name}")) # vol_info.get("sub_path")))
+                case "tapissnapshot":
+                    if conf.nfs_develop_mode:
+                        logger.debug("Skipping nfs volume mount as nfs_develop_mode is set to True")
+                    else:
+                        nfs_volume = client.V1NFSVolumeSource(path = f"/", server = nfs_nfs_ip) # f"/podsnfs/{pod.tenant_id}/snapshots/{vol_name}"
+                        volumes.append(client.V1Volume(name = full_k8_name, nfs = nfs_volume))
+                        volume_mounts.append(client.V1VolumeMount(name = full_k8_name, mount_path = vol_info.get("mount_path"), sub_path = f"{pod.tenant_id}/snapshots/{vol_name}")) # vol_info.get("sub_path")))
+                case "pvc":
+                    create_pvc(name = full_k8_name)
+                    persistent_volume = client.V1PersistentVolumeClaimVolumeSource(claim_name = full_k8_name)
+                    volumes.append(client.V1Volume(name = full_k8_name, persistent_volume_claim = persistent_volume))
+                    volume_mounts.append(client.V1VolumeMount(name = full_k8_name, mount_path = vol_info.get("mount_path"), sub_path = f"{pod.tenant_id}/volumes/{vol_name}"))
+                case _:
+                    pass
+                    #error!
 
     # Each pod can have up to 3 networking objects with custom filled port/protocol/name
     # net_dict takes net_name:port.
@@ -154,7 +241,7 @@ def start_generic_pod(pod, custom_image, revision: int):
         "name": pod.k8_name,
         "command": pod.command,
         "revision": revision,
-        "image": custom_image,
+        "image": image,
         "ports_dict": ports_dict,
         "environment": pod.environment_variables.copy(),
         "mounts": [volumes, volume_mounts],

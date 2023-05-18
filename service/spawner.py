@@ -4,10 +4,10 @@ import time
 
 import rabbitpy
 from concurrent.futures import ThreadPoolExecutor
-from codes import ERROR, SPAWNER_SETUP, CREATING_CONTAINER, \
-    CREATING_VOLUME, REQUESTED, SHUTTING_DOWN, ON
+from codes import ERROR, SPAWNER_SETUP, CREATING, REQUESTED, DELETING, ON
 from health import graceful_rm_pod, graceful_rm_volume
 from models_pods import Pod, Password
+from models_volumes import Volume
 from channels import CommandChannel
 from kubernetes_templates import start_generic_pod, start_neo4j_pod, start_postgres_pod
 from kubernetes_utils import create_pvc
@@ -52,7 +52,7 @@ class Spawner(object):
             case "pod":
                 spawn_pod(object_id, tenant_id, site_id)
             case "volume":
-                spawn_volume(object_id, tenant_id, site_id)
+                spawn_pvc(object_id, tenant_id, site_id)
             case _:
                 logger.critical(f"Got spawner message with object_type not in 'pod' or 'volume'. Got: {object_type}")
 
@@ -82,12 +82,11 @@ def spawn_pod(pod_id, tenant_id, site_id):
     logger.debug(f"spawner has updated pod status to SPAWNER_SETUP")
 
     try:
-        if pod.pod_template.startswith("custom-"):
-            custom_image = pod.pod_template.replace("custom-", "")
-            start_generic_pod(pod=pod, custom_image=custom_image, revision=1)
-        elif pod.pod_template == 'neo4j':
+        if not pod.pod_template.startswith("template/"):
+            start_generic_pod(pod=pod, image=pod.pod_template, revision=1)
+        elif pod.pod_template == 'template/neo4j':
             start_neo4j_pod(pod=pod, revision=1)
-        elif pod.pod_template == 'postgres':
+        elif pod.pod_template == 'template/postgres':
             start_postgres_pod(pod=pod, revision=1)
         else:
             logger.critical(f"pod_template found no working functions. Running graceful_rm_pod.")
@@ -99,12 +98,12 @@ def spawn_pod(pod_id, tenant_id, site_id):
         return
 
     # If we get to this point we can update pod status
-    pod.status = CREATING_CONTAINER
+    pod.status = CREATING
     pod.db_update()
-    logger.debug(f"spawner has updated pod status to CREATING_CONTAINER")
+    logger.debug(f"spawner has updated pod status to CREATING")
 
-def spawn_volume(volume_id, tenant_id, site_id):
-    # Get spawn_volume while in spawner. Expect REQUESTED. If status_requested = OFF then request was started while waiting
+def spawn_pvc(volume_id, tenant_id, site_id):
+    # Get spawn_pvc while in spawner. Expect REQUESTED. If status_requested = OFF then request was started while waiting
     # for command to startup in queue. In that case, we simply abort and wait for health to delete pod.
     try:
         volume = Volume.db_get_with_pk(volume_id, tenant=tenant_id, site=site_id)
@@ -118,12 +117,7 @@ def spawn_volume(volume_id, tenant_id, site_id):
         logger.debug(f"Spawner found volume NOT in REQUESTED status as expected. status: {status}. Returning and ignoring command.")
         return
 
-    status_requested = getattr(volume, 'status_requested', '')
-    if not status_requested == ON:
-        logger.debug(f"Spawner found volume not requesting ON as expected. status_requested: {status_requested}. Returning and ignoring command.")
-        return
-
-    # Volume status was REQUESTED and status_requested was ON; moving on to SPAWNER_SETUP ----
+    # Volume status was REQUESTED; moving on to SPAWNER_SETUP ----
     volume.status = SPAWNER_SETUP
     volume.db_update()
     logger.debug(f"spawner has updated volume status to SPAWNER_SETUP")
@@ -136,9 +130,9 @@ def spawn_volume(volume_id, tenant_id, site_id):
         return
 
     # If we get to this point we can update volume status
-    volume.status = CREATING_VOLUME
+    volume.status = CREATING
     volume.db_update()
-    logger.debug(f"spawner has updated volume status to CREATING_VOLUME")
+    logger.debug(f"spawner has updated volume status to CREATING")
 
 
 def main():

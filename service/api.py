@@ -1,4 +1,4 @@
-from req_utils import error_handler, HttpUrlRedirectMiddleware
+from utils import error_handler, HttpUrlRedirectMiddleware
 from tapisservice.tapisfastapi.utils import GlobalsMiddleware
 from tapisservice.tapisfastapi.auth import TapisMiddleware
 
@@ -8,8 +8,14 @@ from fastapi.middleware import Middleware
 
 from auth import authorization, authentication
 from api_pods import router as router_pods
-from api_pods_podid import router as router_pods_podsname
-from api_pods_podid_func import router as router_pods_podsname_func
+from api_pods_podid import router as router_pods_podsid
+from api_pods_podid_func import router as router_pods_podsid_func
+from api_volumes import router as router_volumes
+from api_volumes_volid import router as router_volumes_volumeid
+from api_volumes_volid_func import router as router_volumes_volumeid_func
+from api_snapshots import router as router_snapshots
+from api_snapshots_snapid import router as router_snapshots_snapshotid
+from api_snapshots_snapid_func import router as router_snapshots_snapshotid_func
 from api_misc import router as router_misc
 
 
@@ -40,7 +46,16 @@ tags_metadata = [
     {
         "name": "Permissions",
         "description": "Manage pod permissions. Grant specific TACC users **READ**, **USER**, and **ADMIN** level permissions.",
+    },
+    {
+        "name": "Volumes",
+        "description": "Create and manage volumes.",
+    },
+    {
+        "name": "Snapshots",
+        "description": "Create and manage snapshots.",
     }
+
 ]
 
 api = FastAPI(
@@ -64,7 +79,17 @@ api = FastAPI(
         Middleware(TapisMiddleware, tenant_cache=Tenants, authn_callback=authentication, authz_callback=authorization)
     ])
 
+# snapshots
+api.include_router(router_snapshots)
+api.include_router(router_snapshots_snapshotid)
+api.include_router(router_snapshots_snapshotid_func)
+# volumes
+api.include_router(router_volumes)
+api.include_router(router_volumes_volumeid)
+api.include_router(router_volumes_volumeid_func)
+# pods
 api.include_router(router_pods)
-api.include_router(router_pods_podsname)
-api.include_router(router_pods_podsname_func)
+api.include_router(router_pods_podsid)
+api.include_router(router_pods_podsid_func)
+# misc
 api.include_router(router_misc)

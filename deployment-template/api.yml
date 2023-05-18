@@ -33,6 +33,8 @@ spec:
         env:
         - name: PODS_COMPONENT
           value: api
+        - name: DEBUG_SLEEP_LOOP
+          value: 'false'
         - name: SERVICE_PASSWORD
           valueFrom:
             secretKeyRef:

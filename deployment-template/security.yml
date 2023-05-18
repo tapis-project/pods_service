@@ -28,6 +28,9 @@ rules:
 - apiGroups: [""]
   resources: ["persistentvolumeclaims"]
   verbs: ["list", "get", "create"]
+- apiGroups: [""]
+  resources: ["pods/exec"]
+  verbs: ["get", "create"]
 
 ---
 kind: RoleBinding
@@ -37,7 +40,6 @@ metadata:
 subjects:
 - kind: ServiceAccount
   name: MAKEFILE_SERVICE_NAME-serviceaccount
-  namespace: MAKEFILE_NAMESPACE
 roleRef:
   kind: Role
   name: MAKEFILE_SERVICE_NAME-role

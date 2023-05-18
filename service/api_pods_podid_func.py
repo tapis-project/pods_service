@@ -1,5 +1,6 @@
 from fastapi import APIRouter
-from models_pods import Pod, NewPod, UpdatePod, Password, SetPermission, DeletePermission, PodResponse, PodPermissionsResponse, PodCredentialsResponse, PodLogsResponse
+from models_pods import Pod, Password, PodResponse, PodPermissionsResponse, PodCredentialsResponse, PodLogsResponse
+from models_misc import SetPermission
 from channels import CommandChannel
 from codes import OFF, ON, RESTART, REQUESTED, STOPPED
 from tapisservice.tapisfastapi.utils import g, ok

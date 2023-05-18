@@ -38,13 +38,19 @@ from datetime import datetime, timedelta
 from channels import CommandChannel
 from kubernetes import client, config
 from kubernetes_utils import get_current_k8_services, get_current_k8_pods, rm_container, rm_pvc, \
-    get_current_k8_pods, rm_service, KubernetesError, update_traefik_configmap, get_k8_logs
-from codes import RUNNING, SHUTTING_DOWN, STOPPED, ERROR, REQUESTED, COMPLETE, RESTART, ON, OFF
+     get_current_k8_pods, rm_service, KubernetesError, update_traefik_configmap, get_k8_logs, list_all_containers, run_k8_exec
+from codes import AVAILABLE, DELETING, STOPPED, ERROR, REQUESTED, COMPLETE, RESTART, ON, OFF
 from stores import pg_store, SITE_TENANT_DICT
-from models_pods import Pod #, ExportedData
+from models_pods import Pod
+from models_volumes import Volume
+from models_snapshots import Snapshot
+from volume_utils import files_listfiles, files_delete, get_nfs_ips
 from sqlmodel import select
 from tapisservice.config import conf
 from tapisservice.logs import get_logger
+from tapipy.errors import BaseTapyException
+
+from __init__ import t
 logger = get_logger(__name__)
 
 
@@ -90,9 +96,9 @@ def graceful_rm_pod(pod):
     """
     logger.info(f"Top of shutdown pod for pod: {pod.k8_name}")
     # Change pod status to SHUTTING DOWN
-    pod.status = SHUTTING_DOWN
+    pod.status = DELETING
     pod.db_update()
-    logger.debug(f"spawner has updated pod status to SHUTTING_DOWN")
+    logger.debug(f"spawner has updated pod status to DELETING")
 
     return rm_pod(pod.k8_name)
 
@@ -104,9 +110,9 @@ def graceful_rm_volume(volume):
     """
     logger.info(f"Top of shutdown volume for volume: {volume.k8_name}")
     # Change pod status to SHUTTING DOWN
-    volume.status = SHUTTING_DOWN
+    volume.status = DELETING
     volume.db_update()
-    logger.debug(f"spawner has updated volume status to SHUTTING_DOWN")
+    logger.debug(f"spawner has updated volume status to DELETING")
 
     return rm_volume(volume.k8_name)
 
@@ -127,10 +133,10 @@ def check_k8_pods(k8_pods):
             rm_pod(k8_pod['k8_name'])
             continue
         
+        pre_health_pod = pod.copy()
+
         # Found pod in db.
-        # TODO Update status in db.
         # Add last_health_check attr.
-        # Delete pods when their status_requested = OFF or RESTART.
         # TODO We could try and make a get to the pod to check if it's actually alive.
 
         k8_pod_phase = k8_pod['pod_info'].status.phase
@@ -153,7 +159,9 @@ def check_k8_pods(k8_pods):
             status_container['message'] = "Pod phase in Succeeded, putting in COMPLETE status."
             pod.status_container = status_container
             pod.status = COMPLETE
-            pod.db_update()
+            # We update if there's been a change.
+            if pod != pre_health_pod:
+                pod.db_update()
             continue
         elif k8_pod_phase in ["Running", "Pending", "Failed"]:
             # Check if container running or in error state
@@ -164,46 +172,59 @@ def check_k8_pods(k8_pods):
                     status_container['message'] = f"Pod in waiting state for reason: {c_state.waiting.message}."
                     pod.status_container = status_container
                     pod.status = ERROR
-                    pod.db_update()
+                    # We update if there's been a change.
+                    if pod != pre_health_pod:
+                        pod.db_update()
                     continue
                 elif c_state.terminated:
                     logger.critical(f"Kube pod in terminated state. msg:{c_state.terminated.message}; reason: {c_state.terminated.reason}")
                     status_container['message'] = f"Pod in terminated state for reason: {c_state.terminated.message}."
                     pod.status_container = status_container
                     pod.status = ERROR
-                    pod.db_update()
+                    # We update if there's been a change.
+                    if pod != pre_health_pod:
+                        pod.db_update()
                     continue
                 elif c_state.waiting and c_state.waiting.reason == "ContainerCreating":
                     logger.info(f"Kube pod in waiting state, still creating container.")
                     status_container['message'] = "Pod is still initializing."
                     pod.status_container = status_container
-                    pod.db_update()
+                    # We update if there's been a change.
+                    if pod != pre_health_pod:
+                        pod.db_update()
                     continue
                 elif c_state.running:
                     status_container['message'] = "Pod is running."
                     pod.status_container = status_container
-                    # This is the first time pod is in RUNNING. Update start_instance_ts.
-                    if pod.status != RUNNING:
+                    # This is the first time pod is in AVAILABLE. Update start_instance_ts.
+                    if pod.status != AVAILABLE:
                         pod.start_instance_ts = datetime.utcnow()
+                        pod.status = AVAILABLE
+
+                    if pod.start_instance_ts:
+                        # This will set time_to_stop_ts the first time pod is available and if
+                        # time_to_stop_instance or time_to_stop_default is updated. 
                         if isinstance(pod.time_to_stop_instance, int):
                             # If set to -1, we don't do ttl.
                             if not pod.time_to_stop_instance == -1:
-                                pod.time_to_stop_ts = datetime.utcnow() + timedelta(seconds=pod.time_to_stop_instance)
+                                pod.time_to_stop_ts = pod.start_instance_ts + timedelta(seconds=pod.time_to_stop_instance)
                         else:
                             # If set to -1, we don't do ttl.
                             if not pod.time_to_stop_default == -1:
-                                pod.time_to_stop_ts = datetime.utcnow() + timedelta(seconds=pod.time_to_stop_default)
-                    pod.status = RUNNING
-                    pod.db_update()
+                                pod.time_to_stop_ts = pod.start_instance_ts + timedelta(seconds=pod.time_to_stop_default)
+                    # We update if there's been a change.
+                    if pod != pre_health_pod:
+                        pod.db_update()
             else:
                 # Not sure if this is possible/what happens here.
                 # There is definitely an Error state. Can't replicate locally yet.
                 logger.critical(f"NO c_state. {k8_pod['pod_info'].status}")
-        
+
         # Getting here means pod is running. Store logs now.
         logs = get_k8_logs(k8_pod['k8_name'])
-        pod.logs = logs
-        pod.db_update()
+        if pod.logs != logs:
+            pod.logs = logs
+            pod.db_update()
 
 def check_k8_services():
     # This is all for only the site specified in conf.site_id.
@@ -251,7 +272,7 @@ def check_db_pods(k8_pods):
                 pod.db_update()
         
         ### DB entries without a running pod should be updated to STOPPED.
-        if pod.status_requested in ['ON'] and pod.status in [RUNNING, SHUTTING_DOWN]:
+        if pod.status_requested in ['ON'] and pod.status in [AVAILABLE, DELETING]:
             k8_pod_found = False
             for k8_pod in k8_pods:
                 if pod.pod_id in k8_pod['pod_id']:
@@ -312,9 +333,258 @@ def check_db_pods(k8_pods):
     # This functions only updates if config is out of date.
     update_traefik_configmap(tcp_proxy_info, http_proxy_info, postgres_proxy_info)
 
+def check_nfs_files():
+    """Go through database for all tenants in this site. Go through all nfs files, ensure there are no files corresponding with
+    items that are not in the database.
+    """
+
+    logger.info("Top of check_nfs_files.")
+
+    for tenant in SITE_TENANT_DICT[conf.site_id]:
+        logger.info(f"Top of check_nfs_files for tenant: {tenant}.\n")
+        ### Volumes
+        # Get all folders in the pods nfs volume folder
+        try:
+            tenant_volume_files = files_listfiles(system_id=conf.nfs_tapis_system_id, path="/volumes", tenant_id=tenant)
+        except Exception as e:
+            logger.error(f"Error getting /volumes from tenant: {tenant}. Error: {e}")
+            tenant_volume_files = []
+            continue
+
+        # Go through database for tenant. Get all volumes
+        tenant_volume_list = Volume.db_get_all(tenant=tenant, site=conf.site_id)
+        tenant_volume_dict = {}
+        for volume in tenant_volume_list:
+            # {volume_id: volume, ...}
+            tenant_volume_dict[volume.volume_id] = volume
+
+        # Go through all files entries in the tenant, looking for excess files. Ones who don't have entry in volumes db.
+        for file in tenant_volume_files:
+            # Found match
+            if tenant_volume_dict.get(file.name):
+                logger.info(f"Found match for file: {file.name}")
+                pass
+            # File doesn't match any entries in volumes db. We will delete it
+            else:
+                logger.warning(f"Couldn't find volume with name: {file.name} in database: {tenant_volume_dict}. Deleting it now.\n")
+                logger.debug(f"volume dict: {tenant_volume_dict}")
+                logger.debug(f"volume files: {tenant_volume_files}")
+                files_delete(system_id=conf.nfs_tapis_system_id, path=f"/volumes/{file.name}", tenant_id=tenant)
+
+        ### Snapshots
+        # Get all folders in the pods nfs snapshots folder
+        try:
+            tenant_snapshot_files = files_listfiles(system_id=conf.nfs_tapis_system_id, path="/snapshots", tenant_id=tenant)
+        except Exception as e:
+            logger.error(f"Error getting /snapshots from tenant: {tenant}. Error: {e}")
+            tenant_snapshot_files = []
+            continue
+
+        # Go through database for tenant. Get all snapshots
+        tenant_snapshot_list = Snapshot.db_get_all(tenant=tenant, site=conf.site_id)
+        tenant_snapshot_dict = {}
+        for snapshot in tenant_snapshot_list:
+            # {snapshot_id: snapshot, ...}
+            tenant_snapshot_dict[snapshot.snapshot_id] = snapshot
+        
+        # Go through all files entries in the tenant, looking for excess files. Ones who don't have entry in snapshots db.
+        for file in tenant_snapshot_files:
+            # Found match
+            if tenant_snapshot_dict.get(file.name):
+                logger.info(f"Found match for file: {file.name}")
+                pass
+            # File doesn't match any entries in snapshots db. We will delete it
+            else:
+                logger.warning(f"Couldn't find snapshot with name: {file.name} in database: {tenant_snapshot_dict}. Deleting it now.\n")
+                logger.debug(f"snapshot dict: {tenant_snapshot_dict}")
+                logger.debug(f"snapshot files: {tenant_snapshot_files}")
+                files_delete(system_id=conf.nfs_tapis_system_id, path=f"/snapshots/{file.name}", tenant_id=tenant)
+
+        ### TODO: Check volume size
+        # For existing volumes, check the size of the folder and ensure it's below volume size max
+        ## Don't know what to do with those quite yet though
+
+
+def check_nfs_tapis_system():
+    """Ensures nfs is up and tapis is connected to it.
+    This health instance needs to be in the same K8 space as files.
+    We grab the nfs ssh ip, provide it to systems, then we use files to mess with files, getting
+    sharing, uploading, etc for "free".
+    """
+    logger.info("Top of check_nfs_tapis_system. Getting nfs_ssh_ip, creating system, and adding credential for all tenants.")
+
+    # Check config to see if we should even run this.
+    nfs_develop_mode = conf.nfs_develop_mode
+    nfs_develop_remote_url = conf.get('nfs_develop_remote_url')
+    nfs_develop_private_key = conf.get('nfs_develop_private_key')
+    nfs_develop_public_key = conf.get('nfs_develop_public_key')
+
+    remote_run = False
+    if nfs_develop_mode:
+        if nfs_develop_remote_url and nfs_develop_private_key and nfs_develop_public_key:
+            remote_run = True
+            logger.info("nfs_develop_mode is True and found remote_url, private_key, and public_key. Running check_nfs_tapis_system remotely.")
+        else:
+            logger.error("nfs_develop_mode is True but missing remote_url, private_key, or public_key. Leaving check_nfs_tapis_system.")
+            return
+
+    # If it's not a remote run then we need to either use config or derive keys from local Kubernetes environment
+    if not remote_run:
+        # Get K8 pod name named pods-nfs
+        k8_name = ""
+        idx = 0
+        while idx < 20:
+            nfs_pods = []
+            for k8_pod in list_all_containers(filter_str="pods-nfs"):
+                k8_name = k8_pod.metadata.name
+                # pods-nfs also matches pods-nfs-mkdir, so we manually pass that case
+                if "pods-nfs-mkdirs" in k8_name:
+                    continue
+                nfs_pods.append({'pod_info': k8_pod,
+                                 'k8_name': k8_name})
+            # Checking how many services met the filter (should hopefully be only one)
+            match len(nfs_pods):
+                case 1:
+                    logger.info(f"Found pod matching pods-nfs: {k8_name}")
+                    break
+                case 0:
+                    logger.info(f"Couldn't find pod matching pods-nfs. Trying again.")
+                    pass
+                case _:
+                    logger.info(f"Got >1 pods matching pods-nfs. Matching pods: {[pod['k8_name'] for pod in nfs_pods]}. Trying again.")                
+                    pass
+            # Increment and have a short wait
+            idx += 1
+            time.sleep(3)
+
+        # We must either get PKI info from environment variables or derive info from pod.
+        # Only grab keys from pod if remote_run = False
+        # Attempt to derive PKI keys through k8 exec if not explicitly set in conf.
+        if not nfs_develop_private_key and not nfs_develop_public_key:
+            # Get private key from pod
+            command = ["/bin/sh", "-c", "awk -v ORS='\\n' '1' /home/pods/.ssh/podskey"]
+            derived_private_key, derived_err = run_k8_exec(k8_name, command)
+            if derived_err:
+                logger.error(f"Error deriving private key from nfs pod: {derived_err}")
+                raise Exception(f"Error deriving private key from nfs pod during startup: {derived_err}")
+
+            # Get public key from pod
+            command = ["/bin/sh", "-c", "awk -v ORS='\\n' '1' /home/pods/.ssh/podskey.pub"]
+            derived_public_key, derived_err = run_k8_exec(k8_name, command)
+            if derived_err:
+                logger.error(f"Error deriving public key from nfs pod: {derived_err}")
+                raise Exception(f"Error deriving public key from nfs pod during startup: {derived_err}")
+
+            # We successfully got both keys, we'll now use these derived ones.
+            if derived_private_key and derived_public_key:
+                logger.info(f"Successfully derived public and private keys from nfs pod. Using derived keys.\n\n{derived_public_key}\n\n{derived_private_key}\n")
+                nfs_develop_private_key = derived_private_key
+                nfs_develop_public_key = derived_public_key
+
+    system_id = conf.nfs_tapis_system_id
+    nfs_ssh_ip, nfs_nfs_ip = get_nfs_ips()
+    logger.info(f"In check_nfs_tapis_system. Got nfs_ssh_ip: {nfs_ssh_ip}.")
+
+    # Go through each tenant and create system
+    for tenant in SITE_TENANT_DICT[conf.site_id]:
+        # I forget why tbh
+        if tenant == "smartfoods":
+            continue
+        # Logging for tenant initialization
+        logger.info(f"Initializing nfs for tenant: {tenant}.")
+        # System definition which we will "create" indiscriminately. If it already exists, we catch
+        # the error and attempt a put to ensure definition is up-to-date for each tenant.
+        system = {
+            "id": system_id,
+            "description": "Pods nfs system, located in the same k8 namespace as files. Pod named 'pods-nfs' set host to 'k get service pods-nfs-ssh' clusterIp fyi.",
+            "systemType": "LINUX",
+            "host": nfs_ssh_ip, # direct ip is absolutely required. Tried talking to Steve, it's needed.
+            "defaultAuthnMethod": "PKI_KEYS",
+            "effectiveUserId": "pods",
+            "port": 22,
+            "rootDir": f"{conf.nfs_base_path}/{tenant}",
+            "canExec": False
+        }
+
+        # Create system, put if it already exists.
+        try:
+            res = t.systems.createSystem(
+                systemId=system_id,
+                **system,
+                _x_tapis_tenant=tenant,
+                _x_tapis_user='pods')
+        except BaseTapyException as e:
+            # System already exists, we'll just t.systems.putSystem (putSystem instead of patchSystem
+            # as we'll use same input as createSystem).
+            if "System already exists." in e.message:
+                logger.info(f"Pods' nfs Tapis system already exists, running putSystem instead of createSystem")
+                try:
+                    res = t.systems.putSystem(
+                        **system,
+                        systemId=system_id,
+                        _x_tapis_tenant=tenant,
+                        _x_tapis_user='pods')
+                except BaseTapyException as e:
+                    msg = f"Error when running t.systems.putSystem. {e}"
+                    logger.info(msg)
+                    raise BaseTapyException(msg)
+        try:
+            # Log credential creation
+            logger.info(f"Creating credential for {conf.site_id}.{tenant}.")
+            # Create credential
+            cred = t.systems.createUserCredential(
+                systemId=system_id,
+                userName='pods',
+                privateKey=nfs_develop_private_key, # If you want the `defaultAuthnMethod` of `PASSWORD` -> password=conf.nfs_pods_user_password
+                publicKey=nfs_develop_public_key,
+                _x_tapis_tenant=tenant,
+                _x_tapis_user='pods')
+        except Exception as e:
+            msg = f"Error creating credential for {conf.site_id}.{tenant} {system_id} system. e: {e}"
+            logger.critical(msg)
+            raise BaseTapyException(msg)
+
+        try:
+            logger.info(f"Creating tenant root folder for {conf.site_id}.{tenant}.")
+            # Ensure tenant root folder exists, this will not cause issues even if volume is already in use.
+            t.files.mkdir(
+                systemId = system_id,
+                path = "/",
+                _x_tapis_tenant=tenant,
+                _x_tapis_user='pods')
+        except Exception as e:
+            msg = f"Error creating tenant root folder for {conf.site_id}.{tenant} {system_id} system. e: {e}"
+            logger.critical(msg)
+            raise BaseTapyException(msg)
+
+        try:
+            logger.info(f"Creating tenant volumes folder for {conf.site_id}.{tenant}.")
+            # Ensure tenant volumes folder exists, this will not cause issues even if volume is already in use.
+            t.files.mkdir(
+                systemId = system_id,
+                path = "/volumes",
+                _x_tapis_tenant=tenant,
+                _x_tapis_user='pods')
+        except Exception as e:
+            msg = f"Error creating tenant volumes folder for {conf.site_id}.{tenant} {system_id} system. e: {e}"
+            logger.critical(msg)
+            raise BaseTapyException(msg)
+
+        try:
+            logger.info(f"Creating tenant snapshots folder for {conf.site_id}.{tenant}.")
+            # Ensure tenant snapshots folder exists, this will not cause issues even if volume is already in use.
+            t.files.mkdir(
+                systemId = system_id,
+                path = "/snapshots",
+                _x_tapis_tenant=tenant,
+                _x_tapis_user='pods')
+        except Exception as e:
+            msg = f"Error creating tenant snapshots folder for {conf.site_id}.{tenant} {system_id} system. e: {e}"
+            logger.critical(msg)
+            raise BaseTapyException(msg)
 
 def main():
-    # Try and run check_db_pods. Will try for 30 seconds until health is declared "broken".
+    # Try and run check_db_pods. Will try for 60 seconds until health is declared "broken".
     logger.info("Top of health. Checking if db's are initialized.")
     idx = 0
     while idx < 12:
@@ -326,12 +596,21 @@ def main():
         except Exception as e:
             logger.info(f"Can't connect to dbs yet idx: {idx}. e: {e}")
             # Health seems to take a few seconds to come up (due to database creation and api creation)
-            time.sleep(5)
+            # Increment and have a short wait
             idx += 1
-    if idx == 12:
+            time.sleep(5)
+    # Reached end of idx limit
+    else:
         logger.critical("Health could not connect to databases. Shutting down!")
         return
 
+    # We run nfs setup if development mode = true or if all develop configs are set.
+    if conf.get('nfs_develop_remote_url') and conf.get('nfs_develop_private_key') and conf.get('nfs_develop_public_key'):
+        check_nfs_tapis_system()
+    elif not conf.nfs_develop_mode:
+        check_nfs_tapis_system()
+
+    # Main health loop
     while True:
         logger.info(f"Running pods health checks. Now: {time.time()}")
         k8_pods = get_current_k8_pods() # Returns {pod_info, site, tenant, pod_id}
@@ -340,29 +619,13 @@ def main():
         check_k8_services()
         check_db_pods(k8_pods)
 
-        ########
-        # Go through database for each tenant in site now.
-        logger.info(f"Health going through all tenants in site: {conf.site_id}")
-        for tenant, store in pg_store[conf.site_id].items():
-            pass
-        ### Go through all of caddy.
+        # We do not want health checks on remote environment when developing locally
+        if not conf.nfs_develop_mode:
+            check_nfs_files()
 
-        ### Go through and check services.
-        
         ### Have a short wait
         time.sleep(1)
 
+
 if __name__ == '__main__':
     main()
-
-
-# shutdown_all_k8_pods()?
-# # we need to delete any worker that is in SHUTDOWN REQUESTED or SHUTTING down for too long
-# if worker_status == codes.SHUTDOWN_REQUESTED or worker_status == codes.SHUTTING_DOWN:
-#     worker_last_health_check_time = worker.get('last_health_check_time')
-#     if not worker_last_health_check_time:
-#         worker_last_health_check_time = worker.get('create_time')
-#     if not worker_last_health_check_time:
-#         hard_delete_worker(actor_id, worker_id, reason_str='Worker in SHUTDOWN and no health checks.')
-#     elif worker_last_health_check_time < get_current_utc_time() - datetime.timedelta(minutes=5):
-#         hard_delete_worker(actor_id, worker_id, reason_str='Worker in SHUTDOWN for too long.')

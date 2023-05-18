@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import List, Dict, Literal, Any, Set
 from wsgiref import validate
 from pydantic import BaseModel, Field, validator, root_validator, conint
-from codes import PERMISSION_LEVELS, PermissionLevel
+from codes import PERMISSION_LEVELS
 
 from stores import pg_store
 from tapisservice.tapisfastapi.utils import g
@@ -22,7 +22,7 @@ from sqlalchemy import UniqueConstraint
 from sqlalchemy.inspection import inspect
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlmodel import Field, Session, SQLModel, select, JSON, Column, String
-from models_base import TapisModel, TapisApiModel
+from models_base import TapisApiModel, TapisModel
 
 
 class SetPermission(TapisApiModel):
@@ -58,3 +58,28 @@ class LogsModel(TapisApiModel):
 class CredentialsModel(TapisApiModel):
     user_username: str
     user_password: str
+
+
+class FileModel(TapisApiModel):
+    name: str = Field(..., description = "Name of object.")
+    lastModified: str = Field(..., description = "Last modified date of object.")
+    nativePermissions: str = Field(..., description = "Native permissions of object.")
+    size: int = Field(..., description = "Size of object in bytes.")
+    path: str = Field(..., description = "Path of object.")
+    type: str = Field(..., description = "Type of object. Either file or dir.")
+
+
+class FilesListResponse(TapisApiModel):
+    message: str
+    metadata: Dict
+    result: List[FileModel]
+    status: str
+    version: str
+
+
+class FilesUploadResponse(TapisApiModel):
+    message: str
+    metadata: Dict
+    result: str
+    status: str
+    version: str 
