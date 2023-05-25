@@ -91,7 +91,6 @@ def rabbitmq_init():
         # We poll to check rabbitmq is operational. Done by trying to list vhosts, arbitrary command.
         # Exit code 0 means rabbitmq is running. Need access to rabbitmq dash/management panel.
         i = 15
-        logger.critical(fn_call)
         while i:
             result = subprocess.run(fn_call + f'list vhosts', shell=True, capture_output=True)
             if result.returncode == 0:
@@ -99,7 +98,7 @@ def rabbitmq_init():
             elif result.stderr:
                 rabbitmq_error = result.stderr.decode('UTF-8')
                 if "Errno 111" in rabbitmq_error:
-                    msg = "Rabbit still initializing."
+                    msg = f"RabbitMQ still initializing. {i} tries remaining. Sleeping 2 seconds."
                     logger.debug(msg)
                 elif "Access refused" in rabbitmq_error:
                     msg = "Rabbit admin user or pass misconfigured."
@@ -110,7 +109,7 @@ def rabbitmq_init():
                     logger.critical(msg)
                     raise RuntimeError(msg)
             else:
-                msg = "RabbitMQ still initializing."
+                msg = f"RabbitMQ still initializing. {i} tries remaining. Sleeping 2 seconds."
                 logger.debug(msg)
             time.sleep(2)
             i -= 1
@@ -121,6 +120,8 @@ def rabbitmq_init():
     except Exception as e:
         msg = f"Error during RabbitMQ start process. e: {repr(e)}"
         logger.critical(msg)
+        # Can't 100% remember unfortunately. I believe rabbitmq exposes password when it crashes.
+        # This covers that with our logging. The crash raises to the user's API response, hence the neccessary cover up. 
         e.args = [msg]
         raise e
     
@@ -158,6 +159,8 @@ def rabbitmq_init():
     except Exception as e:
         msg = f"Error setting up RabbitMQ for site: {site}. e: {repr(e)}"
         logger.critical(msg)
+        # Can't 100% remember unfortunately. I believe rabbitmq exposes password when it crashes.
+        # This covers that with our logging. The crash raises to the user's API response, hence the neccessary cover up. 
         e.args = [msg]
         raise e
 
@@ -184,9 +187,11 @@ def create_pg_objects():
                                dbname="postgres")
 
     pg_store = {}
+    
     # Now add in all of the sites and tenant pg engines.
     for site, tenants in SITE_TENANT_DICT.items():
-        for tenant in tenants:
+        tenant_copy = tenants.copy() + ["siteadmintable", "defaulttables"]
+        for tenant in tenant_copy:
             pg = PostgresStore(username=admin_postgres_user,
                                password=admin_postgres_pass,
                                host=conf.postgres_host,

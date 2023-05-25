@@ -16,7 +16,7 @@ logger = get_logger(__name__)
 base_url = os.environ.get('base_url', 'http://172.17.0.1:8000')
 case = os.environ.get('case', 'snake')
 testuser_tenant = os.environ.get('tenant', 'dev')
-
+nfs_develop_mode = conf.nfs_develop_mode
 
 def get_service_tapis_client():
     sk_url = os.environ.get('sk_url', conf.primary_site_admin_tenant_base_url)
@@ -26,7 +26,7 @@ def get_service_tapis_client():
     resource_set = os.environ.get('resource_set', 'local')
     custom_spec_dict = os.environ.get('custom_spec_dict', None)
     download_latest_specs = os.environ.get('download_latest_specs', False)
-    # if there is no tenant_id, use the service_tenant_id and primary_site_admin_tenant_base_url configured for the service:    
+    # if there is no tenant_id, use the service_tenant_id and primary_site_admin_tenant_base_url configured for the service:
     t = Tapis(base_url=sk_url or base_url,
               tenant_id=tenant_id,
               username='abaco',
@@ -46,6 +46,12 @@ def get_service_tapis_client():
     return t
 
 t = get_service_tapis_client()
+
+
+@pytest.fixture(scope='session')
+def skip_if_develop_mode():
+    if nfs_develop_mode:
+        pytest.skip("Skipping test because nfs_develop_mode is set to True.")
 
 # In dev:
 # service account owns abaco_admin and abaco_privileged roles
@@ -99,7 +105,7 @@ def cycling_headers(regular_headers, privileged_headers):
 
 def get_tapis_token_headers(user, alt_tenant=None):
     # Uses alternative tenant if provided.
-    token_res = t.tokens.create_token(account_type='user', 
+    token_res = t.tokens.create_token(account_type='user',
                                       token_tenant_id=alt_tenant or testuser_tenant,
                                       token_username=user,
                                       access_token_ttl=999999,
@@ -154,8 +160,7 @@ def get_jwt_headers(file_path='/home/tapis/tests/jwt-abaco_admin'):
     return headers
 
 def delete_pods(client, headers):
-    rsp = client.get("/pods",
-                     headers=headers)
+    rsp = client.get("/pods", headers=headers)
     result = basic_response_checks(rsp)
     for pod in result:
         url = f'/pods/{pod.get("pod_id")}'
@@ -171,6 +176,7 @@ def response_format(rsp):
     return data
 
 def basic_response_checks(rsp):
+    print(rsp)
     if not rsp.status_code in [200, 201]:
         print(rsp.content)
     assert rsp.status_code in [200, 201]

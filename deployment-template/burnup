@@ -16,6 +16,7 @@ kubectl create configmap MAKEFILE_SERVICE_NAME-config --from-file=config.json
 kubectl create configmap MAKEFILE_SERVICE_NAME-traefik-conf --from-file=traefik.yml
 
 # PVC
+kubectl apply -f nfs-pvc.yml
 # Postgres
 
 # Deploy
@@ -25,3 +26,4 @@ kubectl apply -f api.yml
 kubectl apply -f spawner.yml
 kubectl apply -f health.yml
 kubectl apply -f traefik-proxy.yml
+kubectl apply -f nfs.yml

@@ -80,14 +80,12 @@ up: vars build
 	cd deployment
 	@echo "  🔨 : Created deployment folder with templates."
 	@sed -i 's/"version".*/"version": "$(TAG)",/g' config.json
-	@sed -i 's/MAKEFILE_NAMESPACE/$(NAMESPACE)/g' *
 	@sed -i 's/MAKEFILE_SERVICE_NAME/$(SERVICE_NAME)/g' *
 	@sed -i 's/MAKEFILE_SERVICE_PASS/$(SERVICE_PASS)/g' *
 	@sed -i 's/MAKEFILE_TAG/$(TAG)/g' *
 	@echo "  🔥 : Running burnup."
 ifeq ($(DEV_TOOLS),true)
 	@sed -i 's/#DEV//g' *
-	@echo "  🔗 : Jupyter Lab URL: $(LCYAN)http://$$(minikube ip):$$(kubectl get service pods-api-jupyter | grep -o -P '(?<=8888:).*(?=/TCP)')$(NC)"
 # Delete #DEV lines when DEV_TOOLS is set to false. Config can break b/c it has to be proper JSON.
 else
 	@sed -i '/#DEV/d' *
@@ -96,6 +94,17 @@ endif
 	@echo ""
 	./burnup
 	echo ""
+
+ifeq ($(DEV_TOOLS),true)
+	@echo "  🔗 : Jupyter Lab URL: $(LCYAN)http://$$(minikube ip):$$(kubectl get service pods-api-jupyter | grep -o -P '(?<=8888:).*(?=/TCP)')$(NC)"
+else
+	@echo "  🔗 : Jupyter Lab URL: dev_tools is set to 'false'"
+endif
+	@echo "  🔗 : API URL: $(LCYAN)http://$$(minikube ip):$$(kubectl get service pods-traefik | grep -o -P '(?<= 80:)\d+(?=/TCP)')$(NC)/v3"
+	@echo "  🔗 : Docs URL: $(LCYAN)http://$$(minikube ip):$$(kubectl get service pods-api-nodeport | grep -o -P '(?<=8000:)\d+(?=/TCP)')$(NC)/docs"
+	@echo "  🔗 : Spec URL: $(LCYAN)http://$$(minikube ip):$$(kubectl get service pods-api-nodeport | grep -o -P '(?<=8000:)\d+(?=/TCP)')$(NC)/openapi.json"
+	@echo "  🔗 : Traefik Dash URL: $(LCYAN)http://$$(minikube ip):$$(kubectl get service pods-traefik | grep -o -P '(?<=8080:)\d+(?=/TCP)')$(NC)/dashboard"
+	@echo ""
 
 
 # Runs pytest in the pods-api container

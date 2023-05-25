@@ -10,7 +10,10 @@
       "rabbitmq_uri",
       "global_tenant_object",
       "global_site_object",
-      "spawner_host_id"
+      "spawner_host_id",
+      "nfs_tapis_system_id",
+      "nfs_develop_mode",
+      "nfs_base_path"
     ],
     "properties": {
       "python_framework_type": {
@@ -20,7 +23,11 @@
       },
       "kubernetes_namespace": {
         "type": "string",
-        "description": "The namespace for kubernetes to create workers and execution pods. Only relevant to spawner and health. Meaning the config should be changed on each new namespace to match."
+        "description": "The namespace to find traefik config and pods. Relevant to health so that it can modify config in realtime."
+      },
+      "kubernetes_deploy_namespace": {
+        "type": "string",
+        "description": "The namespace for kubernetes to create workers and pods in. Only relevant to spawner and health."
       },
       "rabbitmq_uri": {
         "type": "string",
@@ -80,6 +87,34 @@
         "items": {
           "type": "string"
         }
+      },
+      "nfs_tapis_system_id": {
+        "type": "string",
+        "description": "system_id to create/use to deal with pods-nfs files API."
+      },
+      "nfs_base_path": {
+        "type": "string",
+        "description": "Base path for nfs system root_dir. Should be /{base_path}/{tenant}/, tenant is added at runtime."
+      },
+      "nfs_develop_mode": {
+        "type": "boolean",
+        "description": "While developing locally we expect nfs does not work. This stops nfs specific code from running when not needed."
+      },
+      "nfs_develop_remote_url": {
+        "type": "string",
+        "description": "If service not actually deployed, you can specify the nfs_url systems should use for initial configuration."
+      },
+      "nfs_develop_private_key": {
+        "type": "string",
+        "description": "nfs private key for 'pods' user to create Systems credential. Derived during runtime if not provided (works when Files ands Pods are deployed in the same cluster)"
+      },
+      "nfs_develop_public_key": {
+        "type": "string",
+        "description": "nfs public key for 'pods' user to create Systems credential. Derived during runtime if not provided (works when Files ands Pods are deployed in the same cluster)"
+      },
+      "nfs_pods_user_password": {
+        "type": "string",
+        "description": "nfs pod password for 'pods' user to create Systems credential. Archived in favor of keys."
       },
       "global_tenant_object": {
         "type": "object",

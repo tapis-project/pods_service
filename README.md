@@ -59,3 +59,6 @@ Steps:
         - `minikube mount --uid=4872 --gid=4872 --msize=1048576000 /home/user/repodir/pods_service:/pods_service`
         - You will have to keep the command running, no daemon mode.
 	- Start Jupyter Lab from within "api". Link to lab should be in Make stdout under the up target.
+
+## Acknowledgement
+This work has been funded by grants from the National Science Foundation, including the ICICLE AI Institute (OAC 2112606) and Tapis (OAC 1931439). 

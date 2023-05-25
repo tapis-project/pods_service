@@ -20,6 +20,7 @@ class TapisApiModel(BaseModel):
         extra = "forbid"
 
 class TapisModel(SQLModel):
+    #__table_args__ = ({"schema": "defaulttables"},)
     class Config:
         orm_mode = True
         validate_assignment = True
@@ -93,11 +94,6 @@ class TapisModel(SQLModel):
     def from_db(cls, db_dict):
         """Construct a DAO from a db dict."""
         return cls(**db_dict)
-
-    @classmethod
-    def db_get_DAO(cls, pk_id):
-        """Construct a DAO from a db dict queried with pk_id."""
-        return cls.from_db(cls.db_get(pk_id))
 
     @classmethod
     def db_get_where(cls, where_params: List[List], tenant, site):
