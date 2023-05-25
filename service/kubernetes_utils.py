@@ -8,18 +8,17 @@ import random
 from typing import Literal, Dict, List
 
 from jinja2 import Environment, FileSystemLoader
-from kubernetes import client, config
+from kubernetes import client, config, stream
 from requests.exceptions import ReadTimeout, ConnectionError
 
 from tapisservice.logs import get_logger
 logger = get_logger(__name__)
 
 from tapisservice.config import conf
-from codes import RUNNING, CREATING_CONTAINER
+from codes import AVAILABLE, CREATING
 from stores import SITE_TENANT_DICT
 from stores import pg_store
 from sqlmodel import select
-from models import Pod
 
 # k8 client creation
 config.load_incluster_config()
@@ -40,7 +39,7 @@ class KubernetesStopContainerError(KubernetesError):
     pass
 
 
-def get_kubernetes_namespace():
+def get_kubernetes_namespaces():
     """
     Attempt to get namespace from filesystem
     Should be in file /var/run/secrets/kubernetes.io/serviceaccount/namespace
@@ -48,25 +47,28 @@ def get_kubernetes_namespace():
     We first take config, if not available, we grab from filesystem. Meaning
     config should usually be empty.
     """
-    namespace = conf.get("kubernetes_namespace", None)
-    if not namespace:
+    namespace = conf.get("kubernetes_worker_namespace", None)
+    home_namespace = conf.get("kubernetes_namespace", None)
+
+    if not namespace and not home_namespace:
         try:
             logger.debug("Attempting to get kubernetes_namespace from file.")
             with open("/var/run/secrets/kubernetes.io/serviceaccount/namespace") as f:
                 content = f.readlines()
                 namespace = content[0].strip()
+                home_namespace = namespace
         except Exception as e:
             logger.debug(f"Couldn't grab kubernetes namespace from filesystem. e: {e}")
         
     if not namespace:
-        msg = "In get_kubernetes_namespace(). Failed to get namespace."
+        msg = "In get_kubernetes_namespaces(). Failed to get namespace."
         logger.debug(msg)
         raise KubernetesError(msg)
-    logger.debug(f"In get_kubernetes_namespace(). Got namespace: {namespace}.")
-    return namespace
+    logger.debug(f"In get_kubernetes_namespaces(). Got namespace: {namespace}.")
+    return namespace, home_namespace
 
 # Get k8 namespace for future use.
-NAMESPACE = get_kubernetes_namespace()
+NAMESPACE, HOME_NAMESPACE = get_kubernetes_namespaces()
 
 def rm_container(k8_name):
     """
@@ -75,7 +77,7 @@ def rm_container(k8_name):
     :return:
     """    
     try:
-        k8.delete_namespaced_pod(name=k8_name, namespace=NAMESPACE)
+        k8.delete_namespaced_pod(name=k8_name, namespace=DEPLOY_NAMESPACE)
     except Exception as e:
         logger.info(f"Got exception trying to remove pod: {k8_name}. Exception: {e}")
         raise KubernetesError(f"Error removing pod {k8_name}, exception: {str(e)}")
@@ -88,7 +90,7 @@ def rm_service(service_name):
     :return:
     """    
     try:
-        k8.delete_namespaced_service(name=service_name, namespace=NAMESPACE)
+        k8.delete_namespaced_service(name=service_name, namespace=DEPLOY_NAMESPACE)
     except Exception as e:
         logger.info(f"Got exception trying to remove service: {service_name}. Exception: {e}")
         raise KubernetesError(f"Error removing service {service_name}, exception: {str(e)}")
@@ -101,20 +103,24 @@ def rm_pvc(pvc_name):
     :return:
     """    
     try:
-        k8.delete_namespaced_persistent_volume_claim(name=pvc_name, namespace=NAMESPACE)
+        k8.delete_namespaced_persistent_volume_claim(name=pvc_name, namespace=DEPLOY_NAMESPACE)
     except Exception as e:
         logger.info(f"Got exception trying to remove pvc: {pvc_name}. Exception: {e}")
         raise KubernetesError(f"Error removing pvc {pvc_name}, exception: {str(e)}")
     logger.info(f"delete_namespaced_persistent_volume_claim ran for pvc {pvc_name}.")
 
-def list_all_containers():
+def list_all_containers(filter_str: str = "pods"):
     """Returns a list of all containers in a particular namespace """
     pods = k8.list_namespaced_pod(NAMESPACE).items
+    # filter pods by filter_str
+    pods = [pod for pod in pods if filter_str in pod.metadata.name]
     return pods
 
-def list_all_services():
+def list_all_services(filter_str: str = "pods"):
     """Returns a list of all containers in a particular namespace """
     services = k8.list_namespaced_service(NAMESPACE).items
+    # filter services by filter_str
+    services = [service for service in services if filter_str in service.metadata.name]
     return services
 
 def get_current_k8_pods(service_name: str = "pods", site_id: str = conf.site_id):
@@ -132,25 +138,24 @@ def get_current_k8_pods(service_name: str = "pods", site_id: str = conf.site_id)
     """Get all containers, filter for just db, and display."""
     filter_str = f"{service_name}-{site_id}"
     db_containers = []
-    for k8_pod in list_all_containers():
+    for k8_pod in list_all_containers(filter_str=filter_str):
         k8_name = k8_pod.metadata.name
-        if filter_str in k8_name:
-            # db name format = "pods-<site>-<tenant>-<pod_id>
-            # so split on - to get parts (containers use _, pods use -)
-            try:
-                parts = k8_name.split('-')
-                site_id = parts[1]
-                tenant_id = parts[2]
-                pod_id = parts[3]
-                db_containers.append({'pod_info': k8_pod,
-                                      'site_id': site_id,
-                                      'tenant_id': tenant_id,
-                                      'pod_id': pod_id,
-                                      'k8_name': k8_name})
-            except Exception as e:
-                msg = f"Exception parsing k8 pods. e: {e}"
-                print(msg)
-                pass
+        # db name format = "pods-<site>-<tenant>-<pod_id>
+        # so split on - to get parts (containers use _, pods use -)
+        try:
+            parts = k8_name.split('-')
+            site_id = parts[1]
+            tenant_id = parts[2]
+            pod_id = parts[3]
+            db_containers.append({'pod_info': k8_pod,
+                                    'site_id': site_id,
+                                    'tenant_id': tenant_id,
+                                    'pod_id': pod_id,
+                                    'k8_name': k8_name})
+        except Exception as e:
+            msg = f"Exception parsing k8 pods. e: {e}"
+            print(msg)
+            pass
     return db_containers
 
 def get_current_k8_services(service_name: str = "pods", site_id: str = conf.site_id):
@@ -168,33 +173,62 @@ def get_current_k8_services(service_name: str = "pods", site_id: str = conf.site
     """Get all containers, filter for just db, and display."""
     filter_str = f"{service_name}-{site_id}"
     db_services = []
-    for k8_service in list_all_services():
+    for k8_service in list_all_containers(filter_str=filter_str):
         k8_name = k8_service.metadata.name
-        if filter_str in k8_name:
-            # db name format = "pods-<site>-<tenant>-<pod_id>
-            # so split on - to get parts (containers use _, pods use -)
-            try:
-                parts = k8_name.split('-')
-                site_id = parts[1]
-                tenant_id = parts[2]
-                pod_id = parts[3]
-                db_services.append({'service_info': k8_service,
-                                    'site_id': site_id,
-                                    'tenant_id': tenant_id,
-                                    'pod_id': pod_id,
-                                    'k8_name': k8_name})
-            except Exception as e:
-                msg = f"Exception parsing k8 services. e: {e}"
-                print(msg)
-                pass
+        # db name format = "pods-<site>-<tenant>-<pod_id>
+        # so split on - to get parts (containers use _, pods use -)
+        try:
+            parts = k8_name.split('-')
+            site_id = parts[1]
+            tenant_id = parts[2]
+            pod_id = parts[3]
+            db_services.append({'service_info': k8_service,
+                                'site_id': site_id,
+                                'tenant_id': tenant_id,
+                                'pod_id': pod_id,
+                                'k8_name': k8_name})
+        except Exception as e:
+            msg = f"Exception parsing k8 services. e: {e}"
+            print(msg)
+            pass
     return db_services
 
 def get_k8_logs(name: str):
     try:
-        logs = k8.read_namespaced_pod_log(namespace=NAMESPACE, name=name)
+        logs = k8.read_namespaced_pod_log(namespace=DEPLOY_NAMESPACE, name=name)
         return logs
     except Exception as e:
         return ""
+
+def run_k8_exec(k8_name: str, command: list, namespace: str = ""):
+    # This starts a Kubernetes exec in the background. We can poll progress/status
+    # if the exec is still running with resp.is_open().
+    resp = stream.stream(
+        k8.connect_get_namespaced_pod_exec,
+        k8_name,
+        namespace or NAMESPACE,
+        command=command,
+        stderr=True, stdin=False,
+        stdout=True, tty=False,
+        _preload_content=False)
+    
+    # Alternative. Checks on stderr and stdout while exec is still running. 
+    # while resp.is_open()
+    #     resp.update(timeout=1)
+    #     if resp.peek_stdout():
+    #         print(f"{resp.read_stdout()}")
+    #     if resp.peek_stderr():
+    #         print(f"STDERR: \n\n{resp.read_stderr()}\n")
+
+    # Waits till exec is complete and then grab results
+    while resp.is_open():
+        resp.update(timeout=1)
+
+    # get stdout and stderr
+    stdout = resp.read_stdout()
+    stderr = resp.read_stderr()
+    
+    return stdout, stderr
 
 def container_running(name: str):
     """
@@ -214,7 +248,7 @@ def container_running(name: str):
     if not name:
         raise KeyError(f"kubernetes_utils.container_running received name: {name}")
     try:
-        if k8.read_namespaced_pod(namespace=NAMESPACE, name=name).status.phase == 'Running':
+        if k8.read_namespaced_pod(namespace=DEPLOY_NAMESPACE, name=name).status.phase == 'Running':
             return True
     except client.ApiException:
         # pod not found
@@ -244,7 +278,7 @@ def stop_container(name: str):
     i = 0
     while i < 10:        
         try:
-            k8.delete_namespaced_pod(namespace=NAMESPACE, name=name)
+            k8.delete_namespaced_pod(namespace=DEPLOY_NAMESPACE, name=name)
             return True
         except client.ApiException:
             # pod not found
@@ -416,7 +450,7 @@ def create_pod(name: str,
             api_version="v1"
         )
         k8_pod = k8.create_namespaced_pod(
-            namespace=NAMESPACE,
+            namespace=DEPLOY_NAMESPACE,
             body=pod_body
         )
     except Exception as e:
@@ -463,7 +497,7 @@ def create_service(name, ports_dict={}):
             api_version="v1"
         )
         k8_service = k8.create_namespaced_service(
-            namespace=NAMESPACE,
+            namespace=DEPLOY_NAMESPACE,
             body=service_body
         )
     except Exception as e:
@@ -494,7 +528,7 @@ def create_pvc(name):
             api_version="v1"
         )
         k8_pvc = k8.create_namespaced_persistent_volume_claim(
-            namespace=NAMESPACE,
+            namespace=DEPLOY_NAMESPACE,
             body=pvc_body
         )
     except Exception as e:

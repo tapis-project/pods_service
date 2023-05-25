@@ -31,8 +31,10 @@ spec:
 #DEV        - name: jupyter
 #DEV          containerPort: 8888
         env:
-        - name: api
+        - name: PODS_COMPONENT
           value: api
+        - name: DEBUG_SLEEP_LOOP
+          value: 'false'
         - name: SERVICE_PASSWORD
           valueFrom:
             secretKeyRef:

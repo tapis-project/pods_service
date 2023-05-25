@@ -33,12 +33,17 @@
         "notchristiangarcia/vaapi-v1-f",
         "notchristiangarcia/vaapi-v1-b"
     ],
+    "nfs_tapis_system_id": "pods-nfs-server",
+    "nfs_pvc_name": "pods-nfs-vol",
+    "nfs_base_path": "/podsnfs/",
+    "nfs_develop_mode": true,
+    "nfs_develop_remote_url": "10.11.111.111",
     "pvc_storage_class_name": "standard",
     "spawner_host_id": 0,
     "spawner_host_queues": [
         "tacc"
     ],
-#DEV    "show_traceback": true,
+#DEV    "show_traceback": false,
     "site_id": "tacc",
     "global_site_object": {
         "site_rabbitmq_pass": "defaultpass"

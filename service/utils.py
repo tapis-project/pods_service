@@ -9,6 +9,7 @@ from tapisservice.tapisfastapi.utils import error
 from tapisservice.config import conf
 from tapisservice.errors import BaseTapisError
 from tapisservice.logs import get_logger
+from sqlalchemy.exc import IntegrityError
 logger = get_logger(__name__)
 
 
@@ -34,10 +35,15 @@ async def error_handler(request: Request, exc):
                 logger.error(f"Got exception trying to format the exception! e: {repr(e)}")
 
     if not response and status_code == -1:
-        # We are looking for all errors derived from BaseTapisError
+        # We are looking for all errors derived from 
+        logger.debug(f"Top of Pods Service error handler. Got error type: {type(exc).__name__}")
         if isinstance(exc, BaseTapisError):
             response = error(msg=exc.msg)
             status_code = exc.code
+        elif isinstance(exc, IntegrityError):
+            extra_end_str = "\\n')"
+            response = error(msg=f"Duplicate key found:{repr(exc).split('DETAIL: ')[1].replace(extra_end_str, '')}")
+            status_code = 500
         elif isinstance(exc, RequestValidationError) or isinstance(exc, ValidationError):
             error_list = []
             for error_dict in exc.errors():
@@ -80,3 +86,37 @@ class HttpUrlRedirectMiddleware:
       await response(scope, receive, send)
     else:
       await self.app(scope, receive, send)
+
+import codes
+
+def check_permissions(user, level, object, object_type, roles=None):
+    """Check the appropriate permissions store for user and level.
+    object: a pod, volume, or snapshot object. Also can be result of models_base.parse_permissions().
+    """
+    # Running something like: Checking pod_id: {pod.pod_id} permissions for user {user}
+    logger.debug(f"Checking {object_type}_id: {eval(f'object.{object_type}_id')} permissions for user {user}")
+
+    # first, if roles were passed, check for admin role
+    if roles:
+        if codes.ADMIN_ROLE in roles:
+            return True
+
+    # Get all permissions for this object_type
+    # Running something like: volumes.get_permissions()
+    permissions = object.get_permissions()
+    
+    # Attempt to get permission level for particular user.
+    user_level = permissions.get(user)
+    if not user_level:
+        logger.info(f"Found no permissions for user {user} on {object_type}: {eval(f'object.{object_type}_id')}. Permissions: {permissions}")
+        return False
+
+    # Get user pem and compare to level.
+    user_pem = codes.PermissionLevel(user_level)
+    if user_pem >= level:
+        logger.info(f"Allowing request - user has appropriate permission for {object_type}: {eval(f'object.{object_type}_id')}.")
+        return True
+    else:
+        # we found the permission for the user but it was insufficient; return False right away
+        logger.info(f"Found permission {level} for  {object_type}: {eval(f'object.{object_type}_id')}, insufficient permission, rejecting request.")
+        return False
