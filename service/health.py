@@ -499,9 +499,8 @@ def check_nfs_tapis_system():
         # Our service tenant gets an extra system so health can inspect the entire nfs directory in one shot,
         # rather than getting files in each tenant's directory.
         if tenant == conf.service_tenant_id:
-            system_id = f"{system_id}-admin"
             root_dir = f"{conf.nfs_base_path}"
-            create_tapis_system_and_creds_and_init(system_id, nfs_ssh_ip, root_dir, tenant, nfs_develop_private_key, nfs_develop_public_key, folder_init=False)
+            create_tapis_system_and_creds_and_init(system_id + "-admin", nfs_ssh_ip, root_dir, tenant, nfs_develop_private_key, nfs_develop_public_key, folder_init=False)
 
 
 def create_tapis_system_and_creds_and_init(system_id, nfs_ssh_ip, root_dir, tenant, private_key, public_key, folder_init=True):
