@@ -333,6 +333,20 @@ def check_db_pods(k8_pods):
     # This functions only updates if config is out of date.
     update_traefik_configmap(tcp_proxy_info, http_proxy_info, postgres_proxy_info)
 
+
+def add_path(tree, path, file):
+    # Function to create a tree of dictionaries that represent the file structure of the NFS system.
+    nodes = path.split('/')
+    current = tree
+    for node in nodes:
+        if file.type == "dir":
+            current = current.setdefault(node, {})
+        elif file.type == "file":
+            current = current.setdefault(node, file)
+
+    return tree
+
+
 def check_nfs_files():
     """Go through database for all tenants in this site. Go through all nfs files, ensure there are no files corresponding with
     items that are not in the database.
@@ -340,19 +354,16 @@ def check_nfs_files():
 
     logger.info("Top of check_nfs_files.")
 
-    #all_site_files = files_listfiles(system_id=conf.nfs_tapis_system_id, path="/volumes", tenant_id="siteadmintable")
-
+    # Get all files recursively in the nfs volume
+    all_site_files = files_listfiles(system_id=conf.nfs_tapis_system_id + "-admin", path="/volumes", tenant_id="admin")
+    # Take all files and create a dictionary tree that's easier to parse.
+    file_tree = {}
+    for file in all_site_files:
+        add_path(file_tree, file.path, file)
+    
     for tenant in SITE_TENANT_DICT[conf.site_id]:
         logger.info(f"Top of check_nfs_files for tenant: {tenant}.\n")
         ### Volumes
-        # Get all folders in the pods nfs volume folder
-        try:
-            tenant_volume_files = files_listfiles(system_id=conf.nfs_tapis_system_id, path="/volumes", tenant_id=tenant)
-        except Exception as e:
-            logger.error(f"Error getting /volumes from tenant: {tenant}. Error: {e}")
-            tenant_volume_files = []
-            continue
-
         # Go through database for tenant. Get all volumes
         tenant_volume_list = Volume.db_get_all(tenant=tenant, site=conf.site_id)
         tenant_volume_dict = {}
@@ -361,7 +372,7 @@ def check_nfs_files():
             tenant_volume_dict[volume.volume_id] = volume
 
         # Go through all files entries in the tenant, looking for excess files. Ones who don't have entry in volumes db.
-        for file in tenant_volume_files:
+        for file in file_tree[tenant]['volumes']:
             # Found match
             if tenant_volume_dict.get(file.name):
                 logger.info(f"Found match for file: {file.name}")
@@ -370,18 +381,10 @@ def check_nfs_files():
             else:
                 logger.warning(f"Couldn't find volume with name: {file.name} in database: {tenant_volume_dict}. Deleting it now.\n")
                 logger.debug(f"volume dict: {tenant_volume_dict}")
-                logger.debug(f"volume files: {tenant_volume_files}")
+                logger.debug(f"volume files: {file_tree[tenant]['volumes']}")
                 files_delete(system_id=conf.nfs_tapis_system_id, path=f"/volumes/{file.name}", tenant_id=tenant)
 
         ### Snapshots
-        # Get all folders in the pods nfs snapshots folder
-        try:
-            tenant_snapshot_files = files_listfiles(system_id=conf.nfs_tapis_system_id, path="/snapshots", tenant_id=tenant)
-        except Exception as e:
-            logger.error(f"Error getting /snapshots from tenant: {tenant}. Error: {e}")
-            tenant_snapshot_files = []
-            continue
-
         # Go through database for tenant. Get all snapshots
         tenant_snapshot_list = Snapshot.db_get_all(tenant=tenant, site=conf.site_id)
         tenant_snapshot_dict = {}
@@ -390,7 +393,7 @@ def check_nfs_files():
             tenant_snapshot_dict[snapshot.snapshot_id] = snapshot
         
         # Go through all files entries in the tenant, looking for excess files. Ones who don't have entry in snapshots db.
-        for file in tenant_snapshot_files:
+        for file in file_tree[tenant]['snapshots']:
             # Found match
             if tenant_snapshot_dict.get(file.name):
                 logger.info(f"Found match for file: {file.name}")
@@ -399,7 +402,7 @@ def check_nfs_files():
             else:
                 logger.warning(f"Couldn't find snapshot with name: {file.name} in database: {tenant_snapshot_dict}. Deleting it now.\n")
                 logger.debug(f"snapshot dict: {tenant_snapshot_dict}")
-                logger.debug(f"snapshot files: {tenant_snapshot_files}")
+                logger.debug(f"snapshot files: {file_tree[tenant]['snapshots']}")
                 files_delete(system_id=conf.nfs_tapis_system_id, path=f"/snapshots/{file.name}", tenant_id=tenant)
 
         ### TODO: Check volume size

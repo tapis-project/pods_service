@@ -23,6 +23,7 @@ spec:
             rc-status &&\
             rc-update add sshd &&\
             touch /run/openrc/softlevel &&\
+            setfacl -R -m u:pods:rwx /podsnfs &&\
             mkdir /home/pods/.ssh &&\
             ssh-keygen -f /home/pods/.ssh/podskey -m PEM -q -N '' &&\
             cp /home/pods/.ssh/podskey.pub /home/pods/.ssh/authorized_keys &&\
