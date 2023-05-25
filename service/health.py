@@ -343,7 +343,6 @@ def add_path(tree, path, file):
             current = current.setdefault(node, {})
         elif file.type == "file":
             current = current.setdefault(node, file)
-
     return tree
 
 
@@ -355,7 +354,7 @@ def check_nfs_files():
     logger.info("Top of check_nfs_files.")
 
     # Get all files recursively in the nfs volume
-    all_site_files = files_listfiles(system_id=conf.nfs_tapis_system_id + "-admin", path="/", tenant_id="admin")
+    all_site_files = files_listfiles(system_id=conf.nfs_tapis_system_id + "-admin", path="/", recurse=True, tenant_id="admin")
     # Take all files and create a dictionary tree that's easier to parse.
     file_tree = {}
     for file in all_site_files:
