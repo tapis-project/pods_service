@@ -372,17 +372,17 @@ def check_nfs_files():
             tenant_volume_dict[volume.volume_id] = volume
 
         # Go through all files entries in the tenant, looking for excess files. Ones who don't have entry in volumes db.
-        for file in file_tree[tenant]['volumes']:
+        for folder in file_tree[tenant]['volumes'].keys():
             # Found match
-            if tenant_volume_dict.get(file.name):
-                logger.info(f"Found match for file: {file.name}")
+            if tenant_volume_dict.get(folder):
+                logger.info(f"Found match for folder: {folder}")
                 pass
             # File doesn't match any entries in volumes db. We will delete it
             else:
-                logger.warning(f"Couldn't find volume with name: {file.name} in database: {tenant_volume_dict}. Deleting it now.\n")
+                logger.warning(f"Couldn't find volume with name: {folder} in database: {tenant_volume_dict}. Deleting it now.\n")
                 logger.debug(f"volume dict: {tenant_volume_dict}")
                 logger.debug(f"volume files: {file_tree[tenant]['volumes']}")
-                files_delete(system_id=conf.nfs_tapis_system_id, path=f"/volumes/{file.name}", tenant_id=tenant)
+                files_delete(system_id=conf.nfs_tapis_system_id, path=f"/volumes/{folder}", tenant_id=tenant)
 
         ### Snapshots
         # Go through database for tenant. Get all snapshots
@@ -393,17 +393,17 @@ def check_nfs_files():
             tenant_snapshot_dict[snapshot.snapshot_id] = snapshot
         
         # Go through all files entries in the tenant, looking for excess files. Ones who don't have entry in snapshots db.
-        for file in file_tree[tenant]['snapshots']:
+        for folder in file_tree[tenant]['snapshots'].keys():
             # Found match
-            if tenant_snapshot_dict.get(file.name):
-                logger.info(f"Found match for file: {file.name}")
+            if tenant_snapshot_dict.get(folder):
+                logger.info(f"Found match for folder: {folder}")
                 pass
             # File doesn't match any entries in snapshots db. We will delete it
             else:
-                logger.warning(f"Couldn't find snapshot with name: {file.name} in database: {tenant_snapshot_dict}. Deleting it now.\n")
+                logger.warning(f"Couldn't find snapshot with name: {folder} in database: {tenant_snapshot_dict}. Deleting it now.\n")
                 logger.debug(f"snapshot dict: {tenant_snapshot_dict}")
                 logger.debug(f"snapshot files: {file_tree[tenant]['snapshots']}")
-                files_delete(system_id=conf.nfs_tapis_system_id, path=f"/snapshots/{file.name}", tenant_id=tenant)
+                files_delete(system_id=conf.nfs_tapis_system_id, path=f"/snapshots/{folder}", tenant_id=tenant)
 
         ### TODO: Check volume size
         # For existing volumes, check the size of the folder and ensure it's below volume size max
