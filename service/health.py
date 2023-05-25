@@ -340,6 +340,8 @@ def check_nfs_files():
 
     logger.info("Top of check_nfs_files.")
 
+    #all_site_files = files_listfiles(system_id=conf.nfs_tapis_system_id, path="/volumes", tenant_id="siteadmintable")
+
     for tenant in SITE_TENANT_DICT[conf.site_id]:
         logger.info(f"Top of check_nfs_files for tenant: {tenant}.\n")
         ### Volumes
@@ -477,7 +479,7 @@ def check_nfs_tapis_system():
 
             # We successfully got both keys, we'll now use these derived ones.
             if derived_private_key and derived_public_key:
-                logger.info(f"Successfully derived public and private keys from nfs pod. Using derived keys.\n\n{derived_public_key}\n\n{derived_private_key}\n")
+                logger.info(f"Successfully derived public and private keys from nfs pod. Using derived keys.")#\n\n{derived_public_key}\n\n{derived_private_key}\n")
                 nfs_develop_private_key = derived_private_key
                 nfs_develop_public_key = derived_public_key
 
@@ -487,63 +489,73 @@ def check_nfs_tapis_system():
 
     # Go through each tenant and create system
     for tenant in SITE_TENANT_DICT[conf.site_id]:
-        # I forget why tbh
-        if tenant == "smartfoods":
-            continue
         # Logging for tenant initialization
         logger.info(f"Initializing nfs for tenant: {tenant}.")
-        # System definition which we will "create" indiscriminately. If it already exists, we catch
-        # the error and attempt a put to ensure definition is up-to-date for each tenant.
-        system = {
-            "id": system_id,
-            "description": "Pods nfs system, located in the same k8 namespace as files. Pod named 'pods-nfs' set host to 'k get service pods-nfs-ssh' clusterIp fyi.",
-            "systemType": "LINUX",
-            "host": nfs_ssh_ip, # direct ip is absolutely required. Tried talking to Steve, it's needed.
-            "defaultAuthnMethod": "PKI_KEYS",
-            "effectiveUserId": "pods",
-            "port": 22,
-            "rootDir": f"{conf.nfs_base_path}/{tenant}",
-            "canExec": False
-        }
+        root_dir = f"{conf.nfs_base_path}/{tenant}"
+        create_tapis_system_and_creds_and_init(system_id, nfs_ssh_ip, root_dir, tenant, nfs_develop_private_key, nfs_develop_public_key, folder_init=True)
 
-        # Create system, put if it already exists.
-        try:
-            res = t.systems.createSystem(
-                systemId=system_id,
-                **system,
-                _x_tapis_tenant=tenant,
-                _x_tapis_user='pods')
-        except BaseTapyException as e:
-            # System already exists, we'll just t.systems.putSystem (putSystem instead of patchSystem
-            # as we'll use same input as createSystem).
-            if "System already exists." in e.message:
-                logger.info(f"Pods' nfs Tapis system already exists, running putSystem instead of createSystem")
-                try:
-                    res = t.systems.putSystem(
-                        **system,
-                        systemId=system_id,
-                        _x_tapis_tenant=tenant,
-                        _x_tapis_user='pods')
-                except BaseTapyException as e:
-                    msg = f"Error when running t.systems.putSystem. {e}"
-                    logger.info(msg)
-                    raise BaseTapyException(msg)
-        try:
-            # Log credential creation
-            logger.info(f"Creating credential for {conf.site_id}.{tenant}.")
-            # Create credential
-            cred = t.systems.createUserCredential(
-                systemId=system_id,
-                userName='pods',
-                privateKey=nfs_develop_private_key, # If you want the `defaultAuthnMethod` of `PASSWORD` -> password=conf.nfs_pods_user_password
-                publicKey=nfs_develop_public_key,
-                _x_tapis_tenant=tenant,
-                _x_tapis_user='pods')
-        except Exception as e:
-            msg = f"Error creating credential for {conf.site_id}.{tenant} {system_id} system. e: {e}"
-            logger.critical(msg)
-            raise BaseTapyException(msg)
+        # Our service tenant gets an extra system so health can inspect the entire nfs directory in one shot,
+        # rather than getting files in each tenant's directory.
+        if tenant == conf.service_tenant_id:
+            system_id = f"{system_id}-admin"
+            root_dir = f"{conf.nfs_base_path}"
+            create_tapis_system_and_creds_and_init(system_id, nfs_ssh_ip, root_dir, tenant, nfs_develop_private_key, nfs_develop_public_key, folder_init=False)
 
+
+def create_tapis_system_and_creds_and_init(system_id, nfs_ssh_ip, root_dir, tenant, private_key, public_key, folder_init=True):
+    # System definition which we will "create" indiscriminately. If it already exists, we catch
+    # the error and attempt a put to ensure definition is up-to-date for each tenant.
+    system = {
+        "id": system_id,
+        "description": "Pods nfs system, located in the same k8 namespace as files. Pod named 'pods-nfs' set host to 'k get service pods-nfs-ssh' clusterIp fyi.",
+        "systemType": "LINUX",
+        "host": nfs_ssh_ip, # direct ip is absolutely required. Tried talking to Steve, it's needed.
+        "defaultAuthnMethod": "PKI_KEYS",
+        "effectiveUserId": "pods",
+        "port": 22,
+        "rootDir": root_dir,
+        "canExec": False
+    }
+
+    # Create system, put if it already exists.
+    try:
+        res = t.systems.createSystem(
+            systemId=system_id,
+            **system,
+            _x_tapis_tenant=tenant,
+            _x_tapis_user='pods')
+    except BaseTapyException as e:
+        # System already exists, we'll just t.systems.putSystem (putSystem instead of patchSystem
+        # as we'll use same input as createSystem).
+        if "System already exists." in e.message:
+            logger.info(f"Pods' nfs Tapis system already exists, running putSystem instead of createSystem")
+            try:
+                res = t.systems.putSystem(
+                    **system,
+                    systemId=system_id,
+                    _x_tapis_tenant=tenant,
+                    _x_tapis_user='pods')
+            except BaseTapyException as e:
+                msg = f"Error when running t.systems.putSystem. {e}"
+                logger.info(msg)
+                raise BaseTapyException(msg)
+    try:
+        # Log credential creation
+        logger.info(f"Creating credential for {conf.site_id}.{tenant}.")
+        # Create credential
+        cred = t.systems.createUserCredential(
+            systemId=system_id,
+            userName='pods',
+            privateKey=private_key, # If you want the `defaultAuthnMethod` of `PASSWORD` -> password=conf.nfs_pods_user_password
+            publicKey=public_key,
+            _x_tapis_tenant=tenant,
+            _x_tapis_user='pods')
+    except Exception as e:
+        msg = f"Error creating credential for {conf.site_id}.{tenant} {system_id} system. e: {e}"
+        logger.critical(msg)
+        raise BaseTapyException(msg)
+
+    if folder_init:
         try:
             logger.info(f"Creating tenant root folder for {conf.site_id}.{tenant}.")
             # Ensure tenant root folder exists, this will not cause issues even if volume is already in use.
@@ -582,6 +594,7 @@ def check_nfs_tapis_system():
             msg = f"Error creating tenant snapshots folder for {conf.site_id}.{tenant} {system_id} system. e: {e}"
             logger.critical(msg)
             raise BaseTapyException(msg)
+
 
 def main():
     # Try and run check_db_pods. Will try for 60 seconds until health is declared "broken".

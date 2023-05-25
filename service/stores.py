@@ -190,7 +190,7 @@ def create_pg_objects():
     
     # Now add in all of the sites and tenant pg engines.
     for site, tenants in SITE_TENANT_DICT.items():
-        tenant_copy = tenants.copy() + ["siteadmintables", "defaulttables"]
+        tenant_copy = tenants.copy() + ["siteadmintable", "defaulttables"]
         for tenant in tenant_copy:
             pg = PostgresStore(username=admin_postgres_user,
                                password=admin_postgres_pass,

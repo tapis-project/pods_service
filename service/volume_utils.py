@@ -140,7 +140,7 @@ def files_mkdir(system_id: str, path: str = "", tenant_id: str = "", user: str =
     
     logger.info(f"Successfully ran files.mkdir. path: {path}.")
 
-def files_listfiles(system_id: str, path: str, tenant_id: str = "", user: str = "pods") -> List[TapisResult]:
+def files_listfiles(system_id: str, path: str, recurse: bool = False, tenant_id: str = "", user: str = "pods") -> List[TapisResult]:
     """ list in nfs vol
 
     Args:
@@ -157,6 +157,7 @@ def files_listfiles(system_id: str, path: str, tenant_id: str = "", user: str = 
         ls_files = t.files.listFiles(
             systemId = system_id,
             path = path,
+            recurse = recurse,
             _x_tapis_tenant = tenant_id or g.tenant_id,
             _x_tapis_user = user)
     except NotFoundError:

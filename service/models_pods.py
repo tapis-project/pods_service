@@ -287,8 +287,8 @@ class Pod(TapisPodBaseFull, table=True, validate=True):
         # config -> health -> update service db
         # api -> special role -> update "tenant" db
 
-        # We search the siteadmintables schema for the templates that our tenant is allowed to use.
-        all_templates = Template.db_get_all(tenant="siteadmintables", site=g.site_id)
+        # We search the siteadmintable schema for the templates that our tenant is allowed to use.
+        all_templates = Template.db_get_all(tenant="siteadmintable", site=g.site_id)
         custom_allow_list = []
         for template in all_templates:
             if g.tenant_id in template.tenants or "*" in template.tenants:
