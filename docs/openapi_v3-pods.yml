@@ -1984,13 +1984,13 @@ components:
           type: string
           description: Time (UTC) that this snapshot was created.
           format: date-time
-          default: '2023-05-25T20:51:46.092862'
+          default: '2023-05-25T20:51:46.092862Z'
         update_ts:
           title: Update Ts
           type: string
           description: Time (UTC) that this snapshot was updated.
           format: date-time
-          default: '2023-05-25T20:51:46.092887'
+          default: '2023-05-25T20:51:46.092887Z'
       additionalProperties: false
       description: Response object for Snapshot class.
     SnapshotsResponse:
