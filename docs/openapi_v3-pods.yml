@@ -1780,13 +1780,13 @@ components:
           type: string
           description: Time (UTC) that this pod was created.
           format: date-time
-          default: '2023-05-25T20:51:46.112775'
+          default: '2023-05-25T20:51:46.112775Z'
         update_ts:
           title: Update Ts
           type: string
           description: Time (UTC) that this pod was updated.
           format: date-time
-          default: '2023-05-25T20:51:46.112782'
+          default: '2023-05-25T20:51:46.112782Z'
         start_instance_ts:
           title: Start Instance Ts
           type: string
@@ -2285,13 +2285,13 @@ components:
           type: string
           description: Time (UTC) that this snapshot was created.
           format: date-time
-          default: '2023-05-25T20:51:45.865346'
+          default: '2023-05-25T20:51:45.865346Z'
         update_ts:
           title: Update Ts
           type: string
           description: Time (UTC) that this snapshot was updated.
           format: date-time
-          default: '2023-05-25T20:51:45.865353'
+          default: '2023-05-25T20:51:45.865353Z'
       additionalProperties: false
       description: Response object for Volume class.
     VolumesResponse:
