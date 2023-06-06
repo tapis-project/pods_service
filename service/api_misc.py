@@ -8,7 +8,10 @@ import yaml
 
 router = APIRouter()
 
-@router.get("/traefik-config")
+@router.get("/traefik-config",
+    tags=["Misc"],
+    summary="traefik_config",
+    operation_id="traefik_config")
 async def api_traefik_config():
     """
     Supplies traefik-config to service. Returns json traefik-config object for
@@ -19,7 +22,10 @@ async def api_traefik_config():
     yaml_config = yaml.safe_load(config.to_dict()['data']['traefik.yml'])
     return yaml_config
 
-@router.get("/healthcheck")
+@router.get("/healthcheck",
+    tags=["Misc"],
+    summary="healthcheck",
+    operation_id="healthcheck")
 async def api_healthcheck():
     """
     Health check for service. Returns healthy when api is running.
@@ -27,12 +33,11 @@ async def api_healthcheck():
     """
     return ok("I promise I'm healthy.")
 
-@router.get("/error-handler")
-
 @router.get(
     "/error-handler/{status}",
-    tags=[],
-    response_model=TapisApiModel)
+    tags=["Misc"],
+    summary="error_handler",
+    operation_id="error_handler")
 async def error_codes(status):
     """Handles all error codes from Traefik.
     """
