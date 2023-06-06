@@ -1,10 +1,6 @@
 # Change Log
 All notable changes to this project will be documented in this file.
 
-
-# Change Log
-All notable changes to this project will be documented in this file.
-
 ## 1.3.1 - 2023-03-09
 
 ### Breaking Changes:
