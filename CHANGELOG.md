@@ -1,7 +1,7 @@
 # Change Log
 All notable changes to this project will be documented in this file.
 
-## 1.3.1 - 2023-03-09
+## 1.3.1 - 2023-06-06
 
 ### Breaking Changes:
 - Changed image declarations from `custom-myuser/myimage` to `myuser/myimage`.
