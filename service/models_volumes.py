@@ -38,9 +38,9 @@ class VolumeBase(TapisApiModel):
 class VolumeBaseRead(VolumeBase):
     # Provided
     size: int = Field(0, description = "Size of volume currently in MB")
-    status: str = Field("REQUESTED", description = "Current status of snapshot.")
-    creation_ts: datetime | None = Field(datetime.utcnow(), description = "Time (UTC) that this snapshot was created.")
-    update_ts: datetime | None = Field(datetime.utcnow(), description = "Time (UTC) that this snapshot was updated.")
+    status: str = Field("REQUESTED", description = "Current status of volume.")
+    creation_ts: datetime | None = Field(None, description = "Time (UTC) that this volume was created.")
+    update_ts: datetime | None = Field(None, description = "Time (UTC) that this volume was updated.")
 
 
 class VolumeBaseFull(VolumeBaseRead):
@@ -78,6 +78,14 @@ class Volume(TapisVolumeBaseFull, table=True, validate=True):
     @validator('site_id')
     def check_site_id(cls, v):
         return g.site_id
+
+    @validator('creation_ts')
+    def check_creation_ts(cls, v):
+        return datetime.utcnow()
+    
+    @validator('update_ts')
+    def check_update_ts(cls, v):
+        return datetime.utcnow()
 
     @validator('permissions')
     def check_permissions(cls, v):

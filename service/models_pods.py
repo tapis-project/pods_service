@@ -186,9 +186,9 @@ class PodBaseRead(PodBase):
     status_container: Dict = Field({}, description = "Status of container if exists. Gives phase.", sa_column=Column(JSON))
     data_attached: List[str] = Field([], description = "Data attached.", sa_column=Column(ARRAY(String)))
     roles_inherited: List[str] = Field([], description = "Inherited roles required to view this pod", sa_column=Column(ARRAY(String)))
-    creation_ts: datetime | None = Field(datetime.utcnow(), description = "Time (UTC) that this pod was created.")
-    update_ts: datetime | None = Field(datetime.utcnow(), description = "Time (UTC) that this pod was updated.")
-    start_instance_ts: datetime | None = Field(None, description = "Time (UTC) that this pod instance was started.")
+    creation_ts: datetime | None = Field(None, description = "Time (UTC) that this pod was created.")
+    update_ts: datetime | None = Field(None, description = "Time (UTC) that this pod was updated.")
+    start_instance_ts: datetime | None = Field(None, description = "Time (UdTC) that this pod instance was started.")
 
 
 class PodBaseFull(PodBaseRead):
@@ -207,7 +207,7 @@ class Pod(TapisPodBaseFull, table=True, validate=True):
     @validator('pod_id')
     def check_pod_id(cls, v):
         # In case we want to add reserved keywords.
-        reserved_pod_ids = []
+        reserved_pod_ids = ["catalog", "snapshots", "volumes", "admin", "catalogs", "snapshot", "volume"]
         if v in reserved_pod_ids:
             raise ValueError(f"pod_id overlaps with reserved pod ids: {reserved_pod_ids}")
         # Regex match full pod_id to ensure a-z0-9.
@@ -226,6 +226,14 @@ class Pod(TapisPodBaseFull, table=True, validate=True):
     @validator('site_id')
     def check_site_id(cls, v):
         return g.site_id
+
+    @validator('creation_ts')
+    def check_creation_ts(cls, v):
+        return datetime.utcnow()
+    
+    @validator('update_ts')
+    def check_update_ts(cls, v):
+        return datetime.utcnow()
 
     @validator('permissions')
     def check_permissions(cls, v):
