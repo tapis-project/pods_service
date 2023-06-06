@@ -2,6 +2,46 @@
 All notable changes to this project will be documented in this file.
 
 
+# Change Log
+All notable changes to this project will be documented in this file.
+
+## 1.3.1 - 2023-03-09
+
+### Breaking Changes:
+- Changed image declarations from `custom-myuser/myimage` to `myuser/myimage`.
+- `neo4j` and `postgres` templates are now under `template/neo4j` and `template/postgres`.
+- Status changes: `RUNNING` -> `AVAILABLE`, `SHUTTING_DOWN` -> `DELETING`, `CREATING_CONTAINER (and volume)` -> `CREATING` 
+
+### New features:
+- Added volume and snapshot support/utils/models/etc. Using nfs pvc storage to volume mount block storage to running pods.
+    - Users can share volumes and collaborate live on the same storage. Snapshots allow users to take copies of volumes for data versioning purposes.
+- Automatic creation of nfs backend with Files along with secure PKI access throughout.
+- New model schema to reduce replicated code and have a consolidated method to update models.
+- Rewrote nfs health code to reduce number of calls to Files from each tenant + volume to once per health check run.
+- Added siteadmintenant to allow for site wide database configs.
+- Added database allowlist
+- Added `develop_mode` config to easily turn nfs/other features off and on.
+
+### Bug fixes:
+- Changed how datetime is setup to validate OpenAPI spec properly.
+- Changed namespace code which was causing breaks.
+- Added testing for new features and improved testing for old.
+- Additional changes for Postgres
+- Reworked auth slightly to make it simpler
+
+
+## 1.3.0 - 2023-03-09
+
+### Breaking Changes:
+- Yes.
+
+### New features:
+- Since last changelog, now using Traefik as backend, Postgres workaround, Graphdb workarounds as well.
+
+### Bug fixes:
+- Yes.
+
+
 ## 0.30.4 - 2022-06-09
 
 ### Breaking Changes:
