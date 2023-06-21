@@ -360,7 +360,17 @@ def check_nfs_files():
     for file in all_site_files:
         add_path(file_tree, file.path, file)
     
-    for tenant in SITE_TENANT_DICT[conf.site_id]:
+    ## Workaround while I wait for Files listFiles fix. There needs to be less than 20 tenants. Getting rid of non-used tenants.
+    workaround_tenants = SITE_TENANT_DICT.copy()
+    try:
+        workaround_tenants[conf.site_id].remove('vdjserver')
+        workaround_tenants[conf.site_id].remove('jupyter-tacc-dev')
+        workaround_tenants[conf.site_id].remove('jupyter-designsafe-dev')
+        workaround_tenants[conf.site_id].remove('cyverse')
+    except:
+        pass
+
+    for tenant in workaround_tenants[conf.site_id]:
         logger.info(f"Top of check_nfs_files for tenant: {tenant}.\n")
         ### Volumes
         # Go through database for tenant. Get all volumes
