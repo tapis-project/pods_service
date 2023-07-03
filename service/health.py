@@ -452,14 +452,14 @@ def check_nfs_tapis_system():
             for k8_pod in list_all_containers(filter_str="pods-nfs"):
                 k8_name = k8_pod.metadata.name
                 # pods-nfs also matches pods-nfs-mkdir, so we manually pass that case
-                if "pods-nfs-mkdirs" in k8_name or "pods-nfs-vol" in k8_name:
+                if "pods-nfs-mkdirs" in k8_name:
                     continue
                 nfs_pods.append({'pod_info': k8_pod,
                                  'k8_name': k8_name})
             # Checking how many services met the filter (should hopefully be only one)
             match len(nfs_pods):
                 case 1:
-                    logger.info(f"Found one pod matching pods-nfs. List: {nfs_pods}")
+                    logger.info(f"Found one pod matching pods-nfs. Name: {nfs_pods[0]['k8_name']}")
                     break
                 case 0:
                     logger.info(f"Couldn't find pod matching pods-nfs. Trying again.")
@@ -470,6 +470,12 @@ def check_nfs_tapis_system():
             # Increment and have a short wait
             idx += 1
             time.sleep(3)
+        else:
+            logger.error(f"Couldn't find pod matching pods-nfs after 20 tries. Exiting check_nfs_tapis_system.")
+            return
+
+        # k8_name could have been changed by now, so we need to set from nfs_pods.
+        k8_name = nfs_pods[0]['k8_name']
 
         # We must either get PKI info from environment variables or derive info from pod.
         # Only grab keys from pod if remote_run = False
