@@ -86,7 +86,6 @@ tcp:
     {% endfor %}
     {% for pname, pdata in postgres_proxy_info.items() -%}
     {{ pname }}:
-      startTLS: postgres
       loadBalancer:
         servers:
          - address: {{ pname }}:{{ pdata.routing_port }}
