@@ -452,20 +452,20 @@ def check_nfs_tapis_system():
             for k8_pod in list_all_containers(filter_str="pods-nfs"):
                 k8_name = k8_pod.metadata.name
                 # pods-nfs also matches pods-nfs-mkdir, so we manually pass that case
-                if "pods-nfs-mkdirs" in k8_name:
+                if "pods-nfs-mkdirs" in k8_name or "pods-nfs-vol" in k8_name:
                     continue
                 nfs_pods.append({'pod_info': k8_pod,
                                  'k8_name': k8_name})
             # Checking how many services met the filter (should hopefully be only one)
             match len(nfs_pods):
                 case 1:
-                    logger.info(f"Found pod matching pods-nfs: {k8_name}")
+                    logger.info(f"Found one pod matching pods-nfs. List: {nfs_pods}")
                     break
                 case 0:
                     logger.info(f"Couldn't find pod matching pods-nfs. Trying again.")
                     pass
                 case _:
-                    logger.info(f"Got >1 pods matching pods-nfs. Matching pods: {[pod['k8_name'] for pod in nfs_pods]}. Trying again.")                
+                    logger.info(f"Got >1 pods matching pods-nfs. Matching pods: {[pod['k8_name'] for pod in nfs_pods]}. Trying again.")
                     pass
             # Increment and have a short wait
             idx += 1
