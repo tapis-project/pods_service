@@ -142,9 +142,9 @@ def start_neo4j_pod(pod, revision: int):
 
 
     # Create and mount certs neccessary for bolt TLS.
-    secret_volume = client.V1SecretVolumeSource(secret_name='pods-certs')
-    volumes.append(client.V1Volume(name='certs', secret = secret_volume))
-    volume_mounts.append(client.V1VolumeMount(name="certs", mount_path="/certificates/bolt"))
+    #secret_volume = client.V1SecretVolumeSource(secret_name='pods-certs')
+    #volumes.append(client.V1Volume(name='certs', secret = secret_volume))
+    #volume_mounts.append(client.V1VolumeMount(name="certs", mount_path="/certificates/bolt"))
 
     # Init new user/pass https://neo4j.com/labs/apoc/4.1/operational/init-script/
     container = {
@@ -154,7 +154,8 @@ def start_neo4j_pod(pod, revision: int):
         "command": [
             '/bin/bash',
             '-c',
-            ('export NEO4J_dbms_default__advertised__address=$(hostname -f) && '
+            ('java -jar ./lib/server.jar ssc -n localhost -o ./certificates -p snakeoil -d localhost -i 127.0.0.1 &&'
+             'export NEO4J_dbms_default__advertised__address=$(hostname -f) && '
              'exec /docker-entrypoint.sh "neo4j"')
         ],
         "ports_dict": {
