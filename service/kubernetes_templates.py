@@ -156,6 +156,7 @@ def start_neo4j_pod(pod, revision: int):
             '-c',
             ('mkdir /certificates &&'
              'openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout /certificates/snakeoil.key -out /certificates/snakeoil.crt -subj "/CN=neo4j" && '
+             'chmod -R 777 /certificates && '
              'export NEO4J_dbms_default__advertised__address=$(hostname -f) && '
              'exec /docker-entrypoint.sh "neo4j"')
         ],
