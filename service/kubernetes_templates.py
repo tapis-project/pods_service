@@ -154,7 +154,7 @@ def start_neo4j_pod(pod, revision: int):
         "command": [
             '/bin/bash',
             '-c',
-            ('java -jar ./lib/server.jar ssc -n localhost -o ./certificates -p snakeoil -d localhost -i 127.0.0.1 &&'
+            ('openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout /certificates/snakeoil.key -out /certificates/snakeoil.crt -subj "/CN=neo4j"; &&'
              'export NEO4J_dbms_default__advertised__address=$(hostname -f) && '
              'exec /docker-entrypoint.sh "neo4j"')
         ],
@@ -166,8 +166,8 @@ def start_neo4j_pod(pod, revision: int):
             #"NEO4JLABS_PLUGINS": '["apoc", "n10s"]', # not needed with custom notchristiangarcia/neo4j image
             "NEO4J_dbms_ssl_policy_bolt_enabled": "true",
             "NEO4J_dbms_ssl_policy_bolt_base__directory": "/certificates/bolt", # Can't mount anything to /var/lib/neo4j. Neo4j attempts chown, read-only. So change dir.
-            "NEO4J_dbms_ssl_policy_bolt_private__key": "tls.key",
-            "NEO4J_dbms_ssl_policy_bolt_public__certificate": "tls.crt",
+            "NEO4J_dbms_ssl_policy_bolt_private__key": "snakeoil.key",
+            "NEO4J_dbms_ssl_policy_bolt_public__certificate": "snakeoil.crt",
             "NEO4J_dbms_ssl_policy_bolt_client__auth": "NONE",
             "NEO4J_dbms_security_auth__enabled": "true",
             "NEO4J_dbms_mode": "SINGLE",
