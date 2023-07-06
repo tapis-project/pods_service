@@ -40,7 +40,8 @@ http:
     {{ pname }}:
       rule: "Host(`{{ pdata.url }}`)"
       service: "{{ pname }}"
-      tls: {}
+      tls:
+        certResolver: tlsletsencrypt
     {% endfor %}
 
   services:
@@ -63,13 +64,15 @@ tcp:
     {{ pname }}:
       rule: "HostSNI(`{{ pdata.url }}`)"
       service: "{{ pname }}"
-      tls: {}
+      tls:
+        certResolver: tlsletsencrypt
     {% endfor %}
     {% for pname, pdata in postgres_proxy_info.items() -%}
     {{ pname }}:
       rule: "HostSNI(`{{ pdata.url }}`)"
       service: "{{ pname }}"
       tls:
+        certResolver: tlsletsencrypt
         passthrough: true
     {% endfor %}
 
@@ -83,21 +86,7 @@ tcp:
     {% endfor %}
     {% for pname, pdata in postgres_proxy_info.items() -%}
     {{ pname }}:
-      startTLS: postgres
       loadBalancer:
         servers:
          - address: {{ pname }}:{{ pdata.routing_port }}
     {% endfor %}
-
-tls:
-  options:
-    default:
-      minVersion: VersionTLS12
-  certificates:
-    - certFile: /tmp/ssl/tls.crt
-      keyFile: /tmp/ssl/tls.key
-  stores:
-    default:
-      defaultCertificate:
-        certFile: /tmp/ssl/tls.crt
-        keyFile: /tmp/ssl/tls.key

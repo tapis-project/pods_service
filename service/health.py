@@ -360,7 +360,17 @@ def check_nfs_files():
     for file in all_site_files:
         add_path(file_tree, file.path, file)
     
-    for tenant in SITE_TENANT_DICT[conf.site_id]:
+    ## Workaround while I wait for Files listFiles fix. There needs to be less than 20 tenants. Getting rid of non-used tenants.
+    workaround_tenants = SITE_TENANT_DICT.copy()
+    try:
+        workaround_tenants[conf.site_id].remove('vdjserver')
+        workaround_tenants[conf.site_id].remove('jupyter-tacc-dev')
+        workaround_tenants[conf.site_id].remove('jupyter-designsafe-dev')
+        workaround_tenants[conf.site_id].remove('cyverse')
+    except:
+        pass
+
+    for tenant in workaround_tenants[conf.site_id]:
         logger.info(f"Top of check_nfs_files for tenant: {tenant}.\n")
         ### Volumes
         # Go through database for tenant. Get all volumes
@@ -449,17 +459,23 @@ def check_nfs_tapis_system():
             # Checking how many services met the filter (should hopefully be only one)
             match len(nfs_pods):
                 case 1:
-                    logger.info(f"Found pod matching pods-nfs: {k8_name}")
+                    logger.info(f"Found one pod matching pods-nfs. Name: {nfs_pods[0]['k8_name']}")
                     break
                 case 0:
                     logger.info(f"Couldn't find pod matching pods-nfs. Trying again.")
                     pass
                 case _:
-                    logger.info(f"Got >1 pods matching pods-nfs. Matching pods: {[pod['k8_name'] for pod in nfs_pods]}. Trying again.")                
+                    logger.info(f"Got >1 pods matching pods-nfs. Matching pods: {[pod['k8_name'] for pod in nfs_pods]}. Trying again.")
                     pass
             # Increment and have a short wait
             idx += 1
             time.sleep(3)
+        else:
+            logger.error(f"Couldn't find pod matching pods-nfs after 20 tries. Exiting check_nfs_tapis_system.")
+            return
+
+        # k8_name could have been changed by now, so we need to set from nfs_pods.
+        k8_name = nfs_pods[0]['k8_name']
 
         # We must either get PKI info from environment variables or derive info from pod.
         # Only grab keys from pod if remote_run = False
