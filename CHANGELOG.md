@@ -1,6 +1,33 @@
 # Change Log
 All notable changes to this project will be documented in this file.
 
+## 1.4.0 - 2023-07-06
+
+### Breaking Changes:
+- No change.
+  
+### New features:
+- No change.
+
+### Bug fixes:
+- No change.
+
+
+## 1.3.2 - 2023-06-30
+
+### Breaking Changes:
+- No change.
+  
+### New features:
+- Traefik proxying now automatically creates certificates at runtime for each subdomain (meaning each pod).
+- Service no longer requires initial, or any, manual certificate creation.
+- Some edits for Neo4j as it requires a injected cert.
+- Changes for local dev as it's now different from deployment.
+
+### Bug fixes:
+- No change.
+
+
 ## 1.3.1 - 2023-06-06
 
 ### Breaking Changes:
