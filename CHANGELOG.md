@@ -1,6 +1,18 @@
 # Change Log
 All notable changes to this project will be documented in this file.
 
+## 1.4.0 - 2023-07-06
+
+### Breaking Changes:
+- No change.
+  
+### New features:
+- No change.
+
+### Bug fixes:
+- No change.
+
+
 ## 1.3.2 - 2023-06-30
 
 ### Breaking Changes:
