@@ -272,7 +272,7 @@ def check_db_pods(k8_pods):
                 pod.db_update()
         
         ### DB entries without a running pod should be updated to STOPPED.
-        if pod.status_requested in ['ON'] and pod.status in [AVAILABLE, DELETING]:
+        if pod.status_requested in ['ON'] and pod.status in [AVAILABLE, DELETING, REQUESTED]:
             k8_pod_found = False
             for k8_pod in k8_pods:
                 if pod.pod_id in k8_pod['pod_id']:
