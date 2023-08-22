@@ -285,6 +285,7 @@ def check_db_pods(k8_pods):
                 pod.time_to_stop_instance = None
                 pod.status_container = {}
                 pod.db_update()
+                continue
 
         ### Pods in requested, if no running pod and db not updated for 5 minutes, set to STOPPED
         if pod.status_requested in ['ON'] and pod.status in [REQUESTED]:
@@ -301,6 +302,7 @@ def check_db_pods(k8_pods):
                     pod.time_to_stop_instance = None
                     pod.status_container = {}
                     pod.db_update()
+                    continue
 
         ### Sets pods to status_requested = OFF when current time > time_to_stop_ts.
         if pod.status_requested in ['ON'] and pod.time_to_stop_ts and pod.time_to_stop_ts < datetime.utcnow():
