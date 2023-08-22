@@ -286,6 +286,22 @@ def check_db_pods(k8_pods):
                 pod.status_container = {}
                 pod.db_update()
 
+        ### Pods in requested, if no running pod and db not updated for 5 minutes, set to STOPPED
+        if pod.status_requested in ['ON'] and pod.status in [REQUESTED]:
+            k8_pod_found = False
+            for k8_pod in k8_pods:
+                if pod.pod_id in k8_pod['pod_id']:
+                    k8_pod_found = True
+            if not k8_pod_found:
+                if pod.update_ts and pod.update_ts < datetime.utcnow() - timedelta(minutes=5):
+                    logger.info(f"pod_id: {pod.pod_id} found with no running pods, in REQUESTED, and update_ts > 5 minutes. STOPPING.")
+                    pod.status = STOPPED
+                    pod.start_instance_ts = None
+                    pod.time_to_stop_ts = None
+                    pod.time_to_stop_instance = None
+                    pod.status_container = {}
+                    pod.db_update()
+
         ### Sets pods to status_requested = OFF when current time > time_to_stop_ts.
         if pod.status_requested in ['ON'] and pod.time_to_stop_ts and pod.time_to_stop_ts < datetime.utcnow():
             logger.info(f"pod_id: {pod.pod_id} time_to_stop trigger passed. Current time: {datetime.utcnow()} > time_to_stop_ts: {pod.time_to_stop_ts}")
