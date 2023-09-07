@@ -113,7 +113,7 @@ def files_mkdir(system_id: str, path: str = "", tenant_id: str = "", user: str =
     """
     logger.debug("top of volume_utils.files_mkdir().")
     # Normalize path
-    path = path.replace("///", "/").replace("//", "/")
+    path = os.path.abspath(path)
 
     # Note: t.files.mkdir will error when a file already exists, will not error if a folder already exists.
     # mkdir in files to create /{path}
@@ -148,8 +148,7 @@ def files_listfiles(system_id: str, path: str, limit: int = 1000, offset:int = 0
     """
     logger.debug(f"top of volume_utils.files_listfiles(), using tenant: {tenant_id}.")
     # Normalize path
-    path = path.replace("///", "/").replace("//", "/")
-
+    path = os.path.abspath(path)
 
     # Ensure /{path} does not already exist
     # We expect listFiles to give tapipy.errors.NotFoundError, if no pre-existing folder/file.
@@ -182,7 +181,7 @@ def files_delete(system_id: str, path: str = "", tenant_id: str = "", user: str 
     """
     logger.debug("top of volume_utils.files_delete().")
     # Normalize path
-    path = path.replace("///", "/").replace("//", "/")
+    path = os.path.abspath(path)
 
     # Note: t.files.delete will error when a file/folder doesn't exist.
     # delete /{path} folder
@@ -209,7 +208,7 @@ def files_delete(system_id: str, path: str = "", tenant_id: str = "", user: str 
 def files_insert(system_id: str, file: str, path: str, tenant_id: str = "", user: str = "pods") -> None:
     logger.debug("top of volume_utils.files_insert().")
     # Normalize path
-    path = path.replace("///", "/").replace("//", "/")
+    path = os.path.abspath(path)
 
     # insert to /{path}
     try:
@@ -229,8 +228,8 @@ def files_insert(system_id: str, file: str, path: str, tenant_id: str = "", user
 def files_movecopy(system_id: str, operation: str, source_path:str, new_path: str, tenant_id: str = "", user: str = "pods") -> None:
     logger.debug("top of volume_utils.files_moveCopy().")
     # Normalize paths
-    source_path = source_path.replace("///", "/").replace("//", "/")
-    new_path = new_path.replace("///", "/").replace("//", "/")
+    source_path = os.path.abspath(source_path)
+    new_path = os.path.abspath(new_path)
 
     if operation not in ["MOVE", "COPY"]:
         msg = f"files_moveCopy expects operation argument with value 'MOVE' or 'COPY', got: {operation}"
