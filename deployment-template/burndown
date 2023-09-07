@@ -4,8 +4,6 @@ kubectl delete -f secrets.yml
 # Certs - Built-in certs added in secrets.yml. Only uncomment if you have cert-manager installed. If so delete certs from secrets.yml
 #kubectl delete -f cert-issuer.yml
 #kubectl delete -f cert.yml
-# PVC
-kubectl delete -f nfs-pvc.yml
 
 # Deploy
 kubectl delete -f rabbitmq.yml
@@ -25,5 +23,8 @@ kubectl delete -f security.yml
 # Configs
 kubectl delete configmap MAKEFILE_SERVICE_NAME-config
 kubectl delete configmap MAKEFILE_SERVICE_NAME-traefik-conf
+
+# PVC
+kubectl delete -f nfs-pvc.yml
 
 sleep 3 # let k8 catch up

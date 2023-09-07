@@ -46,19 +46,20 @@ async def get_pod_credentials(pod_id):
     response_model=PodLogsResponse)
 async def get_pod_logs(pod_id):
     """
-    Get a pods logs.
+    Get a pods stdout logs and action_logs.
     
     Note:
-    - These are only retrieved while pod is running.
+    - Pod logs are only retrieved while pod is running.
     - If a pod is restarted or turned off and then on, the logs will be reset.
+    - Action logs are detailed logs of actions taken on the pod.
 
-    Returns pod logs.
+    Returns pod stdout logs and action logs.
     """
     logger.info(f"GET /pods/{pod_id}/logs - Top of get_pod_logs.")
 
     pod = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
 
-    return ok(result={"logs": pod.logs}, msg = "Pod logs retrieved successfully.")
+    return ok(result={"logs": pod.logs, "action_logs": pod.action_logs}, msg = "Pod logs retrieved successfully.")
 
 
 @router.get(
@@ -111,7 +112,7 @@ async def set_pod_permission(pod_id, set_permission: SetPermission):
 
     # Ensure there's still one ADMIN role before finishing.
     if "ADMIN" not in curr_perms.values():
-        raise KeyError(f"Operation would result in pod with no users in 'ADMIN' roll. Rolling back.")
+        raise KeyError(f"Operation would result in pod with no users in ADMIN role. Rolling back.")
 
     # Convert back to db format
     perm_list = []
@@ -120,7 +121,7 @@ async def set_pod_permission(pod_id, set_permission: SetPermission):
 
     # Update pod object and commit
     pod.permissions = perm_list
-    pod.db_update()
+    pod.db_update(f"'{g.username}' set permission for '{inp_user}' to {inp_level}")
 
     return ok(result={"permissions": pod.permissions}, msg = "Pod permissions updated successfully.")
 
@@ -161,7 +162,7 @@ async def delete_pod_permission(pod_id, user):
     
     # Update pod object and commit
     pod.permissions = perm_list
-    pod.db_update()
+    pod.db_update(f"'{g.username}' deleted permission for '{user}'")
 
     return ok(result={"permissions": pod.permissions}, msg = "Pod permission deleted successfully.")
 
@@ -185,8 +186,8 @@ async def stop_pod(pod_id):
 
     pod = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
     pod.status_requested = OFF
-    pod.db_update()
-
+    pod.db_update(f"'{g.username}' ran stop_pod, set to OFF")
+                  
     return ok(result=pod.display(), msg = "Updated pod's status_requested to OFF.")
 
 
@@ -225,7 +226,7 @@ async def start_pod(pod_id):
         ch.close()
         logger.debug(f"Command Channel - Added msg for pod_id: {pod.pod_id}.")
 
-        pod.db_update()
+        pod.db_update(f"'{g.username}' ran start_pod, set to ON and REQUESTED")
 
     return ok(result=pod.display(), msg = "Updated pod's status_requested to ON and requested pod.")
 
@@ -249,6 +250,7 @@ async def restart_pod(pod_id):
 
     pod = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
     pod.status_requested = RESTART
-    pod.db_update()
 
+    pod.db_update(f"'{g.username}' ran restart_pod, set to RESTART")
+                  
     return ok(result=pod.display(), msg = "Updated pod's status_requested to RESTART.")

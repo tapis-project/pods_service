@@ -114,7 +114,7 @@ test:
 	@echo "Makefile: $(GREEN)test$(NC)"
 	@echo "  📝  : Running Tests"
 	@echo ""
-	kubectl exec -it deploy/pods-api -- pytest --maxfail 1 tests/* --disable-pytest-warnings
+	kubectl exec -it deploy/pods-api -- pytest tests/*.py --disable-pytest-warnings
 	@echo ""
 
 
