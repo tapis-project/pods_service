@@ -50,13 +50,16 @@ class TapisModel(SQLModel):
         logger.info(f"Row successfully created in table {tenant}.{table_name}.")
         return self
 
-    def db_update(self):
+    def db_update(self, log = None):
         """
         Updates based on everything in this instance
         """
         site, tenant, store = self.get_site_tenant_session(obj=self)
         table_name = self.table_name()
         logger.info(f'Top of {table_name}.db_update() for tenant.site: {tenant}.{site}')
+
+        if table_name == 'pod' and log and log not in self.action_logs[-1]: # Won't make repeat logs as well
+            self.action_logs.append(f"{datetime.utcnow().strftime('%y/%m/%d %H:%M')}: {log}")
 
         # Run command
         store.run("merge", self)

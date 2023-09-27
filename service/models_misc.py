@@ -53,6 +53,7 @@ class PermissionsModel(TapisApiModel):
 
 class LogsModel(TapisApiModel):
     logs: str = Field("", description = "Logs from kubernetes pods, useful for debugging and reading results.")
+    action_logs: List[str] = Field([], description = "Log of actions taken on this pod.", sa_column=Column(ARRAY(String, dimensions=1)))
 
 
 class CredentialsModel(TapisApiModel):

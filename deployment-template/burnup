@@ -5,6 +5,10 @@ kubectl apply -f secrets.yml
 #kubectl apply -f cert-issuer.yml
 #kubectl apply -f cert.yml
 
+# PVC
+kubectl apply -f nfs-pvc.yml
+## Postgres
+
 # Services
 kubectl apply -f services.yml
 
@@ -14,10 +18,6 @@ kubectl apply -f security.yml
 # Configs
 kubectl create configmap MAKEFILE_SERVICE_NAME-config --from-file=config.json
 kubectl create configmap MAKEFILE_SERVICE_NAME-traefik-conf --from-file=traefik.yml
-
-# PVC
-kubectl apply -f nfs-pvc.yml
-# Postgres
 
 # Deploy
 kubectl apply -f rabbitmq.yml
