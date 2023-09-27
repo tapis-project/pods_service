@@ -78,7 +78,7 @@ def spawn_pod(pod_id, tenant_id, site_id):
 
     # Pod status was REQUESTED and status_requested was ON; moving on to SPAWNER_SETUP ----
     pod.status = SPAWNER_SETUP
-    pod.db_update()
+    pod.db_update() # f"spawner set status to SPAWNER_SETUP", doesn't need to be said with CREATING so soon.
     logger.debug(f"spawner has updated pod status to SPAWNER_SETUP")
 
     try:
@@ -90,16 +90,16 @@ def spawn_pod(pod_id, tenant_id, site_id):
             start_postgres_pod(pod=pod, revision=1)
         else:
             logger.critical(f"pod_template found no working functions. Running graceful_rm_pod.")
-            graceful_rm_pod(pod)
+            graceful_rm_pod(pod, f"spawner found no matching pod template, set status to DELETING")
             return
     except Exception as e:
         logger.critical(f"Got error when creating pod. Running graceful_rm_pod. e: {e}")
-        graceful_rm_pod(pod)
+        graceful_rm_pod(pod, f"spawner got error when creating pod, set status to DELETING")
         return
 
     # If we get to this point we can update pod status
     pod.status = CREATING
-    pod.db_update()
+    pod.db_update(f"spawner set status to CREATING")
     logger.debug(f"spawner has updated pod status to CREATING")
 
 def spawn_pvc(volume_id, tenant_id, site_id):

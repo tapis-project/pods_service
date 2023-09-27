@@ -188,7 +188,8 @@ class PodBaseRead(PodBase):
     roles_inherited: List[str] = Field([], description = "Inherited roles required to view this pod", sa_column=Column(ARRAY(String)))
     creation_ts: datetime | None = Field(None, description = "Time (UTC) that this pod was created.")
     update_ts: datetime | None = Field(None, description = "Time (UTC) that this pod was updated.")
-    start_instance_ts: datetime | None = Field(None, description = "Time (UdTC) that this pod instance was started.")
+    start_instance_ts: datetime | None = Field(None, description = "Time (UTC) that this pod instance was started.")
+    action_logs: List[str] = Field([], description = "Log of past 10 actions taken on this pod.", sa_column=Column(ARRAY(String, dimensions=1)))
 
 
 class PodBaseFull(PodBaseRead):
@@ -198,7 +199,6 @@ class PodBaseFull(PodBaseRead):
     k8_name: str = Field("", description = "Name to use for Kubernetes name.")
     logs: str = Field("", description = "Logs from kubernetes pods, useful for debugging and reading results.")
     permissions: List[str] = Field([], description = "Pod permissions for each user.", sa_column=Column(ARRAY(String, dimensions=1)))
-
 
 TapisPodBaseFull = create_model("TapisPodBaseFull", __base__= type("_ComboModel", (PodBaseFull, TapisModel), {}))
 
@@ -234,6 +234,10 @@ class Pod(TapisPodBaseFull, table=True, validate=True):
     @validator('update_ts')
     def check_update_ts(cls, v):
         return datetime.utcnow()
+
+    @validator('action_logs')
+    def check_action_logs(cls, v):
+        return [f"{datetime.utcnow().strftime('%y/%m/%d %H:%M')}: Pod object created by '{g.username}'"]
 
     @validator('permissions')
     def check_permissions(cls, v):
@@ -409,6 +413,7 @@ class Pod(TapisPodBaseFull, table=True, validate=True):
         display.pop('site_id')
         display.pop('data_attached')
         display.pop('roles_inherited')
+        display['action_logs'] = display['action_logs'][-10:]
         return display
 
     @classmethod

@@ -30,16 +30,19 @@ async def update_pod(pod_id, update_pod: UpdatePod):
 
     pod = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
     
-    pre_update_pod = pod.copy()
+    pre_update_pod = pod.dict().copy()
 
     # Pod existence is already checked above. Now we validate update and update with values that are set.
     input_data = update_pod.dict(exclude_unset=True)
     for key, value in input_data.items():
         setattr(pod, key, value)
 
+    post_update_pod = pod.dict().copy()
+
     # Only update if there's a change
     if pod != pre_update_pod:
-        pod.db_update()
+        updated_fields = {key: post_update_pod[key] for key in post_update_pod if key in pre_update_pod and post_update_pod[key] != pre_update_pod[key]}
+        pod.db_update(f"'{g.username}' updated pod, updated_fields: {updated_fields}")
     else:
         return error(result=pod.display(), msg="Incoming data made no changes to pod. Is incoming data equal to current data?")
         
