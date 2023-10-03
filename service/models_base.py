@@ -58,7 +58,12 @@ class TapisModel(SQLModel):
         table_name = self.table_name()
         logger.info(f'Top of {table_name}.db_update() for tenant.site: {tenant}.{site}')
 
-        if table_name == 'pod' and log and log not in self.action_logs[-1]: # Won't make repeat logs as well
+        # We write logs when:
+        # 1. log is given
+        # 2. it's a pod
+        # 3a. if there's no current action_logs (after a migration)
+        # 3b. or if log is not in the most recent action_logs log
+        if table_name == 'pod' and log and (not self.action_logs or log not in self.action_logs[-1]):
             self.action_logs.append(f"{datetime.utcnow().strftime('%y/%m/%d %H:%M')}: {log}")
 
         # Run command

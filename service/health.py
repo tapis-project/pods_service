@@ -285,12 +285,19 @@ def check_db_pods(k8_pods):
                     k8_pod_found = True
 
             if not k8_pod_found:
-                # We let pods in CREATING or REQUESTED have timeout of 3 minutes before we stop the pod
-                # and let health try again. We check time based on pod action_logs.
-                # Get the most recent log and split on ': ' to get the time, log_str
-                log_time_str, log_str = pod.action_logs[-1].split(': ', maxsplit=1)
-                most_recent_log_time = datetime.strptime(log_time_str, '%y/%m/%d %H:%M')
-                time_difference = datetime.utcnow() - most_recent_log_time
+                # Check action_logs for proper course of action
+                if not pod.action_logs:
+                    # logs can be empty if an admin manually deleted them or if we ran a db migration. Accounting for that here.
+                    log_str = "No action logs found. Expecting to go to 'else' to be shutdown"
+                    time_difference = timedelta(minutes=5) # This line exists to stop linter complaints
+                else:
+                    # We let pods in CREATING or REQUESTED have timeout of 3 minutes before we stop the pod
+                    # and let health try again. We check time based on pod action_logs.
+                    # Get the most recent log and split on ': ' to get the time, log_str
+                    log_time_str, log_str = pod.action_logs[-1].split(': ', maxsplit=1)
+                    most_recent_log_time = datetime.strptime(log_time_str, '%y/%m/%d %H:%M')
+                    time_difference = datetime.utcnow() - most_recent_log_time
+
                 # We check pod logs to see if pod is in a state where it should have a 3 minute timeout
                 if "set status to REQUESTED" in log_str or \
                     "set status to CREATING" in log_str or \
