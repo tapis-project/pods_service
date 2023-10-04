@@ -187,6 +187,9 @@ def check_k8_pods(k8_pods):
                     pod.status = ERROR
                     # We update if there's been a change.
                     if pod != pre_health_pod:
+                        # Get logs for pod if it's being updated here as something must have changed.
+                        logs = get_k8_logs(k8_pod['k8_name'])
+                        pod.logs = logs
                         pod.db_update(f"health found pod in terminated state, set status to ERROR")
                     continue
                 elif c_state.waiting and c_state.waiting.reason == "ContainerCreating":
