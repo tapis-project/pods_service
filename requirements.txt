@@ -1,6 +1,9 @@
 # Tapis
-tapipy>=1.3.2
-tapisservice>=1.3.0
+tapipy>=1.4.0
+tapisservice>=1.4.0
+jsonschema==4.17.3 # Errors after this version with error below.
+# Error reading local "notifications" resource. Ensure path is absolute /usr/local/lib/python3.10/site-packages/tapipy/resources/openapi_v3-notifications.yml. e:cannot import name '_legacy_validators' from 'jsonschema' (/usr/local/lib/python3.10/site-packages/jsonschema/__init__.py)
+
 
 # Service API
 pydantic

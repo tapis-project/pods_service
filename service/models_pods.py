@@ -354,9 +354,9 @@ class Pod(TapisPodBaseFull, table=True, validate=True):
                     raise TypeError(f"networking key must be str. Got type {type(env_key).__name__}.")
                 res = re.fullmatch(r'[a-z0-9]+', env_key)
                 if not res:
-                    raise ValueError(f"networking key must be lowercase alphanumeric. Default if 'default'.")
+                    raise ValueError(f"networking key must be lowercase alphanumeric. Default is 'default'.")
                 if len(env_key) > 64 or len(env_key) < 3:
-                    raise ValueError(f"networking key length must be between 3-64 characters. Inputted length: {len(v)}")
+                    raise ValueError(f"networking key length must be between 3-64 characters. Inputted length: {len(env_key)}")
         return v
 
     @root_validator(pre=False)
