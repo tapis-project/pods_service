@@ -81,6 +81,10 @@
         "type": "integer",
         "description": "Unique host_id for worker host. Each host should have at least one spawner and health check worker."
       },
+      "test_abaco_service_password": {
+        "type": "string",
+        "description": "Abaco service password is required to run tests as it's able to generate tokens."
+      },
       "image_allow_list": {
         "type": "array",
         "description": "Docker images that users are allowed to use.",

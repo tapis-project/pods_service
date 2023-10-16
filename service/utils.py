@@ -16,6 +16,7 @@ logger = get_logger(__name__)
 TAG = conf.version
 
 async def error_handler(request: Request, exc):
+    logger.debug(f"Top of Pods Service error handler. Got error: {repr(exc)}")
     response = None
     status_code: int = -1
     if conf.show_traceback:
@@ -48,6 +49,8 @@ async def error_handler(request: Request, exc):
             error_list = []
             for error_dict in exc.errors():
                 error_list.append(f"{', '.join(str(err) for err in error_dict['loc'])}: {error_dict['msg']}")
+            if error_list is None:
+                response = error(msg=f'Unexpected. {repr(exc)}')
             response = error(msg=error_list)
             status_code = 400
         else:
