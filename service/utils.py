@@ -47,6 +47,7 @@ async def error_handler(request: Request, exc):
             status_code = 500
         elif isinstance(exc, RequestValidationError) or isinstance(exc, ValidationError):
             error_list = []
+            logger.debug(f"Got validation error: {repr(exc)}")
             for error_dict in exc.errors():
                 error_list.append(f"{', '.join(str(err) for err in error_dict['loc'])}: {error_dict['msg']}")
             if error_list is None:
