@@ -5,6 +5,7 @@
     "service_site_id": "tacc",
     "service_name": "pods",
     "service_password": "$env{SERVICE_PASSWORD}",
+    "test_abaco_service_password": "FILLTHISFORTESTING",
     "tenants": [
         "tacc",
         "dev",

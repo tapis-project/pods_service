@@ -5,6 +5,7 @@ from tapisservice.tapisfastapi.auth import TapisMiddleware
 from __init__ import Tenants
 from fastapi import FastAPI
 from fastapi.middleware import Middleware
+from fastapi.exceptions import RequestValidationError
 
 from auth import authorization, authentication
 from api_pods import router as router_pods
@@ -72,7 +73,11 @@ api = FastAPI(
         "url": "https://github.com/tapis-project/pods_service",
     },
     debug=False,
-    exception_handlers={Exception: error_handler},
+    exception_handlers={
+        Exception: error_handler,
+        RequestValidationError: error_handler,
+        422: error_handler
+    },
     middleware=[
         Middleware(HttpUrlRedirectMiddleware),
         Middleware(GlobalsMiddleware),

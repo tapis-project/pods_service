@@ -21,7 +21,7 @@ nfs_develop_mode = conf.nfs_develop_mode
 def get_service_tapis_client():
     sk_url = os.environ.get('sk_url', conf.primary_site_admin_tenant_base_url)
     tenant_id = os.environ.get('tenant', 'admin')
-    service_password = os.environ.get('service_password', conf.service_password)
+    test_abaco_service_password = os.environ.get('test_abaco_service_password', conf.test_abaco_service_password)
     jwt = os.environ.get('jwt', None)
     resource_set = os.environ.get('resource_set', 'local')
     custom_spec_dict = os.environ.get('custom_spec_dict', None)
@@ -29,9 +29,9 @@ def get_service_tapis_client():
     # if there is no tenant_id, use the service_tenant_id and primary_site_admin_tenant_base_url configured for the service:
     t = Tapis(base_url=sk_url or base_url,
               tenant_id=tenant_id,
-              username='abaco',
+              username='abaco', ### NOTE: Must be abaco as it can generate tokens
               account_type='service',
-              service_password=service_password,
+              service_password=test_abaco_service_password,
               jwt=jwt,
               resource_set=resource_set,
               custom_spec_dict=custom_spec_dict,
