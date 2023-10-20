@@ -1,0 +1,9 @@
+# Security/Role
+kubectl apply -n testing -f security.yml
+
+# Configs
+kubectl create configmap pods-config -n testing --from-file=config.json
+
+# Deploy
+kubectl apply -n testing -f spawner.yml
+kubectl apply -n testing -f health.yml
