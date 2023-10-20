@@ -4,6 +4,7 @@ kind: Service
 metadata:
   name: MAKEFILE_SERVICE_NAME-rabbitmq
 spec:
+  type: NodePort
   selector:
     app: MAKEFILE_SERVICE_NAME-rabbitmq
   ports:

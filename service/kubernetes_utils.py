@@ -564,10 +564,11 @@ def update_traefik_configmap(tcp_proxy_info: Dict[str, Dict[str, str]],
     current_template = k8.read_namespaced_config_map(name='pods-traefik-conf', namespace=NAMESPACE)
     
     if not current_template.data['traefik.yml'] == rendered_template:
+        logger.debug("Health found difference in Traefik configs, updated configmap.")
         # Update the configmap with the new template immediately.
         config_map = client.V1ConfigMap(data = {"traefik.yml": rendered_template})
         k8.patch_namespaced_config_map(name='pods-traefik-conf', namespace=NAMESPACE, body=config_map)
-        # Auto updates proxxy pod. Changes take place according to kubelet sync frequency duration (60s default).
+        # Auto updates proxy pod. Changes take place according to kubelet sync frequency duration (60s default).
 
 def get_traefik_configmap():
     """

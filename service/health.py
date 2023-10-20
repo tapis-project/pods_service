@@ -38,7 +38,7 @@ from datetime import datetime, timedelta
 from channels import CommandChannel
 from kubernetes import client, config
 from kubernetes_utils import get_current_k8_services, get_current_k8_pods, rm_container, rm_pvc, \
-     get_current_k8_pods, rm_service, KubernetesError, update_traefik_configmap, get_k8_logs, list_all_containers, run_k8_exec
+     get_current_k8_pods, rm_service, KubernetesError, get_k8_logs, list_all_containers, run_k8_exec
 from codes import AVAILABLE, DELETING, STOPPED, ERROR, REQUESTED, COMPLETE, RESTART, ON, OFF
 from stores import pg_store, SITE_TENANT_DICT
 from models_pods import Pod
@@ -259,7 +259,7 @@ def check_k8_services():
             continue
 
 def check_db_pods(k8_pods):
-    """Go through database for all tenants in this site. Delete/Create whatever is needed. Do proxy config stuff.
+    """Go through database for all tenants in this site. Delete/Create whatever is needed.
     """
     all_pods = []
     stmt = select(Pod)
@@ -359,31 +359,6 @@ def check_db_pods(k8_pods):
                        site_id=pod.site_id)
             ch.close()
             logger.debug(f"Command Channel - Added msg for pod_id: {pod.pod_id}.")
-
-
-    ### Proxy ports and config changes
-    # For proxy config later. proxy_info_x = {pod.k8_name: {routing_port, url}, ...} 
-    tcp_proxy_info = {}
-    http_proxy_info = {}
-    postgres_proxy_info = {}
-    for pod in all_pods:
-        # Each pod can have up to 3 networking objects with custom filled port/protocol/name
-        for net_name, net_info in pod.networking.items():
-            if not isinstance(net_info, dict):
-                net_info = net_info.dict()
-
-            template_info = {"routing_port": net_info['port'],
-                             "url": net_info['url']}
-            match net_info['protocol']:
-                case "tcp":
-                    tcp_proxy_info[pod.k8_name] = template_info
-                case "http":
-                    http_proxy_info[pod.k8_name] = template_info
-                case "postgres":
-                    postgres_proxy_info[pod.k8_name] = template_info
-
-    # This functions only updates if config is out of date.
-    update_traefik_configmap(tcp_proxy_info, http_proxy_info, postgres_proxy_info)
 
 
 def main():

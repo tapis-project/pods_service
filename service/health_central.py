@@ -7,7 +7,7 @@ Takes care of NFS health
 Does the following:
 1. Does startup work for NFS mount
 2. Goes through NFS mount and does cleaning
-3. Deals with traefik logs and metrics in general
+3. Deals with traefik proxy, logs, and metrics
 
 """
 
@@ -193,6 +193,37 @@ def nfs_folder_init(tenant):
         raise BaseTapyException(msg)
 
 
+def set_traefik_proxy():
+    all_pods = []
+    stmt = select(Pod)
+    for tenant in SITE_TENANT_DICT[conf.site_id]:
+        all_pods += pg_store[conf.site_id][tenant].run("execute", stmt, scalars=True, all=True)
+
+    ### Proxy ports and config changes
+    # For proxy config later. proxy_info_x = {pod.k8_name: {routing_port, url}, ...} 
+    tcp_proxy_info = {}
+    http_proxy_info = {}
+    postgres_proxy_info = {}
+    for pod in all_pods:
+        # Each pod can have up to 3 networking objects with custom filled port/protocol/name
+        for net_name, net_info in pod.networking.items():
+            if not isinstance(net_info, dict):
+                net_info = net_info.dict()
+
+            template_info = {"routing_port": net_info['port'],
+                             "url": net_info['url']}
+            match net_info['protocol']:
+                case "tcp":
+                    tcp_proxy_info[pod.k8_name] = template_info
+                case "http":
+                    http_proxy_info[pod.k8_name] = template_info
+                case "postgres":
+                    postgres_proxy_info[pod.k8_name] = template_info
+
+    # This functions only updates if config is out of date.
+    update_traefik_configmap(tcp_proxy_info, http_proxy_info, postgres_proxy_info)
+
+
 def main():
     # Try and run check_db_pods. Will try for 60 seconds until health is declared "broken".
     logger.info("Top of health. Checking if db's are initialized.")
@@ -219,7 +250,8 @@ def main():
     while True:
         logger.info(f"Running pods health checks. Now: {time.time()}")
         check_nfs_files()
-
+        
+        set_traefik_proxy()
         ### Have a short wait
         time.sleep(3)
 
