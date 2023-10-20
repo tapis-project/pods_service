@@ -76,7 +76,7 @@ help:
 up: vars build
 	@echo "Makefile: $(GREEN)up$(NC)"
 	@echo "  🔍 : Looking to run ./burnup in deployment folder."
-	rm -rf deployment; mkdir deployment; cp -r deployment-template/* deployment;
+	rm -rf deployment; mkdir deployment; cp -r deploymentTemplate/* deployment;
 	cd deployment
 	@echo "  🔨 : Created deployment folder with templates."
 	@sed -i 's/"version".*/"version": "$(TAG)",/g' config.json
