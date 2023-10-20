@@ -25,5 +25,6 @@ kubectl apply -f postgres.yml
 kubectl apply -f api.yml
 kubectl apply -f spawner.yml
 kubectl apply -f health.yml
+kubectl apply -f health-central.yml
 kubectl apply -f traefik-proxy.yml
 kubectl apply -f nfs.yml

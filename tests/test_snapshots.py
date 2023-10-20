@@ -3,7 +3,7 @@ import sys
 import json
 import time
 import pytest
-from tests.test_utils import headers, response_format, basic_response_checks, delete_pods, nfs_develop_mode, t, skip_if_develop_mode
+from tests.test_utils import headers, response_format, basic_response_checks, delete_pods, t
 
 # Allows us to import pods's modules.
 sys.path.append('/home/tapis/service')
@@ -109,7 +109,7 @@ def test_get_volume(headers):
 
 
 
-def test_create_snapshot(headers, skip_if_develop_mode):
+def test_create_snapshot(headers):
     # Definition
     vol_def = {
         "snapshot_id": test_snapshot_1,
@@ -127,7 +127,7 @@ def test_create_snapshot(headers, skip_if_develop_mode):
     time.sleep(2)
 
 
-def test_check_get_snapshots(headers, skip_if_develop_mode):
+def test_check_get_snapshots(headers):
     rsp = client.get("/pods/snapshots", headers=headers)
     result = basic_response_checks(rsp)
     found_pod = False
@@ -138,7 +138,7 @@ def test_check_get_snapshots(headers, skip_if_develop_mode):
     assert found_pod
 
 
-def test_snapshot_startup(headers, skip_if_develop_mode):
+def test_snapshot_startup(headers):
     i = 0
     while i < 20:
         rsp = client.get(f"/pods/snapshots/{test_snapshot_1}", headers=headers)
@@ -156,7 +156,7 @@ def test_snapshot_startup(headers, skip_if_develop_mode):
     assert result['snapshot_id'] == test_snapshot_1
 
 
-def test_get_snapshot(headers, skip_if_develop_mode):
+def test_get_snapshot(headers):
     rsp = client.get(f"/pods/snapshots/{test_snapshot_1}", headers=headers)
     result = basic_response_checks(rsp)
 
@@ -165,12 +165,12 @@ def test_get_snapshot(headers, skip_if_develop_mode):
     assert result['snapshot_id'] == test_snapshot_1
 
 
-def test_get_permissions(headers, skip_if_develop_mode):
+def test_get_permissions(headers):
     rsp = client.get(f"/pods/snapshots/{test_snapshot_1}/permissions", headers=headers)
     result = basic_response_checks(rsp)
     assert result['permissions']
 
-def test_set_permissions(headers, skip_if_develop_mode):
+def test_set_permissions(headers):
     # Definition
     perm_def = {
         "user": "testuser",
@@ -181,21 +181,19 @@ def test_set_permissions(headers, skip_if_develop_mode):
     result = basic_response_checks(rsp)
     assert "testuser:READ" in result['permissions']
 
-def test_delete_set_permissions(headers, skip_if_develop_mode):
+def test_delete_set_permissions(headers):
     user = "testuser"
     # Delete user permission from pod
     rsp = client.delete(f"/pods/snapshots/{test_snapshot_1}/permissions/{user}", headers=headers)
     result = basic_response_checks(rsp)
-    assert "Volume permission deleted successfully" in rsp.json()['message']
+    assert "Snapshot permission deleted successfully" in rsp.json()['message']
 
-def test_list_snapshot_files(headers, skip_if_develop_mode):
-    if nfs_develop_mode:
-        pytest.skip("When nfs_develop_mode True, tapipy functions won't work")
+def test_list_snapshot_files(headers):
     rsp = client.get(f"/pods/snapshots/{test_snapshot_1}/list", headers=headers)
     result = basic_response_checks(rsp)
     assert isinstance(result, list)
 
-def test_update_snapshot(headers, skip_if_develop_mode):
+def test_update_snapshot(headers):
     # Definition
     vol_def = {
         "description": "Test snapshot updated"
@@ -207,7 +205,7 @@ def test_update_snapshot(headers, skip_if_develop_mode):
     assert result['snapshot_id'] == test_snapshot_1
     assert result['description'] == "Test snapshot updated"
 
-def test_update_snapshot_no_change(headers, skip_if_develop_mode):
+def test_update_snapshot_no_change(headers):
     # Definition
     vol_def = {
         "description": "Test snapshot updated"
@@ -219,8 +217,7 @@ def test_update_snapshot_no_change(headers, skip_if_develop_mode):
 
 
 ### Pod with Volume Mounted!
-def test_create_pod_with_snapshot(headers, skip_if_develop_mode):
-    # if nfs_develop_mode is True then the mount is not actually made, it's just skipped. btw
+def test_create_pod_with_snapshot(headers):
     # Definition
     pod_def = {
         "pod_id": test_pod_1,
@@ -239,12 +236,10 @@ def test_create_pod_with_snapshot(headers, skip_if_develop_mode):
 
     # Check the pod object
     assert result['pod_id'] == test_pod_1
-    assert test_snapshot_1 in result['snapshot_mounts']
+    assert test_snapshot_1 in result['volume_mounts']
 
 
-def test_pod_with_snapshot_startup(headers, skip_if_develop_mode):
-    # if nfs_develop_mode is True then the mount is not actually made, it's just skipped. btw
-    # So this test actually ensures that's the case and the pod comes up properly
+def test_pod_with_snapshot_startup(headers):
     # Wait for pod to be available
     i = 0
     while i < 20:
@@ -261,7 +256,7 @@ def test_pod_with_snapshot_startup(headers, skip_if_develop_mode):
     # Check the pod object
     assert result['status'] == "AVAILABLE"
     assert result['pod_id'] == test_pod_1
-    assert test_snapshot_1 in result['snapshot_mounts']
+    assert test_snapshot_1 in result['volume_mounts']
 
 
 ##### Error testing

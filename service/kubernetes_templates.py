@@ -33,19 +33,13 @@ def start_postgres_pod(pod, revision: int):
             full_k8_name = f"{pod.k8_name}--{vol_name}"
             match vol_info.get("type"):
                 case "tapisvolume":
-                    if conf.nfs_develop_mode:
-                        logger.debug("Skipping nfs volume mount as nfs_develop_mode is set to True")
-                    else:
-                        nfs_volume = client.V1NFSVolumeSource(path = f"/", server = nfs_nfs_ip) # f"/podsnfs/{pod.tenant_id}/volumes/{vol_name}"
-                        volumes.append(client.V1Volume(name = full_k8_name, nfs = nfs_volume))
-                        volume_mounts.append(client.V1VolumeMount(name = full_k8_name, mount_path = vol_info.get("mount_path"), sub_path = f"{pod.tenant_id}/volumes/{vol_name}")) # vol_info.get("sub_path")))
+                    nfs_volume = client.V1NFSVolumeSource(path = f"/", server = nfs_nfs_ip) # f"/podsnfs/{pod.tenant_id}/volumes/{vol_name}"
+                    volumes.append(client.V1Volume(name = full_k8_name, nfs = nfs_volume))
+                    volume_mounts.append(client.V1VolumeMount(name = full_k8_name, mount_path = vol_info.get("mount_path"), sub_path = f"{pod.tenant_id}/volumes/{vol_name}")) # vol_info.get("sub_path")))
                 case "tapissnapshot":
-                    if conf.nfs_develop_mode:
-                        logger.debug("Skipping nfs volume mount as nfs_develop_mode is set to True")
-                    else:
-                        nfs_volume = client.V1NFSVolumeSource(path = f"/", server = nfs_nfs_ip) # f"/podsnfs/{pod.tenant_id}/snapshots/{vol_name}"
-                        volumes.append(client.V1Volume(name = full_k8_name, nfs = nfs_volume))
-                        volume_mounts.append(client.V1VolumeMount(name = full_k8_name, mount_path = vol_info.get("mount_path"), sub_path = f"{pod.tenant_id}/snapshots/{vol_name}")) # vol_info.get("sub_path")))
+                    nfs_volume = client.V1NFSVolumeSource(path = f"/", server = nfs_nfs_ip) # f"/podsnfs/{pod.tenant_id}/snapshots/{vol_name}"
+                    volumes.append(client.V1Volume(name = full_k8_name, nfs = nfs_volume))
+                    volume_mounts.append(client.V1VolumeMount(name = full_k8_name, mount_path = vol_info.get("mount_path"), sub_path = f"{pod.tenant_id}/snapshots/{vol_name}")) # vol_info.get("sub_path")))
                 case "pvc":
                     create_pvc(name = full_k8_name)
                     persistent_volume = client.V1PersistentVolumeClaimVolumeSource(claim_name = full_k8_name)
@@ -118,19 +112,13 @@ def start_neo4j_pod(pod, revision: int):
             full_k8_name = f"{pod.k8_name}--{vol_name}"
             match vol_info.get("type"):
                 case "tapisvolume":
-                    if conf.nfs_develop_mode:
-                        logger.debug("Skipping nfs volume mount as nfs_develop_mode is set to True")
-                    else:
-                        nfs_volume = client.V1NFSVolumeSource(path = f"/", server = nfs_nfs_ip) # f"/podsnfs/{pod.tenant_id}/volumes/{vol_name}"
-                        volumes.append(client.V1Volume(name = full_k8_name, nfs = nfs_volume))
-                        volume_mounts.append(client.V1VolumeMount(name = full_k8_name, mount_path = vol_info.get("mount_path"), sub_path = f"{pod.tenant_id}/volumes/{vol_name}")) # vol_info.get("sub_path")))
+                    nfs_volume = client.V1NFSVolumeSource(path = f"/", server = nfs_nfs_ip) # f"/podsnfs/{pod.tenant_id}/volumes/{vol_name}"
+                    volumes.append(client.V1Volume(name = full_k8_name, nfs = nfs_volume))
+                    volume_mounts.append(client.V1VolumeMount(name = full_k8_name, mount_path = vol_info.get("mount_path"), sub_path = f"{pod.tenant_id}/volumes/{vol_name}")) # vol_info.get("sub_path")))
                 case "tapissnapshot":
-                    if conf.nfs_develop_mode:
-                        logger.debug("Skipping nfs volume mount as nfs_develop_mode is set to True")
-                    else:
-                        nfs_volume = client.V1NFSVolumeSource(path = f"/", server = nfs_nfs_ip) # f"/podsnfs/{pod.tenant_id}/snapshots/{vol_name}"
-                        volumes.append(client.V1Volume(name = full_k8_name, nfs = nfs_volume))
-                        volume_mounts.append(client.V1VolumeMount(name = full_k8_name, mount_path = vol_info.get("mount_path"), sub_path = f"{pod.tenant_id}/snapshots/{vol_name}")) # vol_info.get("sub_path")))
+                    nfs_volume = client.V1NFSVolumeSource(path = f"/", server = nfs_nfs_ip) # f"/podsnfs/{pod.tenant_id}/snapshots/{vol_name}"
+                    volumes.append(client.V1Volume(name = full_k8_name, nfs = nfs_volume))
+                    volume_mounts.append(client.V1VolumeMount(name = full_k8_name, mount_path = vol_info.get("mount_path"), sub_path = f"{pod.tenant_id}/snapshots/{vol_name}")) # vol_info.get("sub_path")))
                 case "pvc":
                     create_pvc(name = full_k8_name)
                     persistent_volume = client.V1PersistentVolumeClaimVolumeSource(claim_name = full_k8_name)
@@ -209,19 +197,13 @@ def start_generic_pod(pod, image, revision: int):
             full_k8_name = f"{pod.k8_name}--{vol_name}"
             match vol_info.get("type"):
                 case "tapisvolume":
-                    if conf.nfs_develop_mode:
-                        logger.debug("Skipping nfs volume mount as nfs_develop_mode is set to True")
-                    else:
-                        nfs_volume = client.V1NFSVolumeSource(path = f"/", server = nfs_nfs_ip) # f"/podsnfs/{pod.tenant_id}/volumes/{vol_name}"
-                        volumes.append(client.V1Volume(name = full_k8_name, nfs = nfs_volume))
-                        volume_mounts.append(client.V1VolumeMount(name = full_k8_name, mount_path = vol_info.get("mount_path"), sub_path = f"{pod.tenant_id}/volumes/{vol_name}")) # vol_info.get("sub_path")))
+                    nfs_volume = client.V1NFSVolumeSource(path = f"/", server = nfs_nfs_ip) # f"/podsnfs/{pod.tenant_id}/volumes/{vol_name}"
+                    volumes.append(client.V1Volume(name = full_k8_name, nfs = nfs_volume))
+                    volume_mounts.append(client.V1VolumeMount(name = full_k8_name, mount_path = vol_info.get("mount_path"), sub_path = f"{pod.tenant_id}/volumes/{vol_name}")) # vol_info.get("sub_path")))
                 case "tapissnapshot":
-                    if conf.nfs_develop_mode:
-                        logger.debug("Skipping nfs volume mount as nfs_develop_mode is set to True")
-                    else:
-                        nfs_volume = client.V1NFSVolumeSource(path = f"/", server = nfs_nfs_ip) # f"/podsnfs/{pod.tenant_id}/snapshots/{vol_name}"
-                        volumes.append(client.V1Volume(name = full_k8_name, nfs = nfs_volume))
-                        volume_mounts.append(client.V1VolumeMount(name = full_k8_name, mount_path = vol_info.get("mount_path"), sub_path = f"{pod.tenant_id}/snapshots/{vol_name}")) # vol_info.get("sub_path")))
+                    nfs_volume = client.V1NFSVolumeSource(path = f"/", server = nfs_nfs_ip) # f"/podsnfs/{pod.tenant_id}/snapshots/{vol_name}"
+                    volumes.append(client.V1Volume(name = full_k8_name, nfs = nfs_volume))
+                    volume_mounts.append(client.V1VolumeMount(name = full_k8_name, mount_path = vol_info.get("mount_path"), sub_path = f"{pod.tenant_id}/snapshots/{vol_name}")) # vol_info.get("sub_path")))
                 case "pvc":
                     create_pvc(name = full_k8_name)
                     persistent_volume = client.V1PersistentVolumeClaimVolumeSource(claim_name = full_k8_name)

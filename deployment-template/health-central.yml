@@ -1,23 +1,22 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: MAKEFILE_SERVICE_NAME-api
+  name: MAKEFILE_SERVICE_NAME-health-central
 spec:
   selector:
     matchLabels:
-      app: MAKEFILE_SERVICE_NAME-api
+      app: MAKEFILE_SERVICE_NAME-health-central
   template:
     metadata:
       labels:
-        app: MAKEFILE_SERVICE_NAME-api
+        app: MAKEFILE_SERVICE_NAME-health-central
     spec:
       serviceAccountName: MAKEFILE_SERVICE_NAME-serviceaccount
       containers:
-      - name: MAKEFILE_SERVICE_NAME-api
+      - name: MAKEFILE_SERVICE_NAME-health-central
         imagePullPolicy: Never
         image: MAKEFILE_SERVICE_NAME/pods-api:MAKEFILE_TAG
-#DEV        command: ["/bin/sh", "-c"]
-#DEV        args: ["/home/tapis/entry.sh & jupyter lab service --ip=0.0.0.0 --allow-root --no-browser --ServerApp.token=''"]
+        #command: ["sleep", "2000000"]
         resources:
           requests:
             cpu: ".5"
@@ -25,14 +24,9 @@ spec:
           limits:
             cpu: "3"
             memory: "3G"
-        ports:
-        - name: fastapi
-          containerPort: 8000
-#DEV        - name: jupyter
-#DEV          containerPort: 8888
         env:
         - name: PODS_COMPONENT
-          value: api
+          value: health-central
         - name: DEBUG_SLEEP_LOOP
           value: 'false'
         - name: SERVICE_PASSWORD
@@ -62,11 +56,6 @@ spec:
           mountPath: "/podsnfs"
 #DEV        - name: dev-service
 #DEV          mountPath: /home/tapis/service
-#DEV        - name: dev-tests
-#DEV          mountPath: /home/tapis/tests
-#DEV        - name: dev-alembic
-#DEV          mountPath: /home/tapis/alembic
-
       volumes:
       - name: MAKEFILE_SERVICE_NAME-config
         configMap: 
@@ -77,12 +66,4 @@ spec:
 #DEV      - name: dev-service
 #DEV        hostPath:
 #DEV          path: /pods_service/service #NOTE FOR MINIKUBE: Minikube is a vm, you have to minikube mount for hostpath to work
-#DEV          type: Directory
-#DEV      - name: dev-tests
-#DEV        hostPath:
-#DEV          path: /pods_service/tests #NOTE FOR MINIKUBE: Minikube is a vm, you have to minikube mount for hostpath to work
-#DEV          type: Directory
-#DEV      - name: dev-alembic
-#DEV        hostPath:
-#DEV          path: /pods_service/alembic #NOTE FOR MINIKUBE: Minikube is a vm, you have to minikube mount for hostpath to work
 #DEV          type: Directory

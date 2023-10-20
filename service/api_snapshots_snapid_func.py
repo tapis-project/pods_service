@@ -28,16 +28,12 @@ async def list_snapshot_files(snapshot_id):
     snapshot = Snapshot.db_get_with_pk(snapshot_id, tenant=g.request_tenant_id, site=g.site_id)
 
     list_of_files = files_listfiles(
-        system_id = conf.nfs_tapis_system_id,
         path = f"/snapshots/{snapshot.snapshot_id}/")
     
     pruned_list_of_files = []
     for file in list_of_files:
-        file = file.__dict__
         file.pop('group', "")
         file.pop('owner', "")
-        file.pop('mimeType', "")
-        file.pop('url', "")
         pruned_list_of_files.append(file)
 
     return ok(result=pruned_list_of_files, msg = "Snapshot file listing retrieved successfully.")

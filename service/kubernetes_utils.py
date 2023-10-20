@@ -203,6 +203,9 @@ def get_k8_logs(name: str):
 def run_k8_exec(k8_name: str, command: list, namespace: str = ""):
     # This starts a Kubernetes exec in the background. We can poll progress/status
     # if the exec is still running with resp.is_open().
+    ### EXAMPLE
+    #    command = ["/bin/sh", "-c", "awk -v ORS='\\n' '1' /home/pods/.ssh/podskey"]
+    #    derived_private_key, derived_err = run_k8_exec(k8_name, command)
     resp = stream.stream(
         k8.connect_get_namespaced_pod_exec,
         k8_name,

@@ -67,7 +67,6 @@ async def delete_snapshot(snapshot_id):
 
     # Delete folder
     res = files_delete(
-        system_id = conf.nfs_tapis_system_id,
         path = f"/snapshots/{snapshot.snapshot_id}")
 
     snapshot.db_delete()

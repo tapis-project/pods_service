@@ -179,7 +179,6 @@ class Snapshot(TapisSnapshotBaseFull, table=True, validate=True):
             # Ensure source_volume_path exists in nfs.
             try:
                 source_listing = files_listfiles(
-                    system_id = conf.nfs_tapis_system_id,
                     path = f"/volumes/{source_volume_id}/{source_volume_path}")
             except NotFoundError:
                 raise NotFoundError(f"source_volume_path: {source_volume_path} not found source_volume_id: {source_volume_id}.")

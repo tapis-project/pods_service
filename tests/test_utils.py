@@ -16,7 +16,6 @@ logger = get_logger(__name__)
 base_url = os.environ.get('base_url', 'http://172.17.0.1:8000')
 case = os.environ.get('case', 'snake')
 testuser_tenant = os.environ.get('tenant', 'dev')
-nfs_develop_mode = conf.nfs_develop_mode
 
 def get_service_tapis_client():
     sk_url = os.environ.get('sk_url', conf.primary_site_admin_tenant_base_url)
@@ -46,12 +45,6 @@ def get_service_tapis_client():
     return t
 
 t = get_service_tapis_client()
-
-
-@pytest.fixture(scope='session')
-def skip_if_develop_mode():
-    if nfs_develop_mode:
-        pytest.skip("Skipping test because nfs_develop_mode is set to True.")
 
 # In dev:
 # service account owns abaco_admin and abaco_privileged roles

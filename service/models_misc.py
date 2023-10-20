@@ -62,12 +62,12 @@ class CredentialsModel(TapisApiModel):
 
 
 class FileModel(TapisApiModel):
+    path: str = Field(..., description = "Path of object.")
     name: str = Field(..., description = "Name of object.")
+    type: str = Field(..., description = "Type of object.")
+    size: int = Field(..., description = "Size of object in bytes.")
     lastModified: str = Field(..., description = "Last modified date of object.")
     nativePermissions: str = Field(..., description = "Native permissions of object.")
-    size: int = Field(..., description = "Size of object in bytes.")
-    path: str = Field(..., description = "Path of object.")
-    type: str = Field(..., description = "Type of object. Either file or dir.")
 
 
 class FilesListResponse(TapisApiModel):

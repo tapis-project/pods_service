@@ -1,9 +1,10 @@
-from fcntl import DN_DELETE
 import json
 import os
+import stat
 import time
 import timeit
-import datetime
+import shutil
+from datetime import datetime, timezone
 import random
 from typing import Literal, Dict, List, Tuple
 
@@ -32,40 +33,38 @@ class VolumesError(Exception):
         self.message = message
 
 def get_nfs_ips() -> Tuple[str, str]:
-    nfs_ssh_ip = conf.get('nfs_develop_remote_url')
-    if not nfs_ssh_ip:
-        # We need to get the nfs ip from k8 services
-        idx = 0
-        while idx < 10:
-            nfs_services = []
-            for k8_service in list_all_services(filter_str="pods-nfs-ssh"):
-                k8_name = k8_service.metadata.name
-                nfs_services.append({'service_info': k8_service,
-                                        'k8_name': k8_name})
-            # Checking how many services met the filter (should hopefully be only one)
-            match len(nfs_services):
-                case 1:
-                    try:
-                        nfs_ssh_ip = nfs_services[0]['service_info'].spec.cluster_ip
-                        break
-                    except Exception as e:
-                        logger.info(f"Exception while getting pods-nfs-ssh ip from K8 services. e: {e}")
-                case 0:
-                    logger.info(f"Couldn't find service matching pods-nfs-ssh. Trying again.")
-                    pass
-                case _:
-                    logger.info(f"Got >1 services matching pods-nfs-ssh. Number of services: {len(nfs_services)}. Trying again.")                
-                    pass
-            # Increment and have a short wait
-            idx += 1
-            time.sleep(1)
+    # We need to get the nfs ip from k8 services
+    idx = 0
+    while idx < 10:
+        nfs_services = []
+        for k8_service in list_all_services(filter_str="pods-nfs-ssh"):
+            k8_name = k8_service.metadata.name
+            nfs_services.append({'service_info': k8_service,
+                                    'k8_name': k8_name})
+        # Checking how many services met the filter (should hopefully be only one)
+        match len(nfs_services):
+            case 1:
+                try:
+                    nfs_ssh_ip = nfs_services[0]['service_info'].spec.cluster_ip
+                    break
+                except Exception as e:
+                    logger.info(f"Exception while getting pods-nfs-ssh ip from K8 services. e: {e}")
+            case 0:
+                logger.info(f"Couldn't find service matching pods-nfs-ssh. Trying again.")
+                pass
+            case _:
+                logger.info(f"Got >1 services matching pods-nfs-ssh. Number of services: {len(nfs_services)}. Trying again.")                
+                pass
+        # Increment and have a short wait
+        idx += 1
+        time.sleep(1)
 
-        # Reached end of idx limit
-        else:
-            msg = f"Couldn't find service matching pods-nfs-ssh. Required, breaking."
-            logger.info(msg)
-            raise RuntimeError(msg)
-        
+    # Reached end of idx limit
+    else:
+        msg = f"Couldn't find service matching pods-nfs-ssh. Required, breaking."
+        logger.info(msg)
+        raise RuntimeError(msg)
+    
     nfs_nfs_ip = ""
     # We need to get the nfs ip from k8 services
     idx = 0
@@ -105,7 +104,7 @@ def get_nfs_ips() -> Tuple[str, str]:
     return nfs_ssh_ip, nfs_nfs_ip
 
 
-def files_mkdir(system_id: str, path: str = "", tenant_id: str = "", user: str = "pods") -> None:
+def files_mkdir(path: str = "", tenant_id: str = "", base_path: str = "") -> None:
     """ mkdir in nfs vol
 
     Args:
@@ -115,32 +114,76 @@ def files_mkdir(system_id: str, path: str = "", tenant_id: str = "", user: str =
     # Normalize path
     path = os.path.abspath(path)
 
-    # Note: t.files.mkdir will error when a file already exists, will not error if a folder already exists.
-    # mkdir in files to create /{path}
-    try:
-        t.files.mkdir(
-            systemId = system_id,
-            path = path,
-            _x_tapis_tenant = tenant_id or g.tenant_id,
-            _x_tapis_user = user)
-    except Exception as e:
-        errormsg = e.__dict__.get('message')
-        if errormsg:
-            if "Path exists as a file" in errormsg:
-                msg = f"Got exception trying to run mkdir. Path already exists as a file. path: {path}"
-                logger.info(msg)
-                raise VolumesError(msg)
-        else:
-            msg = f"Got exception trying to run mkdir. path: {path}"
-            logger.info(msg)
-            raise VolumesError(msg)
+    # Establish base_path w/ tenant
+    base_path = base_path or f"{conf.nfs_base_path}/{tenant_id or g.tenant_id}"
+    base_path = os.path.abspath(base_path)
 
-    # Share path via Files API
-    # t.files.sharePath(systemId=conf.nfs_tapis_system_id, path=f"/{path}", users=['cgarcia', 'testuser2']) 
+    # Note: os.makedirs(path) will give 'FileExistsError' whether file or folder already exists
+    # Note: os.makedirs(path, exist_ok) will give 'FileExistsError' only for files already existing
+    try:
+        os.makedirs(f"{base_path}/{path}", exist_ok=True)
+    except FileExistsError:
+        msg = f"Got exception trying to run mkdir. File or folder already exists in path: {path}"
+        logger.info(msg)
+        raise VolumesError(msg)
+    except Exception as e:
+        msg = f"Got exception trying to run mkdir. path: {path}"
+        logger.info(msg)
+        raise VolumesError(msg)
     
     logger.info(f"Successfully ran files.mkdir. path: {path}.")
 
-def files_listfiles(system_id: str, path: str, limit: int = 1000, offset:int = 0, recurse: bool = False, tenant_id: str = "", user: str = "pods") -> List[TapisResult]:
+def list_files(path, recursive=False, depth=0):
+    """
+    List all files in a directory, optionally recursively up to a specified depth.
+
+    Args:
+        path (str): The path to the directory to list files from.
+        recursive (bool, optional): Whether to list files recursively. Defaults to False.
+        depth (int, optional): The maximum depth to list files when `recursive` is True. Defaults to 0.
+
+    Returns:
+        list: A list of dictionaries, where each dictionary represents a file and has the following keys:
+            - name (str): The name of the file.
+            - type (str): The type of the file, which can be one of the following: 'file', 'dir', 'symbolic_link', 'other/unknown'.
+            - owner_uid (int): The user ID of the file owner.
+            - group_gid (int): The group ID of the file owner.
+            - last_modified (str): A string representing the date and time when the file was last modified.
+            - size (int): The size of the file in bytes.
+            - nativePermissions (str): The native permissions of the file.
+
+    """
+    files = []
+    for file in os.listdir(path):
+        file_path = os.path.abspath(os.path.join(path, file))
+        file_stat = os.stat(file_path)
+        file_type = ''
+        if os.path.isfile(file_path):
+            file_type = 'file'
+        elif os.path.isdir(file_path):
+            file_type = 'dir'
+        elif os.path.islink(file_path):
+            file_type = 'symbolic_link'
+        else:
+            file_type = 'other/unknown'
+        file_info = {
+            'path': file_path,
+            'name': file,
+            'type': file_type,
+            'size': file_stat.st_size,
+            'lastModified': datetime.fromtimestamp(file_stat.st_mtime, tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+            'nativePermissions': stat.filemode(file_stat.st_mode)[1:], # Remove leading file type character
+            'owner': file_stat.st_uid,
+            'group': file_stat.st_gid
+            # Files also gives mimeType, nativePermissions, and url, we're going to ignore that.
+        }
+        files.append(file_info)
+        if recursive and os.path.isdir(file_path) and depth > 0:
+            files.extend(list_files(file_path, recursive=True, depth=depth-1))
+    return files
+
+
+def files_listfiles(path: str, limit: int = 1000, offset:int = 0, recurse: bool = False, tenant_id: str = "", base_path: str = "") -> List[TapisResult]:
     """ list in nfs vol
 
     Args:
@@ -150,30 +193,29 @@ def files_listfiles(system_id: str, path: str, limit: int = 1000, offset:int = 0
     # Normalize path
     path = os.path.abspath(path)
 
-    # Ensure /{path} does not already exist
-    # We expect listFiles to give tapipy.errors.NotFoundError, if no pre-existing folder/file.
+    # Establish base_path w/ tenant
+    base_path = base_path or f"{conf.nfs_base_path}/{tenant_id or g.tenant_id}"
+    base_path = os.path.abspath(base_path)
+
+    # We expect list_files to give FileNotFoundError, if no pre-existing folder/file
     try:
-        ls_files = t.files.listFiles(
-            systemId = system_id,
-            path = path,
-            recurse = recurse,
-            limit = limit,
-            offset = offset,
-            _x_tapis_tenant = tenant_id or g.tenant_id,
-            _x_tapis_user = user)
-    except NotFoundError:
-        msg = f"No folder/file found when running listFiles. path: {path}"
+        ls_files = list_files(
+            path = f"{base_path}/{path}",
+            recursive = recurse,
+            depth = 2)
+    except FileNotFoundError:
+        msg = f"No folder/file found when running list_files. path: {path}"
         logger.info(msg)
-        raise NotFoundError(msg)
+        raise FileNotFoundError(msg)
     except Exception as e:
-        msg = f"Got exception trying to run listFiles. path: {path}"
+        msg = f"Got exception trying to run list_files. path: {path}"
         logger.info(msg)
         raise VolumesError(msg)
 
-    logger.info(f"Successfully ran files.listFiles. path: {path}")
+    logger.info(f"Successfully ran list_files. path: {path}")
     return ls_files
 
-def files_delete(system_id: str, path: str = "", tenant_id: str = "", user: str = "pods") -> None:
+def files_delete(path: str = "", tenant_id: str = "", base_path: str = "") -> None:
     """ delete folder in nfs vol
 
     Args:
@@ -183,84 +225,91 @@ def files_delete(system_id: str, path: str = "", tenant_id: str = "", user: str 
     # Normalize path
     path = os.path.abspath(path)
 
-    # Note: t.files.delete will error when a file/folder doesn't exist.
+    # Establish base_path w/ tenant
+    base_path = base_path or f"{conf.nfs_base_path}/{tenant_id or g.tenant_id}"
+    base_path = os.path.abspath(base_path)
+
+    # Note: os.remove() will error when a file/folder doesn't exist.
     # delete /{path} folder
     try:
-        t.files.delete(
-            systemId = system_id,
-            path = path,
-            _x_tapis_tenant = tenant_id or g.tenant_id,
-            _x_tapis_user = user)
-    except NotFoundError:
-        msg = f"No folder/file found when running delete. path: {path}"
-        logger.info(msg)
-        return
+        if os.path.isfile(f"{base_path}/{path}"):
+            os.remove(f"{base_path}/{path}")
+        else:
+            shutil.rmtree(f"{base_path}/{path}")
     except Exception as e:
-        msg = f"Got exception trying to run delete. path: {path}"
+        msg = f"Got exception trying to delete file. path: {path}"
         logger.info(msg)
         raise VolumesError(msg)
 
-    # Stop sharing path via Files API
-    # t.files.sharePath(systemId=conf.nfs_tapis_system_id, path="/{path", users=['cgarcia', 'testuser2']) 
+    logger.info(f"Successfully deleted file. path: {path}")
 
-    logger.info(f"Successfully ran files.delete. path: {path}")
-
-def files_insert(system_id: str, file: str, path: str, tenant_id: str = "", user: str = "pods") -> None:
+def files_insert(file, path: str, tenant_id: str = "", base_path: str = "") -> None:
     logger.debug("top of volume_utils.files_insert().")
     # Normalize path
     path = os.path.abspath(path)
 
-    # insert to /{path}
+    # Establish base_path w/ tenant
+    base_path = base_path or f"{conf.nfs_base_path}/{tenant_id or g.tenant_id}"
+    base_path = os.path.abspath(base_path)
+
     try:
-        t.files.insert(
-            systemId = system_id,
-            path = path,
-            file = file,
-            _x_tapis_tenant = tenant_id or g.tenant_id,
-            _x_tapis_user = user)
+        # Save file to /{path}
+        with open(f"{base_path}/{path}", "wb") as f:
+            shutil.copyfileobj(file, f)
     except Exception as e:
-        msg = f"Got exception trying to insert into volume folder. path: {path}."
+        msg = f"Got exception trying to save file. path: {path}."
         logger.info(msg)
         raise VolumesError(msg)
 
-    logger.info(f"Successfully ran files.insert.")
+    logger.info(f"Successfully uploaded file to path.")
 
-def files_movecopy(system_id: str, operation: str, source_path:str, new_path: str, tenant_id: str = "", user: str = "pods") -> None:
-    logger.debug("top of volume_utils.files_moveCopy().")
+def files_move(source_path:str, new_path: str, tenant_id: str = "", base_path: str = "") -> None:
+    logger.debug("top of volume_utils.files_move().")
     # Normalize paths
     source_path = os.path.abspath(source_path)
     new_path = os.path.abspath(new_path)
 
-    if operation not in ["MOVE", "COPY"]:
-        msg = f"files_moveCopy expects operation argument with value 'MOVE' or 'COPY', got: {operation}"
-        logger.info(msg)
-        raise VolumesError(msg)
+    # Establish base_path w/ tenant
+    base_path = base_path or f"{conf.nfs_base_path}/{tenant_id or g.tenant_id}"
+    base_path = os.path.abspath(base_path)
 
-    # move or copy from source_path to new_path
+    # move from source_path to new_path
     try:
-        import requests as r
-        import json
-        res = r.put(f"{t.base_url}/v3/files/ops/{system_id}/{source_path}",
-                    data = json.dumps({"operation": operation, "newPath": new_path}),
-                    headers = {"X-Tapis-Token": t.service_tokens['admin']['access_token'].access_token,
-                               "X-Tapis-User": "pods",
-                               "X-Tapis-Tenant": tenant_id or g.tenant_id,
-                               "Content-Type": "application/json"})
-        # Operation argument is creating conflicts with tapipy.
-        # t.files.moveCopy(
-        #     systemId = system_id,
-        #     operation = operation,
-        #     path = source_path,
-        #     newPath = new_path,
-        #     _x_tapis_tenant = tenant_id or g.tenant_id,
-        #     _x_tapis_user = user)
-    except NotFoundError:
-        msg = f"No folder/file found when running files.moveCopy. path: {source_path}"
+        shutil.move(f"{base_path}/{source_path}", f"{base_path}/{new_path}")
+    except FileNotFoundError:
+        msg = f"No folder/file found when moving path. path: {source_path}"
         logger.info(msg)
         raise VolumesError(msg)
     except Exception as e:
-        msg = f"Got exception trying to complete {operation} operation. source_path: {source_path}. new_path: {new_path}."
+        msg = f"Got exception trying to complete move operation. source_path: {source_path}. new_path: {new_path}."
         logger.info(msg)
         raise VolumesError(msg)
 
-    logger.info(f"Successfully ran files.moveCopy.")
+    logger.info(f"Successfully moved path.")
+
+def files_copy(source_path:str, new_path: str, tenant_id: str = "", base_path: str = "") -> None:
+    logger.debug("top of volume_utils.files_copy().")
+    # Normalize paths
+    source_path = os.path.abspath(source_path)
+    new_path = os.path.abspath(new_path)
+
+    # Establish base_path w/ tenant
+    base_path = base_path or f"{conf.nfs_base_path}/{tenant_id or g.tenant_id}"
+    base_path = os.path.abspath(base_path)
+
+    # copy from source_path to new_path
+    try:
+        if os.path.isfile(f"{base_path}/{source_path}"):
+            shutil.copy(f"{base_path}/{source_path}", f"{base_path}/{new_path}")
+        else:
+            shutil.copytree(f"{base_path}/{source_path}", f"{base_path}/{new_path}", dirs_exist_ok=True)
+    except FileNotFoundError:
+        msg = f"No folder/file found when copying path. path: {source_path}"
+        logger.info(msg)
+        raise VolumesError(msg)
+    except Exception as e:
+        msg = f"Got exception trying to complete copy operation. source_path: {source_path}. new_path: {new_path}."
+        logger.info(msg)
+        raise VolumesError(msg)
+
+    logger.info(f"Successfully copied path.")

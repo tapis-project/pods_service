@@ -28,16 +28,12 @@ async def list_volume_files(volume_id):
     volume = Volume.db_get_with_pk(volume_id, tenant=g.request_tenant_id, site=g.site_id)
 
     list_of_files = files_listfiles(
-        system_id = conf.nfs_tapis_system_id,
         path = f"/volumes/{volume.volume_id}")
     
     pruned_list_of_files = []
     for file in list_of_files:
-        file = file.__dict__
         file.pop('group', "")
         file.pop('owner', "")
-        file.pop('mimeType', "")
-        file.pop('url', "")
         pruned_list_of_files.append(file)
 
     return ok(result=pruned_list_of_files, msg = "Volume file listing retrieved successfully.")
@@ -58,7 +54,6 @@ async def upload_to_volume(volume_id, path, file: UploadFile):
     volume = Volume.db_get_with_pk(volume_id, tenant=g.request_tenant_id, site=g.site_id)
 
     insert_res = files_insert(
-        system_id = conf.nfs_tapis_system_id,
         file = file.file,
         path = f"/volumes/{volume.volume_id}/{path}")
 

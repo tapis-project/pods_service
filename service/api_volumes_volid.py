@@ -67,7 +67,6 @@ async def delete_volume(volume_id):
 
     # Delete folder
     res = files_delete(
-        system_id = conf.nfs_tapis_system_id,
         path = f"/volumes/{volume.volume_id}")
 
     volume.db_delete()
