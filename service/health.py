@@ -44,6 +44,7 @@ from stores import pg_store, SITE_TENANT_DICT
 from models_pods import Pod
 from models_volumes import Volume
 from models_snapshots import Snapshot
+from psycopg2 import ProgrammingError
 from sqlmodel import select
 from tapisservice.config import conf
 from tapisservice.logs import get_logger
@@ -262,8 +263,21 @@ def check_db_pods(k8_pods):
     """
     all_pods = []
     stmt = select(Pod)
+    failed_tenants = []
     for tenant in SITE_TENANT_DICT[conf.site_id]:
-        all_pods += pg_store[conf.site_id][tenant].run("execute", stmt, scalars=True, all=True)
+        try:
+            all_pods += pg_store[conf.site_id][tenant].run("execute", stmt, scalars=True, all=True)
+        except ProgrammingError as e:
+            logger.warning(f"Tenant: {tenant} not found in database. Skipping.")
+            failed_tenants.append(tenant)
+            continue
+    # If only 2/20 tenants fail we'll skip, expecting up to two new tenants.
+    # Pods needs to restart after new tenants are added for their database to be created.
+    # It should not break currently working health though. Thus skipping if only a small portion of tenants fail.
+    if len(failed_tenants) <= 2:
+        logger.critical(f"More than 2 tenants failed to connect to database. Possible error or waiting for startup. Shutting down.")
+        return
+
 
     ### Go through all pod entries in the database
     for pod in all_pods:
