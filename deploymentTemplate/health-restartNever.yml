@@ -1,0 +1,60 @@
+# This can be deployed instead of regular health if you want to see causes health to restart.
+# Sometimes an error will come and go before you can check in on it, this solves that.
+# `restartPolicy: never` only works for `kind: Pod` and not `kind: Deployment`, thus this.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: MAKEFILE_SERVICE_NAME-health
+spec:
+  serviceAccountName: MAKEFILE_SERVICE_NAME-serviceaccount # Add this line
+  restartPolicy: Never
+  containers:
+  - name: MAKEFILE_SERVICE_NAME-health
+    imagePullPolicy: Never
+    image: MAKEFILE_SERVICE_NAME/pods-api:MAKEFILE_TAG
+    #command: ["sleep", "2000000"]
+    resources:
+      requests:
+        cpu: ".5"
+        memory: "1G"
+      limits:
+        cpu: "3"
+        memory: "3G"
+    env:
+    - name: PODS_COMPONENT
+      value: health
+    - name: DEBUG_SLEEP_LOOP
+      value: 'false'
+    - name: SERVICE_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: tapis-MAKEFILE_SERVICE_NAME-secrets
+          key: service-password
+    - name: POSTGRES_USERNAME
+      value: pods-admin
+    - name: POSTGRES_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: tapis-MAKEFILE_SERVICE_NAME-secrets
+          key: postgres-password
+    - name: RABBITMQ_USERNAME
+      value: pods-admin
+    - name: RABBITMQ_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: tapis-MAKEFILE_SERVICE_NAME-secrets
+          key: rabbitmq-password
+    volumeMounts:
+    - name: MAKEFILE_SERVICE_NAME-config
+      mountPath: /home/tapis/config.json
+      subPath: config.json
+#DEV    - name: dev-service
+#DEV      mountPath: /home/tapis/service
+  volumes:
+  - name: MAKEFILE_SERVICE_NAME-config
+    configMap: 
+      name: MAKEFILE_SERVICE_NAME-config 
+#DEV  - name: dev-service
+#DEV    hostPath:
+#DEV      path: /pods_service/service #NOTE FOR MINIKUBE: Minikube is a vm, you have to minikube mount for hostpath to work
+#DEV      type: Directory
