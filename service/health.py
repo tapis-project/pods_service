@@ -48,7 +48,6 @@ from sqlmodel import select
 from tapisservice.config import conf
 from tapisservice.logs import get_logger
 
-from __init__ import t
 logger = get_logger(__name__)
 
 

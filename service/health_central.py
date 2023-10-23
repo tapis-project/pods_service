@@ -29,7 +29,6 @@ from tapisservice.config import conf
 from tapisservice.logs import get_logger
 from tapipy.errors import BaseTapyException
 
-from __init__ import t
 logger = get_logger(__name__)
 
 

@@ -24,7 +24,7 @@ from stores import pg_store
 from sqlmodel import select
 from kubernetes_utils import list_all_services
 
-from __init__ import t, TapisResult
+from __init__ import TapisResult
 
 
 class VolumesError(Exception):

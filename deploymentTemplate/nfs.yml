@@ -12,41 +12,43 @@ spec:
         app: pods-nfs
     spec:
       containers:
-      - name: pods-nfs
-        image: itsthenetwork/nfs-server-alpine:12
-        command:
-          - /bin/sh
-          - -c
-          - |
-            adduser -D -g "Pods service user used by Files API to manage NFS folder." -k /dev/null pods &&\
-            apk add --no-cache openssh openrc acl &&\
-            rc-status &&\
-            rc-update add sshd &&\
-            touch /run/openrc/softlevel &&\
-            setfacl -R -m u:pods:rwx /podsnfs &&\
-            mkdir /home/pods/.ssh &&\
-            ssh-keygen -f /home/pods/.ssh/podskey -m PEM -q -N '' &&\
-            cp /home/pods/.ssh/podskey.pub /home/pods/.ssh/authorized_keys &&\
-            ssh-keygen -A &&\
-            chown pods:pods /home/pods/.ssh/* &&\
-            sed -i 's/#PubkeyAuthentication/PubkeyAuthentication/g' /etc/ssh/sshd_config &&\
-            rc-service sshd restart &&\
-            /usr/bin/nfsd.sh
-        securityContext:
-          privileged: true
-        env:
-        - name: SHARED_DIRECTORY
-          value: "/podsnfs"
-        ports:
         - name: pods-nfs
-          containerPort: 2049
-        - name: pods-nfs-ssh
-          containerPort: 22
-        volumeMounts:
-        - name: pods-nfs-vol
-          mountPath: "/podsnfs"
-
+          image: itsthenetwork/nfs-server-alpine:12
+          securityContext:
+            privileged: true # required by image
+          env:
+            - name: SHARED_DIRECTORY
+              value: "/podsnfs"
+          ports:
+            - name: pods-nfs
+              containerPort: 2049
+            - name: pods-nfs-ssh
+              containerPort: 22
+          volumeMounts:
+            - name: pods-nfs-vol
+              mountPath: "/podsnfs"
+            - name: pods-nfs-config
+              mountPath: "/etc/exports"
+              subPath: "exports"
       volumes:
-      - name: pods-nfs-vol
-        persistentVolumeClaim:
-          claimName: pods-nfs-vol
+        - name: pods-nfs-vol
+          persistentVolumeClaim:
+            claimName: pods-nfs-vol
+        - name: pods-nfs-config
+          configMap:
+            name: pods-nfs-config
+            items:
+              - key: exports
+                path: exports
+
+# Config overwrites /etc/exports which is was nfsd is looking for.
+# all_squash makes it so all clients are squashed to the same user, in this case 4872:4872.
+# Meaning all clients, no matter uid, write as 4872(tapis uid) regardless of their container id.
+--- 
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pods-nfs-config
+data:
+  exports: |
+    /podsnfs *(rw,fsid=0,async,no_subtree_check,anonuid=4872,anongid=4872,all_squash)

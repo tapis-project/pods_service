@@ -16,8 +16,6 @@ from tapisservice.config import conf
 from tapisservice.logs import get_logger
 logger = get_logger(__name__)
 
-from __init__ import t
-
 from sqlalchemy import UniqueConstraint
 from sqlalchemy.inspection import inspect
 from sqlalchemy.dialects.postgresql import ARRAY
