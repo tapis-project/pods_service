@@ -32,41 +32,9 @@ class VolumesError(Exception):
         Exception.__init__(self, message)
         self.message = message
 
-def get_nfs_ips() -> Tuple[str, str]:
+def get_nfs_ip() -> str:
     # We need to get the nfs ip from k8 services
-    idx = 0
-    while idx < 10:
-        nfs_services = []
-        for k8_service in list_all_services(filter_str="pods-nfs-ssh"):
-            k8_name = k8_service.metadata.name
-            nfs_services.append({'service_info': k8_service,
-                                    'k8_name': k8_name})
-        # Checking how many services met the filter (should hopefully be only one)
-        match len(nfs_services):
-            case 1:
-                try:
-                    nfs_ssh_ip = nfs_services[0]['service_info'].spec.cluster_ip
-                    break
-                except Exception as e:
-                    logger.info(f"Exception while getting pods-nfs-ssh ip from K8 services. e: {e}")
-            case 0:
-                logger.info(f"Couldn't find service matching pods-nfs-ssh. Trying again.")
-                pass
-            case _:
-                logger.info(f"Got >1 services matching pods-nfs-ssh. Number of services: {len(nfs_services)}. Trying again.")                
-                pass
-        # Increment and have a short wait
-        idx += 1
-        time.sleep(1)
-
-    # Reached end of idx limit
-    else:
-        msg = f"Couldn't find service matching pods-nfs-ssh. Required, breaking."
-        logger.info(msg)
-        raise RuntimeError(msg)
-    
     nfs_nfs_ip = ""
-    # We need to get the nfs ip from k8 services
     idx = 0
     while idx < 10:
         nfs_services = []
@@ -101,7 +69,7 @@ def get_nfs_ips() -> Tuple[str, str]:
         logger.info(msg)
         raise RuntimeError(msg)
 
-    return nfs_ssh_ip, nfs_nfs_ip
+    return nfs_nfs_ip
 
 
 def files_mkdir(path: str = "", tenant_id: str = "", base_path: str = "") -> None:

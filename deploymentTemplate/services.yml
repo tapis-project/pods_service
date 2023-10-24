@@ -4,7 +4,7 @@ kind: Service
 metadata:
   name: MAKEFILE_SERVICE_NAME-rabbitmq
 spec:
-  type: NodePort
+  type: NodePort # Required for multi-namespace connections
   selector:
     app: MAKEFILE_SERVICE_NAME-rabbitmq
   ports:
@@ -18,7 +18,7 @@ kind: Service
 metadata:
   name: MAKEFILE_SERVICE_NAME-rabbitmq-dash
 spec:
-  type: NodePort
+  type: NodePort # Required for local access
   selector:
     app: MAKEFILE_SERVICE_NAME-rabbitmq
   ports:
@@ -32,7 +32,7 @@ kind: Service
 metadata:
   name: MAKEFILE_SERVICE_NAME-postgres
 spec:
-  type: NodePort
+  type: NodePort # Required for multi-namespace connections
   selector:
     app: MAKEFILE_SERVICE_NAME-postgres
   ports:
@@ -46,6 +46,7 @@ kind: Service
 metadata:
   name: MAKEFILE_SERVICE_NAME-api
 spec:
+  type: NodePort # Required for local access
   selector:
     app: MAKEFILE_SERVICE_NAME-api
   ports:
@@ -59,7 +60,7 @@ kind: Service
 metadata:
   name: MAKEFILE_SERVICE_NAME-api-jupyter
 spec:
-#DEV  type: NodePort
+#DEV  type: NodePort # Required for local access (when DEV_TOOLS is true)
   selector:
     app: MAKEFILE_SERVICE_NAME-api
   ports:
@@ -71,23 +72,9 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: MAKEFILE_SERVICE_NAME-api-nodeport
-spec:
-#DEV  type: NodePort
-  selector:
-    app: MAKEFILE_SERVICE_NAME-api
-  ports:
-  - name: fastapi-nodeport
-    port: 8000
-    targetPort: 8000
-
----
-apiVersion: v1
-kind: Service
-metadata:
   name: MAKEFILE_SERVICE_NAME-traefik
 spec:
-  type: NodePort
+  type: NodePort # Required for local access
   selector:
     app: MAKEFILE_SERVICE_NAME-traefik
   ports:
@@ -104,22 +91,10 @@ kind: Service
 metadata:
   name: MAKEFILE_SERVICE_NAME-nfs
 spec:
+  type: NodePort # Required for multi-namespace connections
   selector:
     app: MAKEFILE_SERVICE_NAME-nfs
   ports:
   - name: MAKEFILE_SERVICE_NAME-nfs
     port: 2049
     targetPort: 2049
-
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: MAKEFILE_SERVICE_NAME-nfs-ssh
-spec:
-  selector:
-    app: MAKEFILE_SERVICE_NAME-nfs
-  ports:
-  - name: MAKEFILE_SERVICE_NAME-nfs-ssh
-    port: 22
-    targetPort: 22

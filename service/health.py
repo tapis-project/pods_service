@@ -271,10 +271,10 @@ def check_db_pods(k8_pods):
             logger.warning(f"Tenant: {tenant} not found in database. Skipping.")
             failed_tenants.append(tenant)
             continue
-    # If only 2/20 tenants fail we'll skip, expecting up to two new tenants.
+    # If > 2/20 tenants fail we'll skip, expecting up to two new tenants.
     # Pods needs to restart after new tenants are added for their database to be created.
     # It should not break currently working health though. Thus skipping if only a small portion of tenants fail.
-    if len(failed_tenants) <= 2:
+    if len(failed_tenants) >= 2:
         logger.critical(f"More than 2 tenants failed to connect to database. Possible error or waiting for startup. Shutting down.")
         return
 

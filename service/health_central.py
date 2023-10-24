@@ -23,7 +23,7 @@ from stores import pg_store, SITE_TENANT_DICT
 from models_pods import Pod
 from models_volumes import Volume
 from models_snapshots import Snapshot
-from volume_utils import files_listfiles, files_delete, get_nfs_ips, files_mkdir
+from volume_utils import files_listfiles, files_delete, files_mkdir
 from sqlmodel import select
 from tapisservice.config import conf
 from tapisservice.logs import get_logger
@@ -118,7 +118,7 @@ def check_nfs_tapis_system():
     This central health instance needs to be in the same K8 namespace as api and pods-nfs(?).
     We grab the nfs ssh ip.
     """
-    logger.info("Top of check_nfs_tapis_system. Getting nfs_ssh_ip.")
+    logger.info("Top of check_nfs_tapis_system.")
 
     # Get K8 pod name named pods-nfs
     k8_name = ""
@@ -152,9 +152,6 @@ def check_nfs_tapis_system():
 
     # k8_name could have been changed by now, so we need to set from nfs_pods.
     k8_name = nfs_pods[0]['k8_name']
-
-    nfs_ssh_ip, nfs_nfs_ip = get_nfs_ips()
-    logger.info(f"In check_nfs_tapis_system. Got nfs_ssh_ip: {nfs_ssh_ip}.")
 
     # Go through each tenant and initialize folders
     for tenant in SITE_TENANT_DICT[conf.site_id]:

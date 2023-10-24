@@ -7,7 +7,7 @@ from kubernetes import client, config
 from tapisservice.config import conf
 from tapisservice.logs import get_logger
 from tapisservice.errors import BaseTapisError
-from volume_utils import get_nfs_ips
+from volume_utils import get_nfs_ip
 
 logger = get_logger(__name__)
 
@@ -25,7 +25,7 @@ def start_postgres_pod(pod, revision: int):
     volumes = []
     volume_mounts = []
 
-    nfs_ssh_ip, nfs_nfs_ip = get_nfs_ips()
+    nfs_nfs_ip = get_nfs_ip()
 
     # Create PVC if requested.
     if pod.volume_mounts:
@@ -104,7 +104,7 @@ def start_neo4j_pod(pod, revision: int):
     #     volumes.append(client.V1Volume(name='user-volume', persistent_volume_claim = persistent_volume))
     #     volume_mounts.append(client.V1VolumeMount(name="user-volume", mount_path="/var/lib/neo4j/data"))
 
-    nfs_ssh_ip, nfs_nfs_ip = get_nfs_ips()
+    nfs_nfs_ip = get_nfs_ip()
 
     # Create PVC if requested.
     if pod.volume_mounts:
@@ -189,7 +189,7 @@ def start_generic_pod(pod, image, revision: int):
     volumes = []
     volume_mounts = []
 
-    nfs_ssh_ip, nfs_nfs_ip = get_nfs_ips()
+    nfs_nfs_ip = get_nfs_ip()
 
     # Create PVC if requested.
     if pod.volume_mounts:

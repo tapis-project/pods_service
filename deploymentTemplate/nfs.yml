@@ -12,34 +12,32 @@ spec:
         app: pods-nfs
     spec:
       containers:
+      - name: pods-nfs
+        image: itsthenetwork/nfs-server-alpine:12
+        securityContext:
+          privileged: true # required by image
+        env:
+        - name: SHARED_DIRECTORY
+          value: "/podsnfs"
+        ports:
         - name: pods-nfs
-          image: itsthenetwork/nfs-server-alpine:12
-          securityContext:
-            privileged: true # required by image
-          env:
-            - name: SHARED_DIRECTORY
-              value: "/podsnfs"
-          ports:
-            - name: pods-nfs
-              containerPort: 2049
-            - name: pods-nfs-ssh
-              containerPort: 22
-          volumeMounts:
-            - name: pods-nfs-vol
-              mountPath: "/podsnfs"
-            - name: pods-nfs-config
-              mountPath: "/etc/exports"
-              subPath: "exports"
-      volumes:
+          containerPort: 2049
+        volumeMounts:
         - name: pods-nfs-vol
-          persistentVolumeClaim:
-            claimName: pods-nfs-vol
+          mountPath: "/podsnfs"
         - name: pods-nfs-config
-          configMap:
-            name: pods-nfs-config
-            items:
-              - key: exports
-                path: exports
+          mountPath: "/etc/exports"
+          subPath: "exports"
+      volumes:
+      - name: pods-nfs-vol
+        persistentVolumeClaim:
+          claimName: pods-nfs-vol
+      - name: pods-nfs-config
+        configMap:
+          name: pods-nfs-config
+          items:
+          - key: exports
+            path: exports
 
 # Config overwrites /etc/exports which is was nfsd is looking for.
 # all_squash makes it so all clients are squashed to the same user, in this case 4872:4872.

@@ -31,9 +31,9 @@ class TapisModel(SQLModel):
         # functions with self can provide self, otherwise provide tenant and site.
         tenant_id = tenant or getattr(obj, 'tenant_id', None) or 'tacc'
         site_id = site or getattr(obj, 'site_id', None) or 'tacc'
-        logger.info(f"Getting tenant pg obj. Using site: {site_id}; tenant: {tenant_id}")
+        logger.info(f"Using site: {site_id}; tenant: {tenant_id}. Getting tenant pg obj.")
         store = pg_store[site_id][tenant_id]
-        logger.info(f"Using site: {site_id}; tenant: {tenant_id}; Session: {Session}.")
+        logger.debug(f"Using site: {site_id}; tenant: {tenant_id}; Session: {Session}.")
         return site_id, tenant_id, store
 
     def db_create(self):
@@ -112,7 +112,7 @@ class TapisModel(SQLModel):
         """
         site, tenant, store = cls.get_site_tenant_session(tenant=tenant, site=site)
         table_name = cls.table_name()
-        logger.info(f'Top of {table_name}.db_get_all() for tenant.site: {tenant}.{site}')
+        logger.debug(f'Top of {table_name}.db_get_all() for tenant.site: {tenant}.{site}')
 
         if not where_params:
             raise ValueError(f"where_dict must be specfied for db_get_where. Got empty")
@@ -158,7 +158,7 @@ class TapisModel(SQLModel):
         """
         site, tenant, store = cls.get_site_tenant_session(tenant=tenant, site=site)
         table_name = cls.table_name()
-        logger.info(f'Top of {table_name}.db_get_all() for tenant.site: {tenant}.{site}')
+        logger.debug(f'Top of {table_name}.db_get_all() for tenant.site: {tenant}.{site}')
 
         # Create statement
         primary_key = inspect(cls).primary_key[0].name
@@ -176,7 +176,7 @@ class TapisModel(SQLModel):
         """
         site, tenant, store = cls.get_site_tenant_session(tenant=tenant, site=site)
         table_name = cls.table_name()
-        logger.info(f'Top of {table_name}.db_get_all() for tenant.site: {tenant}.{site}')
+        logger.debug(f'Top of {table_name}.db_get_all() for tenant.site: {tenant}.{site}')
 
         # Create statement
         stmt = select(cls)

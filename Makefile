@@ -101,8 +101,8 @@ else
 	@echo "  🔗 : Jupyter Lab URL: dev_tools is set to 'false'"
 endif
 	@echo "  🔗 : API URL: $(LCYAN)http://$$(minikube ip):$$(kubectl get service pods-traefik | grep -o -P '(?<= 80:)\d+(?=/TCP)')$(NC)/v3"
-	@echo "  🔗 : Docs URL: $(LCYAN)http://$$(minikube ip):$$(kubectl get service pods-api-nodeport | grep -o -P '(?<=8000:)\d+(?=/TCP)')$(NC)/docs"
-	@echo "  🔗 : Spec URL: $(LCYAN)http://$$(minikube ip):$$(kubectl get service pods-api-nodeport | grep -o -P '(?<=8000:)\d+(?=/TCP)')$(NC)/openapi.json"
+	@echo "  🔗 : Docs URL: $(LCYAN)http://$$(minikube ip):$$(kubectl get service pods-api | grep -o -P '(?<=8000:)\d+(?=/TCP)')$(NC)/docs"
+	@echo "  🔗 : Spec URL: $(LCYAN)http://$$(minikube ip):$$(kubectl get service pods-api | grep -o -P '(?<=8000:)\d+(?=/TCP)')$(NC)/openapi.json"
 	@echo "  🔗 : Traefik Dash URL: $(LCYAN)http://$$(minikube ip):$$(kubectl get service pods-traefik | grep -o -P '(?<=8080:)\d+(?=/TCP)')$(NC)/dashboard"
 	@echo ""
 
