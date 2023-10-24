@@ -412,6 +412,7 @@ def check_nfs_files():
         workaround_tenants[conf.site_id].remove('jupyter-tacc-dev')
         workaround_tenants[conf.site_id].remove('jupyter-designsafe-dev')
         workaround_tenants[conf.site_id].remove('cyverse')
+        workaround_tenants[conf.site_id].remove('ciidev')
     except:
         pass
 
