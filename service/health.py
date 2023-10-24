@@ -553,6 +553,8 @@ def check_nfs_tapis_system():
 
     # Go through each tenant and create system
     for tenant in SITE_TENANT_DICT[conf.site_id]:
+        if tenant == 'ciidev':
+          continue
         # Logging for tenant initialization
         logger.info(f"Initializing nfs for tenant: {tenant}.")
         root_dir = f"{conf.nfs_base_path}/{tenant}"
