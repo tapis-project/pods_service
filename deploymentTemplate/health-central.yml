@@ -61,8 +61,9 @@ spec:
         configMap: 
           name: MAKEFILE_SERVICE_NAME-config
       - name: MAKEFILE_SERVICE_NAME-nfs-vol
-        persistentVolumeClaim:
-          claimName: MAKEFILE_SERVICE_NAME-nfs-vol
+        nfs:
+          server: MAKEFILE_STATIC_NFS_IP
+          path: /
 #DEV      - name: dev-service
 #DEV        hostPath:
 #DEV          path: /pods_service/service #NOTE FOR MINIKUBE: Minikube is a vm, you have to minikube mount for hostpath to work

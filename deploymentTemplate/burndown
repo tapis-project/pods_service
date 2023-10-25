@@ -28,7 +28,7 @@ kubectl delete -f rabbitmq.yml
 kubectl delete -f nfs.yml
 
 # PVC - Don't burn these down silly. (But it's fine locally ;) )
-kubectl delete -f nfs-pvc.yml
+#kubectl delete -f nfs-pvc.yml # if health isn't gone yet, things break.
 kubectl delete -f postgres-pvc.yml
 
 sleep 3 # let k8 catch up

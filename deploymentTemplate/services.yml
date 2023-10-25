@@ -98,3 +98,4 @@ spec:
   - name: MAKEFILE_SERVICE_NAME-nfs
     port: 2049
     targetPort: 2049
+  clusterIP: MAKEFILE_STATIC_NFS_IP

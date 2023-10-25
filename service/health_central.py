@@ -85,7 +85,7 @@ def check_nfs_files():
                 logger.warning(f"Couldn't find volume with name: {folder} in database: {tenant_volume_dict}. Deleting it now.\n")
                 logger.debug(f"volume dict: {tenant_volume_dict}")
                 logger.debug(f"volume files: {file_tree[tenant]['volumes']}")
-                files_delete(path=f"{conf.nfs_base_path}/{tenant}/volumes/{folder}", tenant_id=tenant)
+                files_delete(path=f"/volumes/{folder}", tenant_id=tenant)
 
         ### Snapshots
         # Go through database for tenant. Get all snapshots
