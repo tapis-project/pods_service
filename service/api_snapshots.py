@@ -3,7 +3,7 @@ from models_snapshots import Snapshot, NewSnapshot, SnapshotsResponse, SnapshotR
 from channels import CommandChannel
 from tapisservice.tapisfastapi.utils import g, ok
 from codes import AVAILABLE, CREATING
-from volume_utils import files_movecopy
+from volume_utils import files_copy
 from tapisservice.config import conf
 from tapisservice.logs import get_logger
 logger = get_logger(__name__)
@@ -67,11 +67,8 @@ async def create_snapshot(new_snapshot: NewSnapshot):
     snapshot.db_update()
     logger.debug(f"API has updated snapshot status to CREATING")
 
-    ### TODO
     # Move requested files from original folder to snapshot folder
-    res = files_movecopy(
-        system_id = conf.nfs_tapis_system_id,
-        operation = "COPY",
+    res = files_copy(
         source_path = f"/volumes/{snapshot.source_volume_id}/{snapshot.source_volume_path}",
         new_path = f"/snapshots/{snapshot.snapshot_id}/{snapshot.destination_path}")
 

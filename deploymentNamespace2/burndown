@@ -1,0 +1,11 @@
+# Deploy
+kubectl delete -n testing -f spawner.yml
+kubectl delete -n testing -f health.yml
+
+# Security/Role
+kubectl delete -f security.yml
+
+# Configs
+kubectl delete configmap pods-config
+
+sleep 3 # let k8 catch up

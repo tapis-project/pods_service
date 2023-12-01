@@ -16,6 +16,10 @@ elif [ $PODS_COMPONENT = "health" ]; then
     # Start health
     python3 -u /home/tapis/service/health.py
 
+elif [ $PODS_COMPONENT = "health-central" ]; then
+    # Start health
+    python3 -u /home/tapis/service/health_central.py
+
 elif [ $PODS_COMPONENT = "spawner" ]; then
     # Start spawner
     python3 -u /home/tapis/service/spawner.py

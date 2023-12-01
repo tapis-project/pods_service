@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pods-spawner
+spec:
+  selector:
+    matchLabels:
+      app: pods-spawner
+  template:
+    metadata:
+      labels:
+        app: pods-spawner
+    spec:
+      serviceAccountName: pods-serviceaccount
+      containers:
+      - name: pods-spawner
+        imagePullPolicy: Never
+        image: pods/pods-api:dev
+        #command: ["sleep", "2000000"]
+        resources:
+          requests:
+            cpu: ".5"
+            memory: "1G"
+          limits:
+            cpu: "3"
+            memory: "3G"
+        env:
+        - name: PODS_COMPONENT
+          value: spawner
+        - name: DEBUG_SLEEP_LOOP
+          value: 'false'
+        volumeMounts:
+        - name: pods-config
+          mountPath: /home/tapis/config.json
+          subPath: config.json
+        - name: dev-service
+          mountPath: /home/tapis/service
+      volumes:
+      - name: pods-config
+        configMap: 
+          name: pods-config 
+      - name: dev-service
+        hostPath:
+          path: /pods_service/service #NOTE FOR MINIKUBE: Minikube is a vm, you have to minikube mount for hostpath to work
+          type: Directory

@@ -19,8 +19,6 @@ from tapipy.errors import NotFoundError
 from utils import check_permissions
 logger = get_logger(__name__)
 
-from __init__ import t
-
 from sqlalchemy import UniqueConstraint
 from sqlalchemy.inspection import inspect
 from sqlalchemy.dialects.postgresql import ARRAY
@@ -179,7 +177,6 @@ class Snapshot(TapisSnapshotBaseFull, table=True, validate=True):
             # Ensure source_volume_path exists in nfs.
             try:
                 source_listing = files_listfiles(
-                    system_id = conf.nfs_tapis_system_id,
                     path = f"/volumes/{source_volume_id}/{source_volume_path}")
             except NotFoundError:
                 raise NotFoundError(f"source_volume_path: {source_volume_path} not found source_volume_id: {source_volume_id}.")
