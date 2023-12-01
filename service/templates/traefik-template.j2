@@ -22,6 +22,15 @@ http:
           - "501-599"
         service: pods-service
         query: "/error-handler/{status}"
+      fallback:
+        service: error-service
+
+  errors:
+    services:
+      error-service:
+        status:
+          - "500"
+        query: "/error-page"
 
   routers:
     dashboard:
