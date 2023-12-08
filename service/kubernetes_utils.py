@@ -553,7 +553,7 @@ def update_traefik_configmap(tcp_proxy_info: Dict[str, Dict[str, str]],
         proxy_info ({"pod_id1": {"routing_port": int, "url": str}, ...}): Dict of dict that 
             specifies routing port + url needed to create pod service.
     """
-    logger.debug("Top of update_traefik_configmap().")
+    logger.info("Top of update_traefik_configmap().")
     template_env = Environment(loader=FileSystemLoader("service/templates"))
     template = template_env.get_template('traefik-template.j2')
     rendered_template = template.render(tcp_proxy_info = tcp_proxy_info,
@@ -564,7 +564,7 @@ def update_traefik_configmap(tcp_proxy_info: Dict[str, Dict[str, str]],
     # Only update the configmap if the current configmap is out of date.
     current_template = k8.read_namespaced_config_map(name='pods-traefik-conf', namespace=NAMESPACE)
     
-    logger.debug("Health checking for difference in Traefik configs.")
+    logger.info("Health checking for difference in Traefik configs.")
     if not current_template.data['traefik.yml'] == rendered_template:
         logger.debug("Health found difference in Traefik configs, updated configmap.")
         # Update the configmap with the new template immediately.

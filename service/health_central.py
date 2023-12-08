@@ -247,7 +247,7 @@ def main():
 
     # Main health loop
     while True:
-        logger.info(f"\n\nRunning pods health checks. Now: {time.time()}")
+        logger.info(f"\n\n\nRunning pods health checks. Now: {time.time()}")
         try:
             set_traefik_proxy()
         except Exception as e:
@@ -256,7 +256,7 @@ def main():
 
         try:
             check_nfs_files()
-        except Exception:
+        except Exception as e:
             logger.error(f"Error running check_nfs_files. e: {e}")
             #raise # this seems like it's just breaking
 
