@@ -247,7 +247,7 @@ def main():
 
     # Main health loop
     while True:
-        logger.info(f"Running pods health checks. Now: {time.time()}")
+        logger.info(f"\n\nRunning pods health checks. Now: {time.time()}")
         try:
             set_traefik_proxy()
         except Exception as e:
