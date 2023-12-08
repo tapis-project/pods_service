@@ -566,7 +566,7 @@ def update_traefik_configmap(tcp_proxy_info: Dict[str, Dict[str, str]],
     
     logger.info("Health checking for difference in Traefik configs.")
     if not current_template.data['traefik.yml'] == rendered_template:
-        logger.debug("Health found difference in Traefik configs, updated configmap.")
+        logger.info("Health found difference in Traefik configs, updated configmap.")
         # Update the configmap with the new template immediately.
         config_map = client.V1ConfigMap(data = {"traefik.yml": rendered_template})
         k8.patch_namespaced_config_map(name='pods-traefik-conf', namespace=NAMESPACE, body=config_map)
