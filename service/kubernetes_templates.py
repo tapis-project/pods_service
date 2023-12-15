@@ -234,6 +234,7 @@ def start_generic_pod(pod, image, revision: int):
         "cpu_request": pod.resources.get("cpu_request"),
         "mem_limit": pod.resources.get("mem_limit"),
         "cpu_limit": pod.resources.get("cpu_limit"),
+        "gpus": pod.resources.get("gpus"),
         "user": None
     }
 

@@ -305,6 +305,7 @@ def create_pod(name: str,
                cpu_request: str | None = None,
                mem_limit: str | None = None,
                cpu_limit: str | None = None,
+               gpus: str | None = None,
                user: str | None = None,
                image_pull_policy: Literal["Always", "IfNotPresent", "Never"] = "Always"):
     """
@@ -386,8 +387,24 @@ def create_pod(name: str,
         resource_requests["memory"] = f"{mem_request}Mi"
     if cpu_request:
         resource_requests["cpu"] = f"{cpu_request}m"
+    # GPUs
+    if gpus:
+        resource_limits["nvidia.com/gpu"] = gpus
     # Define resource requirements if resource limits specified
     resources = client.V1ResourceRequirements(limits = resource_limits, requests = resource_requests)
+
+    ## If GPU is requested.
+    if gpus:
+        node_selector = {"gpu": "v100"}
+        toleration = client.V1Toleration(
+            key="gpunode",
+            operator="Exists",
+            effect="NoSchedule"
+        )
+        tolerations = [toleration]
+    else:
+        node_selector = None
+        tolerations = []
 
     ### Security Context
     security_context = None
@@ -440,7 +457,9 @@ def create_pod(name: str,
             volumes=volumes,
             restart_policy="Never",
             security_context=security_context,
-            enable_service_links=False
+            enable_service_links=False,
+            tolerations=tolerations,
+            node_selector=node_selector
         )
         pod_metadata = client.V1ObjectMeta(
             name=name,
@@ -566,7 +585,7 @@ def update_traefik_configmap(tcp_proxy_info: Dict[str, Dict[str, str]],
     
     logger.info("Health checking for difference in Traefik configs.")
     if not current_template.data['traefik.yml'] == rendered_template:
-        logger.info("Health found difference in Traefik configs, updated configmap.")
+        logger.debug("Health found difference in Traefik configs, updated configmap.")
         # Update the configmap with the new template immediately.
         config_map = client.V1ConfigMap(data = {"traefik.yml": rendered_template})
         k8.patch_namespaced_config_map(name='pods-traefik-conf', namespace=NAMESPACE, body=config_map)

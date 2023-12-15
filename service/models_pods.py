@@ -97,10 +97,14 @@ class Networking(TapisModel):
 
 class Resources(TapisModel):
     # CPU/Mem defaults are set in configschema.json
+    # CPU
     cpu_request: int = Field(conf.default_pod_cpu_request, description = "CPU allocation pod requests at startup. In millicpus (m). 1000 = 1 cpu.")
     cpu_limit: int = Field(conf.default_pod_cpu_limit, description = "CPU allocation pod is allowed to use. In millicpus (m). 1000 = 1 cpu.")
+    # Mem
     mem_request: int = Field(conf.default_pod_mem_request, description = "Memory allocation pod requests at startup. In megabytes (Mi)")
     mem_limit: int = Field(conf.default_pod_mem_limit, description = "Memory allocation pod is allowed to use. In megabytes (Mi)")
+    # GPU
+    gpus: int = Field(0, description = "GPU allocation pod is allowed to use. In integers of GPUs. (we only have 1 currently ;) )")
 
     @validator('cpu_request', 'cpu_limit')
     def check_cpu_resources(cls, v):
@@ -115,26 +119,35 @@ class Resources(TapisModel):
     def check_mem_resources(cls, v):
         if conf.minimum_pod_mem_val > v  or v > conf.maximum_pod_mem_val:
             raise ValueError(
-                f"resources.mem_x out of bounds. Received: {v}. Maximum: {conf.minimum_pod_mem_val}. Minimum: {conf.maximum_pod_mem_val}.",
+                f"resources.mem_x out of bounds. Received: {v}. Maximum: {conf.maximum_pod_mem_val}. Minimum: {conf.minimum_pod_mem_val}.",
                  " User requires extra role to break bounds. Contact admin."
                 )
         return v
 
+    @validator('gpus')
+    def check_gpus(cls, v):
+        if 0 > v  or v > conf.maximum_pod_gpu_val:
+            raise ValueError(
+                f"resources.gpus out of bounds. Received: {v}. Maximum: {conf.maximum_pod_gpu_val}. Minimum: 0.",
+                 " User requires extra role to break bounds. Contact admin."
+                )
+        return v
     @root_validator(pre=False)
     def ensure_request_lessthan_limit(cls, values):
         cpu_request = values.get("cpu_request")
         cpu_limit = values.get("cpu_limit")
         mem_request = values.get("mem_request")
         mem_limit = values.get("mem_limit")
-
+        gpus = values.get("gpus") # There's no request/limit for gpus, just an int validated in check_gpus
+        
         # Check cpu values
         if cpu_request and cpu_limit and cpu_request > cpu_limit:
-            raise ValueError(f"resources.cpu_x found cpu_request({cpu_request}) > cpu_limit({cpu_limit}). Request must be less than limit.")
-
+            raise ValueError(f"resources.cpu_x found cpu_request({cpu_request}) > cpu_limit({cpu_limit}). Request must be less than or equal to limit.")
+        
         # Check mem values
         if mem_request and mem_limit and mem_request > mem_limit:
-            raise ValueError(f"resources.mem_x found mem_request({mem_request}) > mem_limit({mem_limit}). Request must be less than limit.")
-
+            raise ValueError(f"resources.mem_x found mem_request({mem_request}) > mem_limit({mem_limit}). Request must be less than or equal to limit.")
+        
         return values
 
 
