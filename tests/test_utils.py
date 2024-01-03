@@ -21,6 +21,8 @@ def get_service_tapis_client():
     sk_url = os.environ.get('sk_url', conf.primary_site_admin_tenant_base_url)
     tenant_id = os.environ.get('tenant', 'admin')
     test_abaco_service_password = os.environ.get('test_abaco_service_password', conf.test_abaco_service_password)
+    if test_abaco_service_password == "changeme":
+        raise KeyError("test_abaco_service_password must be set in config or env for tests to run (it creates tokens)")
     jwt = os.environ.get('jwt', None)
     resource_set = os.environ.get('resource_set', 'local')
     custom_spec_dict = os.environ.get('custom_spec_dict', None)

@@ -40,6 +40,11 @@ spec:
             secretKeyRef:
               name: tapis-MAKEFILE_SERVICE_NAME-secrets
               key: service-password
+        - name: TEST_ABACO_SERVICE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: tapis-MAKEFILE_SERVICE_NAME-secrets
+              key: test-abaco-service-password
         - name: POSTGRES_USERNAME
           value: pods-admin
         - name: POSTGRES_PASSWORD
