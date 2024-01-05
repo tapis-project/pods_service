@@ -215,6 +215,9 @@ def set_traefik_proxy():
                     http_proxy_info[pod.k8_name] = template_info
                 case "postgres":
                     postgres_proxy_info[pod.k8_name] = template_info
+                case "local_only":
+                    # when users only need networking to connect to other pods in the same namespace
+                    pass
 
     # This functions only updates if config is out of date.
     update_traefik_configmap(tcp_proxy_info, http_proxy_info, postgres_proxy_info)

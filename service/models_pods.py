@@ -72,7 +72,7 @@ class Networking(TapisModel):
     @validator('protocol')
     def check_protocol(cls, v):
         v = v.lower()
-        valid_protocols = ['http', 'tcp', 'postgres']
+        valid_protocols = ['http', 'tcp', 'postgres', 'local_only']
         if v not in valid_protocols:
             raise ValueError(f"networking.protocol must be one of the following: {valid_protocols}.")
         return v
