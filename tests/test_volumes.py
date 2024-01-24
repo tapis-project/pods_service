@@ -3,7 +3,7 @@ import sys
 import json
 import time
 import pytest
-from tests.test_utils import headers, response_format, basic_response_checks, delete_pods, nfs_develop_mode, t
+from tests.test_utils import headers, response_format, basic_response_checks, delete_pods, t
 
 # Allows us to import pods's modules.
 sys.path.append('/home/tapis/service')
@@ -127,21 +127,19 @@ def test_delete_set_permissions(headers):
     assert "Volume permission deleted successfully" in rsp.json()['message']
 
 def test_list_volume_files(headers):
-    if nfs_develop_mode:
-        pytest.skip("When nfs_develop_mode True, tapipy functions won't work")
     rsp = client.get(f"/pods/volumes/{test_volume_1}/list", headers=headers)
     result = basic_response_checks(rsp)
     assert isinstance(result, list)
 
 def test_upload_to_volume(headers):
-    if nfs_develop_mode:
-        pytest.skip("When nfs_develop_mode True, tapipy functions won't work")
     # Upload file to volume
-    with open('config.json', 'rb') as data_blob:
-        rsp = t.pods.upload_to_volume(volume_id = test_volume_1,
-                                      path = '/uploadconfig.json',
-                                      file = data_blob)
-    #rsp = client.post(f"/pods/volumes/{test_volume_1}/upload", files={"file": open(file_path, 'rb')}, headers=headers)
+    # with open('config.json', 'rb') as data_blob:
+    #     rsp = t.pods.upload_to_volume(volume_id = test_volume_1,
+    #                                   path = '/config.json',
+    #                                   file = data_blob,
+    #                                   _x_tapis_tenant='dev',
+    #                                   _x_tapis_user='_pods_testuser_admin')
+    rsp = client.post(f"/pods/volumes/{test_volume_1}/upload/config.json", files={"file": open('config.json', 'rb')}, headers=headers)
     result = basic_response_checks(rsp)
 
 def test_update_volume(headers):
@@ -169,7 +167,6 @@ def test_update_volume_no_change(headers):
 
 ### Pod with Volume Mounted!
 def test_create_pod_with_volume(headers):
-    # if nfs_develop_mode is True then the mount is not actually made, it's just skipped. btw
     # Definition
     pod_def = {
         "pod_id": test_pod_1,
@@ -192,8 +189,6 @@ def test_create_pod_with_volume(headers):
 
 
 def test_pod_with_volume_startup(headers):
-    # if nfs_develop_mode is True then the mount is not actually made, it's just skipped. btw
-    # So this test actually ensures that's the case and the pod comes up properly
     # Wait for pod to be available
     i = 0
     while i < 10:

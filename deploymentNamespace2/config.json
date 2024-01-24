@@ -1,0 +1,54 @@
+{
+    "server": "dev",
+    "primary_site_admin_tenant_base_url": "https://admin.develop.tapis.io",
+    "service_tenant_id": "admin",
+    "service_site_id": "tacc",
+    "service_name": "pods",
+    "service_password": "SERVICE_PASSWORD",
+    "tenants": [
+        "tacc",
+        "dev",
+        "admin"
+    ],
+    "version": "dev",
+    "log_file": "",
+    "log_level": "DEBUG",
+    "log_filing_strategy": "split",
+    "tapisservice.auth_log_file": "/home/tapis/tapisservice.log",
+    "tapisservice.logs_log_file": "/home/tapis/tapisservice.log",
+    "tapisservice.tenants_log_file": "/home/tapis/tapisservice.log",
+    "postgres_user": "pods-admin",
+    "postgres_pass": "adminadmin",
+    "postgres_host": "minikubeIp:nodePort",
+    "rabbitmq_uri": "amqp://minikubeIp:nodePort",
+    "rabbitmq_dash_host": "notNeededOutsideOfCentralSpace",
+    "rabbitmq_user": "pods-admin",
+    "rabbitmq_pass": "adminadmin",
+    "image_allow_list": [
+        "jstubbs/abaco_test",
+        "tuyamei/smartfoodshed-server",
+        "ssquid/kapp",
+        "av11/sd-webui-auto-bulk",
+        "jolibrain/deepdetect_cpu",
+        "notchristiangarcia/vaapi-v1-f",
+        "notchristiangarcia/vaapi-v1-b"
+    ],
+    "nfs_pvc_name": "notNeededOutsideOfCentralSpace",
+    "nfs_base_path": "/podsnfs",
+    "pvc_storage_class_name": "standard",
+    "spawner_host_id": 0,
+    "spawner_host_queues": [
+        "tacc"
+    ],
+    "show_traceback": false,
+    "site_id": "tacc",
+    "global_site_object": {
+        "site_rabbitmq_pass": "defaultpass"
+    },
+    "global_tenant_object": {
+        "log_ex_limit": 86400,
+        "log_ex": 43200
+    },
+    "tacc_tenant_object": {
+    }  
+}

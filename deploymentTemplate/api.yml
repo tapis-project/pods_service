@@ -1,0 +1,95 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: MAKEFILE_SERVICE_NAME-api
+spec:
+  selector:
+    matchLabels:
+      app: MAKEFILE_SERVICE_NAME-api
+  template:
+    metadata:
+      labels:
+        app: MAKEFILE_SERVICE_NAME-api
+    spec:
+      serviceAccountName: MAKEFILE_SERVICE_NAME-serviceaccount
+      containers:
+      - name: MAKEFILE_SERVICE_NAME-api
+        imagePullPolicy: Never
+        image: MAKEFILE_SERVICE_NAME/pods-api:MAKEFILE_TAG
+#DEV        command: ["/bin/sh", "-c"]
+#DEV        args: ["/home/tapis/entry.sh & jupyter lab service --ip=0.0.0.0 --allow-root --no-browser --ServerApp.token=''"]
+        resources:
+          requests:
+            cpu: ".5"
+            memory: "1G"
+          limits:
+            cpu: "3"
+            memory: "3G"
+        ports:
+        - name: fastapi
+          containerPort: 8000
+#DEV        - name: jupyter
+#DEV          containerPort: 8888
+        env:
+        - name: PODS_COMPONENT
+          value: api
+        - name: DEBUG_SLEEP_LOOP
+          value: 'false'
+        - name: SERVICE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: tapis-MAKEFILE_SERVICE_NAME-secrets
+              key: service-password
+        - name: TEST_ABACO_SERVICE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: tapis-MAKEFILE_SERVICE_NAME-secrets
+              key: test-abaco-service-password
+        - name: POSTGRES_USERNAME
+          value: pods-admin
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: tapis-MAKEFILE_SERVICE_NAME-secrets
+              key: postgres-password
+        - name: RABBITMQ_USERNAME
+          value: pods-admin
+        - name: RABBITMQ_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: tapis-MAKEFILE_SERVICE_NAME-secrets
+              key: rabbitmq-password
+        volumeMounts:
+        - name: MAKEFILE_SERVICE_NAME-config
+          mountPath: /home/tapis/config.json
+          subPath: config.json
+        - name: pods-nfs-vol
+          mountPath: "/podsnfs"
+#DEV        - name: dev-service
+#DEV          mountPath: /home/tapis/service
+#DEV        - name: dev-tests
+#DEV          mountPath: /home/tapis/tests
+#DEV        - name: dev-alembic
+#DEV          mountPath: /home/tapis/alembic
+
+      volumes:
+      - name: MAKEFILE_SERVICE_NAME-config
+        configMap: 
+          name: MAKEFILE_SERVICE_NAME-config
+      - name: MAKEFILE_SERVICE_NAME-nfs-vol
+        nfs:
+          server: MAKEFILE_STATIC_NFS_IP
+          path: /
+
+#DEV      - name: dev-service
+#DEV        hostPath:
+#DEV          path: /pods_service/service #NOTE FOR MINIKUBE: Minikube is a vm, you have to minikube mount for hostpath to work
+#DEV          type: Directory
+#DEV      - name: dev-tests
+#DEV        hostPath:
+#DEV          path: /pods_service/tests #NOTE FOR MINIKUBE: Minikube is a vm, you have to minikube mount for hostpath to work
+#DEV          type: Directory
+#DEV      - name: dev-alembic
+#DEV        hostPath:
+#DEV          path: /pods_service/alembic #NOTE FOR MINIKUBE: Minikube is a vm, you have to minikube mount for hostpath to work
+#DEV          type: Directory

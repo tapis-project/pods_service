@@ -37,7 +37,9 @@ COPY configschema.json entry.sh alembic.ini /home/tapis/
 RUN chmod +x /home/tapis/entry.sh
 
 # Permission finalization
-#RUN chown -R tapis:tapis /home/tapis
+RUN chown -R tapis:tapis /home/tapis
 
+# Run everything as tapis user (uid 4872)
+USER tapis
 
 CMD ["/home/tapis/entry.sh"]

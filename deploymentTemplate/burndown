@@ -1,0 +1,34 @@
+# Secrets
+kubectl delete -f secrets.yml
+### ^ Above only applies locally
+
+
+# Services
+#kubectl delete -f services.yml
+
+# Security/Role
+kubectl delete -f security.yml
+
+# Configs
+kubectl delete configmap MAKEFILE_SERVICE_NAME-config
+kubectl delete configmap MAKEFILE_SERVICE_NAME-traefik-conf
+
+# App
+kubectl delete -f api.yml
+kubectl delete -f health-central.yml
+kubectl delete -f traefik-proxy.yml
+
+# App - when deployed in single namespace
+kubectl delete -f spawner.yml
+kubectl delete -f health.yml
+
+# Storage
+kubectl delete -f postgres.yml
+kubectl delete -f rabbitmq.yml
+kubectl delete -f nfs.yml
+
+# PVC - Don't burn these down silly. (But it's fine locally ;) )
+#kubectl delete -f nfs-pvc.yml # if health isn't gone yet, things break.
+kubectl delete -f postgres-pvc.yml
+
+sleep 3 # let k8 catch up

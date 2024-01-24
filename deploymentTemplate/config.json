@@ -5,7 +5,7 @@
     "service_site_id": "tacc",
     "service_name": "pods",
     "service_password": "$env{SERVICE_PASSWORD}",
-    "test_abaco_service_password": "FILLTHISFORTESTING",
+    "test_abaco_service_password": "$env{TEST_ABACO_SERVICE_PASSWORD}",
     "tenants": [
         "tacc",
         "dev",
@@ -34,11 +34,8 @@
         "notchristiangarcia/vaapi-v1-f",
         "notchristiangarcia/vaapi-v1-b"
     ],
-    "nfs_tapis_system_id": "pods-nfs-server",
     "nfs_pvc_name": "pods-nfs-vol",
-    "nfs_base_path": "/podsnfs/",
-    "nfs_develop_mode": true,
-    "nfs_develop_remote_url": "10.11.111.111",
+    "nfs_base_path": "/podsnfs",
     "pvc_storage_class_name": "standard",
     "spawner_host_id": 0,
     "spawner_host_queues": [

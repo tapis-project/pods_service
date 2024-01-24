@@ -6,17 +6,17 @@ jsonschema==4.17.3 # Errors after this version with error below.
 
 
 # Service API
-pydantic
-fastapi
+pydantic==1.10.13
+fastapi==0.103.2
 python-multipart
-sqlmodel
+sqlmodel==0.0.8
 uvicorn
 
 # Databases/APIs
-sqlalchemy
-alembic
-psycopg2
-kubernetes
+sqlalchemy==1.4.41
+alembic==1.12.0
+psycopg2==2.9.9
+kubernetes==28.1.0
 neo4j-driver
 rabbitpy
 channelpy

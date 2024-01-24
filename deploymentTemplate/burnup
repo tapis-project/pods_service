@@ -1,0 +1,38 @@
+# Secrets
+kubectl apply -f secrets.yml
+### ^ Above only applies locally
+
+# Services
+kubectl apply -f services.yml
+
+# Security/Roles
+kubectl apply -f security.yml
+
+# Configs
+kubectl create configmap MAKEFILE_SERVICE_NAME-config --from-file=config.json
+kubectl create configmap MAKEFILE_SERVICE_NAME-traefik-conf --from-file=traefik.yml
+
+# PVC
+kubectl apply -f nfs-pvc.yml
+kubectl apply -f postgres-pvc.yml
+
+# Storage
+kubectl apply -f rabbitmq.yml
+kubectl apply -f postgres.yml
+kubectl apply -f nfs.yml
+
+
+### Replace nfs server IP at runtime to correct ip. Works during each burnup
+## This sed is from Nathan Freeman's Workflows.
+here=`pwd`
+NFS_SERVICE_IP=$(kubectl get service pods-nfs -o jsonpath='{.spec.clusterIP}')
+sed -i "s/server:.*/server: $NFS_SERVICE_IP/g" "$here/api.yml" "$here/health-central.yml"
+
+# App
+kubectl apply -f api.yml
+kubectl apply -f health-central.yml
+kubectl apply -f traefik-proxy.yml
+
+# App - when deployed in single namespace
+kubectl apply -f spawner.yml
+kubectl apply -f health.yml

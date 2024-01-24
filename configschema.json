@@ -11,8 +11,6 @@
       "global_tenant_object",
       "global_site_object",
       "spawner_host_id",
-      "nfs_tapis_system_id",
-      "nfs_develop_mode",
       "nfs_base_path"
     ],
     "properties": {
@@ -77,6 +75,11 @@
         "description": "Minimum memory allocation pod is allowed to have as limit or request. In megabytes (Mi)",
         "default": 256
       },
+      "maximum_pod_gpu_val":{
+        "type": "integer",
+        "description": "Maximum GPU allocation pod is allowed to have in resources.gpus.",
+        "default": 1
+      },
       "spawner_host_id": {
         "type": "integer",
         "description": "Unique host_id for worker host. Each host should have at least one spawner and health check worker."
@@ -92,33 +95,9 @@
           "type": "string"
         }
       },
-      "nfs_tapis_system_id": {
-        "type": "string",
-        "description": "system_id to create/use to deal with pods-nfs files API."
-      },
       "nfs_base_path": {
         "type": "string",
         "description": "Base path for nfs system root_dir. Should be /{base_path}/{tenant}/, tenant is added at runtime."
-      },
-      "nfs_develop_mode": {
-        "type": "boolean",
-        "description": "While developing locally we expect nfs does not work. This stops nfs specific code from running when not needed."
-      },
-      "nfs_develop_remote_url": {
-        "type": "string",
-        "description": "If service not actually deployed, you can specify the nfs_url systems should use for initial configuration."
-      },
-      "nfs_develop_private_key": {
-        "type": "string",
-        "description": "nfs private key for 'pods' user to create Systems credential. Derived during runtime if not provided (works when Files ands Pods are deployed in the same cluster)"
-      },
-      "nfs_develop_public_key": {
-        "type": "string",
-        "description": "nfs public key for 'pods' user to create Systems credential. Derived during runtime if not provided (works when Files ands Pods are deployed in the same cluster)"
-      },
-      "nfs_pods_user_password": {
-        "type": "string",
-        "description": "nfs pod password for 'pods' user to create Systems credential. Archived in favor of keys."
       },
       "global_tenant_object": {
         "type": "object",

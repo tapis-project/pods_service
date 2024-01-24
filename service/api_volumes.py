@@ -70,9 +70,7 @@ async def create_volume(new_volume: NewVolume):
     logger.debug(f"API has updated volume status to CREATING")
 
     # Create folder
-    res = files_mkdir(
-        system_id = conf.nfs_tapis_system_id,
-        path = f"/volumes/{volume.volume_id}")
+    res = files_mkdir(path = f"/volumes/{volume.volume_id}")
 
     # If we get to this point we can update pod status
     volume.status = AVAILABLE

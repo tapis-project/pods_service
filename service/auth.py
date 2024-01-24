@@ -10,7 +10,6 @@ from tapisservice.tapisfastapi.utils import g
 import codes
 
 from __init__ import t, Tenants
-from tapisservice.tapisfastapi.auth import authn_and_authz
 from tapisservice.logs import get_logger
 from tapisservice.config import conf
 logger = get_logger(__name__)

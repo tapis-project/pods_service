@@ -203,6 +203,9 @@ def get_k8_logs(name: str):
 def run_k8_exec(k8_name: str, command: list, namespace: str = ""):
     # This starts a Kubernetes exec in the background. We can poll progress/status
     # if the exec is still running with resp.is_open().
+    ### EXAMPLE
+    #    command = ["/bin/sh", "-c", "awk -v ORS='\\n' '1' /home/pods/.ssh/podskey"]
+    #    derived_private_key, derived_err = run_k8_exec(k8_name, command)
     resp = stream.stream(
         k8.connect_get_namespaced_pod_exec,
         k8_name,
@@ -302,6 +305,7 @@ def create_pod(name: str,
                cpu_request: str | None = None,
                mem_limit: str | None = None,
                cpu_limit: str | None = None,
+               gpus: str | None = None,
                user: str | None = None,
                image_pull_policy: Literal["Always", "IfNotPresent", "Never"] = "Always"):
     """
@@ -383,8 +387,24 @@ def create_pod(name: str,
         resource_requests["memory"] = f"{mem_request}Mi"
     if cpu_request:
         resource_requests["cpu"] = f"{cpu_request}m"
+    # GPUs
+    if gpus:
+        resource_limits["nvidia.com/gpu"] = gpus
     # Define resource requirements if resource limits specified
     resources = client.V1ResourceRequirements(limits = resource_limits, requests = resource_requests)
+
+    ## If GPU is requested.
+    if gpus:
+        node_selector = {"gpu": "v100"}
+        toleration = client.V1Toleration(
+            key="gpunode",
+            operator="Exists",
+            effect="NoSchedule"
+        )
+        tolerations = [toleration]
+    else:
+        node_selector = None
+        tolerations = []
 
     ### Security Context
     security_context = None
@@ -437,7 +457,9 @@ def create_pod(name: str,
             volumes=volumes,
             restart_policy="Never",
             security_context=security_context,
-            enable_service_links=False
+            enable_service_links=False,
+            tolerations=tolerations,
+            node_selector=node_selector
         )
         pod_metadata = client.V1ObjectMeta(
             name=name,
@@ -550,6 +572,7 @@ def update_traefik_configmap(tcp_proxy_info: Dict[str, Dict[str, str]],
         proxy_info ({"pod_id1": {"routing_port": int, "url": str}, ...}): Dict of dict that 
             specifies routing port + url needed to create pod service.
     """
+    logger.info("Top of update_traefik_configmap().")
     template_env = Environment(loader=FileSystemLoader("service/templates"))
     template = template_env.get_template('traefik-template.j2')
     rendered_template = template.render(tcp_proxy_info = tcp_proxy_info,
@@ -560,11 +583,13 @@ def update_traefik_configmap(tcp_proxy_info: Dict[str, Dict[str, str]],
     # Only update the configmap if the current configmap is out of date.
     current_template = k8.read_namespaced_config_map(name='pods-traefik-conf', namespace=NAMESPACE)
     
+    logger.info("Health checking for difference in Traefik configs.")
     if not current_template.data['traefik.yml'] == rendered_template:
+        logger.debug("Health found difference in Traefik configs, updated configmap.")
         # Update the configmap with the new template immediately.
         config_map = client.V1ConfigMap(data = {"traefik.yml": rendered_template})
         k8.patch_namespaced_config_map(name='pods-traefik-conf', namespace=NAMESPACE, body=config_map)
-        # Auto updates proxxy pod. Changes take place according to kubelet sync frequency duration (60s default).
+        # Auto updates proxy pod. Changes take place according to kubelet sync frequency duration (60s default).
 
 def get_traefik_configmap():
     """
