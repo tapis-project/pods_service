@@ -55,6 +55,9 @@ export SERVICE_NAME := pods
 # SERVICE_PASS to use throughout. Must be filled.
 export SERVICE_PASS := password
 
+# TEST_ABACO_SERVICE_PASSWORD to use throughout. Must be filled for testing (it has ability to create tokens)
+export TEST_ABACO_SERVICE_PASS := changeme
+
 # STATIC_NFS_IP to use throughout. Must be filled.
 export STATIC_NFS_IP := 10.96.175.175
 
@@ -85,6 +88,7 @@ up: vars build
 	@sed -i 's/"version".*/"version": "$(TAG)",/g' config.json
 	@sed -i 's/MAKEFILE_SERVICE_NAME/$(SERVICE_NAME)/g' *
 	@sed -i 's/MAKEFILE_SERVICE_PASS/$(SERVICE_PASS)/g' *
+	@sed -i 's/MAKEFILE_TEST_ABACO_SERVICE_PASS/$(TEST_ABACO_SERVICE_PASS)/g' *
 	@sed -i 's/MAKEFILE_STATIC_NFS_IP/$(STATIC_NFS_IP)/g' *
 	@sed -i 's/MAKEFILE_TAG/$(TAG)/g' *
 	@echo "  🔥 : Running burnup."

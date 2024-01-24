@@ -215,12 +215,18 @@ def set_traefik_proxy():
                     http_proxy_info[pod.k8_name] = template_info
                 case "postgres":
                     postgres_proxy_info[pod.k8_name] = template_info
+                case "local_only":
+                    # when users only need networking to connect to other pods in the same namespace
+                    pass
 
     # This functions only updates if config is out of date.
     update_traefik_configmap(tcp_proxy_info, http_proxy_info, postgres_proxy_info)
 
 
 def main():
+    """
+    Main function for health checks.
+    """
     # Try and run check_db_pods. Will try for 60 seconds until health is declared "broken".
     logger.info("Top of health. Checking if db's are initialized.")
     idx = 0
@@ -244,11 +250,20 @@ def main():
 
     # Main health loop
     while True:
-        logger.info(f"Running pods health checks. Now: {time.time()}")
-        check_nfs_files()
-        
-        set_traefik_proxy()
-        ### Have a short wait
+        logger.info(f"\n\n\nRunning pods health checks. Now: {time.time()}")
+        try:
+            set_traefik_proxy()
+        except Exception as e:
+            logger.error(f"Error setting traefik proxy. e: {e}")
+            raise
+
+        try:
+            check_nfs_files()
+        except Exception as e:
+            logger.error(f"Error running check_nfs_files. e: {e}")
+            #raise # this seems like it's just breaking
+
+        # Have a short wait
         time.sleep(3)
 
 

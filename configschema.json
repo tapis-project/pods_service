@@ -75,6 +75,11 @@
         "description": "Minimum memory allocation pod is allowed to have as limit or request. In megabytes (Mi)",
         "default": 256
       },
+      "maximum_pod_gpu_val":{
+        "type": "integer",
+        "description": "Maximum GPU allocation pod is allowed to have in resources.gpus.",
+        "default": 1
+      },
       "spawner_host_id": {
         "type": "integer",
         "description": "Unique host_id for worker host. Each host should have at least one spawner and health check worker."
