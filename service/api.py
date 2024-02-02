@@ -82,7 +82,7 @@ api = FastAPI(
     middleware=[
         Middleware(HttpUrlRedirectMiddleware),
         Middleware(GlobalsMiddleware),
-        Middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"]),
+        Middleware(CORSMiddleware, allow_origins=['*'], allow_credentials=True, allow_methods=["*"], allow_headers=["*"]),
         Middleware(TapisMiddleware, tenant_cache=Tenants, authn_callback=authentication, authz_callback=authorization)
     ])
 
