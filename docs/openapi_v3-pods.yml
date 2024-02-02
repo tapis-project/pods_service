@@ -26,6 +26,9 @@ info:
     name: BSD 3.0
     url: 'https://github.com/tapis-project/pods_service'
   version: '0.30'
+security:
+  - TapisJWT: []
+
 paths:
   /pods/snapshots:
     get:
@@ -1115,6 +1118,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
 components:
+  securitySchemes:
+    TapisJWT:
+      type: apiKey
+      description: Tapis signed JWT token authentication
+      name: X-Tapis-Token
+      in: header
   schemas:
     Body_upload_to_volume:
       title: Body_upload_to_volume
@@ -2130,6 +2139,10 @@ components:
       description: >-
         Object with fields that users are allowed to specify when updating the
         Volume class.
+    Value:
+      anyOf:
+        - type: string
+        - type: number
     ValidationError:
       title: ValidationError
       required:
@@ -2142,9 +2155,7 @@ components:
           title: Location
           type: array
           items:
-            anyOf:
-              - type: string
-              - type: integer
+            $ref: "#/components/schemas/Value"
         msg:
           title: Message
           type: string

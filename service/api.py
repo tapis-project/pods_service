@@ -5,6 +5,7 @@ from tapisservice.tapisfastapi.auth import TapisMiddleware
 from __init__ import Tenants
 from fastapi import FastAPI
 from fastapi.middleware import Middleware
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 
 from auth import authorization, authentication
@@ -81,6 +82,7 @@ api = FastAPI(
     middleware=[
         Middleware(HttpUrlRedirectMiddleware),
         Middleware(GlobalsMiddleware),
+        Middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"]),
         Middleware(TapisMiddleware, tenant_cache=Tenants, authn_callback=authentication, authz_callback=authorization)
     ])
 
