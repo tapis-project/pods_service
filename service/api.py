@@ -82,8 +82,18 @@ api = FastAPI(
     middleware=[
         Middleware(HttpUrlRedirectMiddleware),
         Middleware(GlobalsMiddleware),
-        Middleware(CORSMiddleware, allow_origins=["*", "http://localhost:3001"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"]),
-        Middleware(TapisMiddleware, tenant_cache=Tenants, authn_callback=authentication, authz_callback=authorization)
+        Middleware(
+            CORSMiddleware,
+            allow_origins=["*", "http://localhost:3001", "localhost:5000", "http://localhost:5000", "localhost"],
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["X-Tapis-Token", "Origin", "Access-Control-Request-Methods", "*"],
+            max_age=600),
+        Middleware(
+            TapisMiddleware,
+            tenant_cache=Tenants,
+            authn_callback=authentication,
+            authz_callback=authorization)
     ])
 
 # snapshots
