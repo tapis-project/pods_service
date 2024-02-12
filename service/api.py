@@ -87,7 +87,7 @@ api = FastAPI(
         Middleware(GlobalsMiddleware),
         Middleware(
             CORSMiddleware,
-            allow_origins=["*"],#, "http://localhost:3001", "localhost:5000", "http://localhost:5000", "localhost"],
+            allow_origins=["http://localhost:3001"],#, "http://localhost:3001", "localhost:5000", "http://localhost:5000", "localhost"],
             allow_credentials=True,
             allow_methods=["*"],
             allow_headers=["X-Tapis-Token", "Origin", "Access-Control-Request-Methods", "*"],
