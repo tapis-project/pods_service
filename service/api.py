@@ -30,6 +30,8 @@ services based on Docker images that are exposed via HTTP or TCP endpoints liste
 **The Pods service provides functionality for two types of pod solutions:**
  * **Templated Pods** for run-as-is popular images. Neo4J is one example, the template manages TCP ports, user creation, and permissions.
  * **Custom Pods** for arbitrary docker images with less functionality. In this case we will expose port 5000 and do nothing else.
+
+ The live-docs act as the most up-to-date API reference. Visit the [documentation for more information](https://tapis.readthedocs.io/en/latest/technical/pods.html).
 """
 
 tags_metadata = [
@@ -64,10 +66,11 @@ api = FastAPI(
     title="Tapis Pods Service",
     description=description,
     openapi_tags=tags_metadata,
-    version="0.30",
+    version="1.6.0",
     contact={
         "name": "CIC Support",
         "email": "cicsupport@tacc.utexas.edu",
+        "url": "https://tapis-project.org"
     },
     license_info={
         "name": "BSD 3.0",
