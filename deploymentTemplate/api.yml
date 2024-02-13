@@ -71,6 +71,8 @@ spec:
 #DEV          mountPath: /home/tapis/tests
 #DEV        - name: dev-alembic
 #DEV          mountPath: /home/tapis/alembic
+#DEV        - name: dev-docs
+#DEV          mountPath: /home/tapis/docs
 
       volumes:
       - name: MAKEFILE_SERVICE_NAME-config
@@ -81,6 +83,8 @@ spec:
           server: MAKEFILE_STATIC_NFS_IP
           path: /
 
+#### Regarding the minkube mount thing note below:
+#### minikube mount --uid=4872 --gid=4872 --msize=2048576000 --port 22423 /home/user/pods_service:/pods_service
 #DEV      - name: dev-service
 #DEV        hostPath:
 #DEV          path: /pods_service/service #NOTE FOR MINIKUBE: Minikube is a vm, you have to minikube mount for hostpath to work
@@ -92,4 +96,8 @@ spec:
 #DEV      - name: dev-alembic
 #DEV        hostPath:
 #DEV          path: /pods_service/alembic #NOTE FOR MINIKUBE: Minikube is a vm, you have to minikube mount for hostpath to work
+#DEV          type: Directory
+#DEV      - name: dev-docs
+#DEV        hostPath:
+#DEV          path: /pods_service/docs #NOTE FOR MINIKUBE: Minikube is a vm, you have to minikube mount for hostpath to work
 #DEV          type: Directory
