@@ -33,8 +33,11 @@ COPY SQLMODEL/main.py /usr/local/lib/python3.10/site-packages/sqlmodel/main.py
 COPY alembic /home/tapis/alembic
 COPY tests /home/tapis/tests
 COPY service /home/tapis/service
+COPY docs /home/tapis/docs
 COPY configschema.json entry.sh alembic.ini /home/tapis/
 RUN chmod +x /home/tapis/entry.sh
+# Add helpful navigation through filenames at root of container
+RUN touch /pods-code-in---home-tapis
 
 # Permission finalization
 RUN chown -R tapis:tapis /home/tapis

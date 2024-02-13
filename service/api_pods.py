@@ -11,6 +11,7 @@ router = APIRouter()
 
 #### /pods
 
+@router.head("/pods")
 @router.get(
     "/pods",
     tags=["Pods"],

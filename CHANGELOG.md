@@ -1,6 +1,35 @@
 # Change Log
 All notable changes to this project will be documented in this file.
 
+## 1.6.1 - 2024-02-xx:
+
+### Breaking Changes:
+- No change.
+  
+### New features:
+- Changed CORS for tapis-ui integration.
+- Added auto saving openapi.json, removing manual step of copy/paste.
+- Updating openapi.json.
+- Added dev_tools useful links to `make vars`.
+
+### Bug fixes:
+- No change.
+
+
+## 1.6.0 - 2024-02-05
+
+### Breaking Changes:
+- No change.
+  
+### New features:
+- Added local_only protocol in pods networking.
+- GPU support within resources attr.
+
+### Bug fixes:
+- Pinned templated Postgres version.
+- Harden t init for startup.
+
+
 ## 1.5.3 - 2023-12-01
 - `1.5.1` and `1.5.2`: No Changes. Jumping to `1.5.3` to match deployer version.
 

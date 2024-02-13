@@ -201,10 +201,10 @@ def authorization(request):
     #     logger.info("Allowing request because of ADMIN_ROLE.")
     #     return True
 
-    # if request.method == 'OPTIONS':
-    #     # allow all users to make OPTIONS requests
-    #     logger.info("Allowing request because of OPTIONS method.")
-    #     return True
+    if request.method == 'OPTIONS':
+        # allow all users to make OPTIONS requests
+        logger.info("Allowing request because of OPTIONS method.")
+        return True
 
     logger.debug(f"request.url.path: {request.url.path}")
 
@@ -244,6 +244,21 @@ def check_pod_permission(pod, request):
         # Check for func = permissions
         if path_split[3] == "permissions":
             if request.method == 'GET':
+
+# GET logs requires READ
+# GET pod require READ
+
+# GET permissions requires USER
+# PUT pod require USER
+# GET creds requires USER
+
+# DELETE permissions requires ADMIN
+# POST permissions requires ADMIN
+# DELETE pod require ADMIN
+# GET restart requires ADMIN
+# GET stop requires ADMIN
+# GET start requires ADMIN
+
                 # GET permissions requires USER
                 has_pem = check_permissions(user=g.username, object=pod, object_type="pod", level=codes.USER, roles=g.roles)
             elif request.method == 'DELETE':
@@ -265,17 +280,17 @@ def check_pod_permission(pod, request):
         # Check for func = stop
         if path_split[3] == "stop":
             if request.method == 'GET':
-                # GET creds requires USER
+                # GET stop requires ADMIN
                 has_pem = check_permissions(user=g.username, object=pod, object_type="pod", level=codes.ADMIN, roles=g.roles)
         # Check for func = start
         if path_split[3] == "start":
             if request.method == 'GET':
-                # GET creds requires USER
+                # GET start requires ADMIN
                 has_pem = check_permissions(user=g.username, object=pod, object_type="pod", level=codes.ADMIN, roles=g.roles)
         # Check for func = restart
         if path_split[3] == "restart":
             if request.method == 'GET':
-                # GET creds requires USER
+                # GET restart requires ADMIN
                 has_pem = check_permissions(user=g.username, object=pod, object_type="pod", level=codes.ADMIN, roles=g.roles)
     else:
         # Now just /pods/{pod_id}
