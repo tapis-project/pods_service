@@ -556,7 +556,7 @@ def create_pvc(name):
     except Exception as e:
         msg = f"Got exception trying to start pvc with name: {name}. {e}"
         logger.info(msg)
-        raise KubernetesError(msg)
+        #raise KubernetesError(msg)
     logger.info(f"Pod pvc started successfully.")
     return k8_pvc
 
