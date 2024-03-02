@@ -404,7 +404,7 @@ def create_pod(name: str,
             effect="NoSchedule"
         )
         tolerations = [toleration]
-        dns_config = client.V1PodDNSConfig(nameservers=['8.8.8.8']
+        dns_config = client.V1PodDNSConfig(nameservers=['8.8.8.8'])
     else:
         node_selector = None
         tolerations = []
