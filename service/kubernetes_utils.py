@@ -458,7 +458,7 @@ def create_pod(name: str,
         pod_spec = client.V1PodSpec(
             init_containers=init_containers,
             containers=[container],
-            dns_config = dns_config
+            dns_config = dns_config,
             volumes=volumes,
             restart_policy="Never",
             security_context=security_context,
