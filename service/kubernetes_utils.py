@@ -390,6 +390,8 @@ def create_pod(name: str,
     # GPUs
     if gpus:
         resource_limits["nvidia.com/gpu"] = gpus
+    
+                   
     # Define resource requirements if resource limits specified
     resources = client.V1ResourceRequirements(limits = resource_limits, requests = resource_requests)
 
@@ -402,9 +404,11 @@ def create_pod(name: str,
             effect="NoSchedule"
         )
         tolerations = [toleration]
+        dns_config = client.V1PodDNSConfig(nameservers=['8.8.8.8']
     else:
         node_selector = None
         tolerations = []
+        dns_config = None
 
     ### Security Context
     security_context = None
@@ -454,6 +458,7 @@ def create_pod(name: str,
         pod_spec = client.V1PodSpec(
             init_containers=init_containers,
             containers=[container],
+            dns_config = dns_config
             volumes=volumes,
             restart_policy="Never",
             security_context=security_context,
