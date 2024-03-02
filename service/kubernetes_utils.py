@@ -399,7 +399,7 @@ def create_pod(name: str,
     if gpus:
         node_selector = {"gpu": "v100"}
         toleration = client.V1Toleration(
-            key="gpunode",
+            key="nvidia.com/gpu",
             operator="Exists",
             effect="NoSchedule"
         )
