@@ -3,7 +3,7 @@ from fastapi import APIRouter
 from models_pods import Pod, UpdatePod, PodResponse, Password, PodDeleteResponse, PodsFinalResponse, PodBaseFull
 from channels import CommandChannel
 from tapisservice.tapisfastapi.utils import g, ok, error
-from kubernetes_templates import combine_pod_and_template_recursively
+from models_templates_utils import combine_pod_and_template_recursively
 
 from tapisservice.logs import get_logger
 logger = get_logger(__name__)

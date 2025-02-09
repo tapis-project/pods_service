@@ -305,6 +305,12 @@ def test_add_template_neo4j(headers):
     result = basic_response_checks(rsp)
     assert test_template_tag_4 in result['tag_timestamp']
 
+def test_list_template_tags_later(headers):
+    rsp = client.get("/pods/templates/testtemplatecatchall/tags", headers=headers)
+    result = basic_response_checks(rsp)
+    assert len(result) == 5
+
+
 ###
 ### Create pods with templates
 ###
@@ -367,6 +373,7 @@ def test_startup_pod_from_fastapi_template(headers):
         time.sleep(2)
         i += 1
     else:
+        res = client.get(f"/pods/{test_pod_1}/logs", headers=headers)
         assert False # pod never became available
     assert result['status'] == "AVAILABLE"
     assert result['pod_id'] == test_pod_1

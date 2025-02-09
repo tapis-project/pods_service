@@ -1,0 +1,102 @@
+from codes import ERROR, SPAWNER_SETUP, CREATING, \
+    REQUESTED, DELETING
+from models_templates_tags import TemplateTag, TemplateTagPodDefinition, derive_template_info
+from kubernetes_utils import create_pod, create_service, create_pvc, KubernetesError
+from kubernetes import client, config
+
+from volume_utils import get_nfs_ip
+import re
+
+from tapisservice.tapisfastapi.utils import g
+from tapisservice.config import conf
+from tapisservice.logs import get_logger
+from tapisservice.errors import BaseTapisError
+logger = get_logger(__name__)
+
+
+def get_modified_template_fields(original_template, modified_template_def):
+    """
+    Returns a dictionary of fields that have been modified from a base template
+    Meaning, returns fields that user defined in template.
+    """
+    changed_fields = {}
+    for key, value in original_template.items():
+        if key not in modified_template_def or value != modified_template_def[key]:
+            changed_fields[key] = modified_template_def[key]
+    if changed_fields.get('resources'):
+        ### resources.gpus, resources.mem_Limit, etc exists.
+        # Only return resources in dict if subfield not null, so we delete null subfields
+        for resource_key, resource_val in changed_fields['resources'].copy().items():
+            if resource_val is None:
+                del changed_fields['resources'][resource_key]
+    return changed_fields
+
+def combine_pod_and_template_recursively(input_obj, template_name, seen_templates=None, tenant: str = None, site: str = None):
+    """
+    --- run with
+    pod = Pod.db_get_with_pk(pk_id='testingfastapi', tenant='dev', site='tacc')
+    d = combine_pod_and_template_recursively(pod, "template21:car@2024-06-11-18:09:39")
+    d.description
+    """
+    logger.debug(f"Top of combine_pod_and_template_recursively for template: {template_name}, tenant: {tenant}, site: {site}")
+    if seen_templates is None:
+        seen_templates = set()
+
+    if template_name:
+        if template_name in seen_templates:
+            raise ValueError(f"Infinite loop detected: template {template_name} is referenced more than once in template waterfal.")
+        seen_templates.add(template_name)
+
+        template_name_str, template, template_tag = derive_template_info(template_name, tenant=tenant, site=site)
+        modified_fields = get_modified_template_fields(TemplateTagPodDefinition().dict(), template_tag.pod_definition)
+
+        # First, recursively combine the input_obj with the next template in the chain
+        input_obj = combine_pod_and_template_recursively(input_obj, modified_fields.get('template'), seen_templates, tenant, site)
+
+        # Then, apply the current template to the input_obj
+        try:
+            logger.debug("Attempting to combine pod and template recursively")
+            for mod_key, mod_val in modified_fields.items():
+                logger.debug(f"mod_key: {mod_key}; mod_val: {mod_val}")
+                if mod_key.startswith("resources."):
+                    logger.critical('hey')
+                    outer_arg, inner_arg = resources.split('.') # resources.gpus
+                    outer_obj = getattr(input_obj, outer_arg) # resources
+                    logger.critical('oh no!')
+                    new_obj_value = template_tag.pod_definition[outer_arg][inner_arg]
+                    setattr(outer_obj, inner_arg, new_obj_value)
+                elif mod_key == "networking":
+                    # must take template3, update with template2, template,1 and then pod, in that order
+                    # Preserving order of objs, pod being the most important.
+                    final_network_obj = getattr(input_obj, mod_key)
+                    for network_name, network_def in template_tag.pod_definition[mod_key].items():                    
+                        final_network_obj.update({network_name: network_def})
+                    setattr(input_obj, mod_key, final_network_obj)
+                elif mod_key.startswith("volume_mount."):
+                    print('dog')
+                elif mod_key.startswith("template"):
+                    pass ## Don't need this one
+                elif mod_key in input_obj.modified_fields:
+                    pass ## Don't modify user-modified fields, sans the above as they're dict updates and not overwrites
+                else:
+                    setattr(input_obj, mod_key, mod_val)
+
+            logger.debug(f"End of combine_pod_and_template_recursively for template: {template_name}, tenant: {tenant}, site: {site}")
+            try:
+                if input_obj.resources and not type(input_obj.resources) == dict:
+                    input_obj.resources = input_obj.resources.dict()
+            except Exception as e:
+                logger.debug(f'this resources part: Got exception when attempting to combine pod and templates: {e}')
+                pass
+
+            try:
+                if input_obj.networking and not type(input_obj.networking) == dict:
+                    input_obj.networking = input_obj.networking.dict()
+            except Exception as e:
+                logger.debug(f'this networking part: Got exception when attempting to combine pod and templates: {e}')
+                pass
+
+        except Exception as e:
+            logger.debug(f'Got exception when attempting to combine pod and templates: {e}')
+
+    return input_obj

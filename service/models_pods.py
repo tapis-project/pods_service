@@ -464,9 +464,11 @@ class Pod(TapisPodBaseFull, table=True, validate=True):
         tenant_id = values.get('tenant_id')
         site_id = values.get('site_id')
 
-        logger.debug(f"top of PodBaseFull.check_image() with image: {image}, template: {template}, tenant_id: {tenant_id}, site_id: {site_id}")
-        ## Wait to make sure enough validation has happened for both to be initially set.
-        if image is not "" and template is not "" and tenant_id is not None and tenant_id is not "" and site_id is not None and site_id is not "":
+        logger.info(f"top of PodBaseFull.check_image() with image: {image}, template: {template}, tenant_id: {tenant_id}, site_id: {site_id}")
+        logger.debug(f"image type: {type(image).__name__}, template type: {type(template).__name__}, tenant_id type: {type(tenant_id).__name__}, site_id type: {type(site_id).__name__}")
+        # pydantic sets None if not validated, and "" for validated strings; we wait until values are not None.
+        if image is not None and template is not None and tenant_id is not "" and tenant_id is not None and site_id is not None and site_id is not "":        
+            logger.debug("got into image and template check.")
             if image:
                 # priority to template.image, so if it's set, it's top
                 pass
@@ -511,6 +513,7 @@ class Pod(TapisPodBaseFull, table=True, validate=True):
             # Then we add images from the conf.image_allow_list
             custom_allow_list += conf.image_allow_list or []
 
+            logger.debug(f"Bottom of check_image(). image: {image}, custom_allow_list: {custom_allow_list}")
             if image not in custom_allow_list:
                 raise ValueError(f"Custom pod.image images must be in allowlist. Check /pods/images or speak to admin. Image derived: {image}")
 
@@ -620,6 +623,26 @@ class Pod(TapisPodBaseFull, table=True, validate=True):
         display.pop('action_logs')
         #display['action_logs'] = display['action_logs'][-10:]
         return display
+
+    def get_pod_definition_for_template_tag(self):
+        template_tag_bit = self.dict()
+        template_tag_bit.pop('pod_id')
+        template_tag_bit.pop('tenant_id')
+        template_tag_bit.pop('site_id')
+        template_tag_bit.pop('k8_name')
+        template_tag_bit.pop('logs')
+        template_tag_bit.pop('permissions')
+        template_tag_bit.pop('action_logs')
+        template_tag_bit.pop('status_requested')
+        template_tag_bit.pop('status_container')
+        template_tag_bit.pop('status')
+        template_tag_bit.pop('update_ts')
+        template_tag_bit.pop('time_to_stop_ts')
+        template_tag_bit.pop('start_instance_ts')
+        template_tag_bit.pop('creation_ts')
+        modified_fields = template_tag_bit.pop('modified_fields')
+
+        return template_tag_bit, modified_fields
 
     @classmethod
     def db_get_all_with_permission(cls, user, level, tenant, site):

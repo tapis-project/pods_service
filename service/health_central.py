@@ -21,7 +21,7 @@ from kubernetes_utils import get_current_k8_services, get_current_k8_pods, rm_co
 from codes import AVAILABLE, DELETING, STOPPED, ERROR, REQUESTED, COMPLETE, RESTART, ON, OFF
 from stores import pg_store, SITE_TENANT_DICT
 from models_pods import Pod
-from models_templates_tags import combine_pod_and_template_recursively
+from models_templates_utils import combine_pod_and_template_recursively
 from models_volumes import Volume
 from models_snapshots import Snapshot
 from volume_utils import files_listfiles, files_delete, files_mkdir

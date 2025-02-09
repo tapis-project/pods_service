@@ -51,7 +51,7 @@ async def add_template_tag(template_id: str, new_template_tag: NewTemplateTag):
     template_tag.db_create(tenant=g.request_tenant_id, site=g.site_id)
     logger.debug(f"New template_tag saved in db. template_id: {template_tag.template_id}; tenant: {g.request_tenant_id}.")
 
-    return ok(result=template_tag.display(), msg="Template added successfully.")
+    return ok(result=template_tag.display(), msg="Template tag added successfully.")
 
 
 @router.get(

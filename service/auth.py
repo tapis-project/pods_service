@@ -176,6 +176,7 @@ def check_route_permissions(request):
         ["/pods/{pod_id}/permissions", "POST", codes.ADMIN],
         ["/pods/{pod_id}/logs", "GET", codes.READ],
         ["/pods/{pod_id}/credentials", "GET", codes.USER],
+        ["/pods/{pod_id}/save_pod_as_template_tag", "POST", codes.ADMIN],
         ["/pods/{pod_id}/stop", "GET", codes.ADMIN],
         ["/pods/{pod_id}/start", "GET", codes.ADMIN],
         ["/pods/{pod_id}/restart", "GET", codes.ADMIN],
