@@ -201,7 +201,7 @@ def get_k8_logs(name: str):
     except Exception as e:
         return ""
 
-def run_k8_exec(k8_name: str, command: list, namespace: str = ""):
+def run_k8_exec(k8_name: str, command: list, namespace: str = "", timeout: int = 60):
     # This starts a Kubernetes exec in the background. We can poll progress/status
     # if the exec is still running with resp.is_open().
     ### EXAMPLE
@@ -216,23 +216,32 @@ def run_k8_exec(k8_name: str, command: list, namespace: str = ""):
         stdout=True, tty=False,
         _preload_content=False)
     
-    # Alternative. Checks on stderr and stdout while exec is still running. 
-    # while resp.is_open()
-    #     resp.update(timeout=1)
-    #     if resp.peek_stdout():
-    #         print(f"{resp.read_stdout()}")
-    #     if resp.peek_stderr():
-    #         print(f"STDERR: \n\n{resp.read_stderr()}\n")
-
     # Waits till exec is complete and then grab results
-    while resp.is_open():
+    start_time = time.time()
+    status = ""
+    success = True
+
+    while resp.is_open() and time.time() - start_time <= timeout:
         resp.update(timeout=1)
 
-    # get stdout and stderr
+    if resp.is_open():
+        resp.close()
+        status = f"Timeout after {timeout} seconds."
+        success = False
+
+    duration = time.time() - start_time
+    
     stdout = resp.read_stdout()
     stderr = resp.read_stderr()
-    
-    return stdout, stderr
+    try:
+        return_code = resp.returncode
+    except Exception as e:
+        return_code = 39 # arbitrary error code
+
+    if return_code != 0:
+        success = False
+
+    return stdout, stderr, duration, status, success
 
 def container_running(name: str):
     """
@@ -441,6 +450,7 @@ def create_pod(name: str,
                ports_dict: Dict = {},
                environment: Dict = {},
                mounts: List = [],
+               #probes: List = {},
                mem_request: str | None = None,
                cpu_request: str | None = None,
                mem_limit: str | None = None,

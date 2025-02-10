@@ -1,16 +1,21 @@
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, RedirectResponse
-from models_pods import Pod, Password, PodResponse, PodPermissionsResponse, PodCredentialsResponse, PodLogsResponse, ExecutePodCommand
+from models_pods import Pod, Password, PodResponse, PodPermissionsResponse, PodCredentialsResponse, PodLogsResponse, ExecutePodCommands
+from models_templates_tags import Template, TemplateTag, TemplateTagResponse, NewTemplateTagFromPod
+from models_templates_utils import combine_pod_and_template_recursively
 from models_misc import SetPermission
 from channels import CommandChannel
-from codes import OFF, ON, RESTART, REQUESTED, STOPPED
+from codes import OFF, ON, RESTART, REQUESTED, STOPPED, USER
 import requests
 from tapisservice.tapisfastapi.utils import g, ok
 from tapisservice.config import conf
 from __init__ import t, BadRequestError
-from models_templates_tags import combine_pod_and_template_recursively
 from typing import List, Any
 from kubernetes_utils import run_k8_exec
+from utils import check_permissions
+from errors import ResourceError, PermissionsException
+from datetime import datetime
+import time
 
 from tapisservice.logs import get_logger
 logger = get_logger(__name__)
@@ -136,41 +141,86 @@ async def set_pod_permission(pod_id, set_permission: SetPermission):
 @router.post(
     "/pods/{pod_id}/exec",
     tags=["Executions"],
-    summary="exec_pod_command",
-    operation_id="exec_pod_command",
-)#response_model=Any)
-async def exec_pod_command(pod_id, command: ExecutePodCommand):
+    summary="exec_pod_commands",
+    operation_id="exec_pod_commands")
+async def exec_pod_commands(pod_id, command: ExecutePodCommands):
     """
-    Execute a command in a pod.
+    Execute one or more commands in a pod.
+    
+    Accepts either:
+    - Single command: ["sleep", "5"]
+    - Multiple commands: [["sleep", "5"], ["echo", "hello"]]
+    
+    Executes commands synchronously in the pod:
+    - Each command runs sequentially
+    - Total request time = sum of all command execution times
+    - Request remains open until all commands complete
+    - Returns consolidated results for all commands
 
-    Returns the command output.
+    Response includes:
+    - Individual command outputs
+    - Success/failure status
+    - Execution duration
     """
-
-    # TODO .display(), search, permissions
     logger.info(f"POST /pods/{pod_id}/exec - Top of exec_pod_command.")
     pod = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
 
-    try:
-        logger.error(f"Running command in pod {pod_id}: {command.command}")
-        stdout, stderr = run_k8_exec(pod.k8_name, command.command)
-        success = True
-    except Exception as e:
-        logger.error(f"Error executing command in pod {pod_id}: {e}")
-        stdout, stderr = "", str(e)
-        success = False
+    metadata = {}
+    # Normalize input to list of commands
+    commands = command.commands if isinstance(command.commands[0], list) else [command.commands]
+    results = []
+    start_time = time.time()
+    fail_on_non_success = command.fail_on_non_success
+    custom_msg = None
 
-    logs = {
-        "stdout": stdout,
-        "stderr": stderr,
-        "success": success
-    }
+    for n, cmd in enumerate(commands):
+        try:
+            logger.debug(f"Running command ({n+1}/{len(commands)}) in pod {pod_id}: {cmd}")
+            cmd_start_time = time.time()
+            stdout, stderr, duration, status, success = run_k8_exec(pod.k8_name, cmd, timeout=command.command_timeout)
+            
+            results.append({
+                "command": cmd,
+                "stdout": stdout,
+                "stderr": stderr,
+                "success": success if success else (status if status else False),
+                "duration_sec": round(duration, 3),
+                "timestamp": datetime.utcnow().isoformat()
+            })
+        except Exception as e:
+            logger.error(f"Error executing command {cmd} in pod {pod_id}: {e}")
+            results.append({
+                "command": cmd,
+                "stdout": "",
+                "stderr": str(e),
+                "success": False,
+                "duration_sec": 0,
+                "timestamp": datetime.utcnow().isoformat()
+            })
 
-    #pod.logs.append(f"exec_pod_command ran by {g.username}: {command} \n stdout: {stdout}")
-    pod.db_update(f"'{g.username}' ran exec_pod_command with command: {command} \n stdout: {stdout}")
+        # Check total timeout
+        if time.time() - start_time > command.total_timeout:
+            custom_msg = f"Execution stopped due to total timeout. Consider increasing the total_timeout parameter."
 
+        if not type(results[-1]["success"]) == bool and "Timeout" in results[-1]["success"]:
+            custom_msg = f"Execution stopped due to command timeout on latest command. Consider increasing the command_timeout parameter."
+        elif fail_on_non_success and not results[-1]["success"]:
+            custom_msg = f"Execution stopped due to command failure on latest command. Consider setting fail_on_non_success=False to continue through errors."
 
-    return ok(result={"logs": logs}, msg="Pod execution ran successfully." if success else "Pod execution failed.")
+    # Update pod history with summary
+    summary = f"'{g.username}' executed {len(commands)} commands."
+    if custom_msg:
+        summary += f" ({custom_msg.split(' Consider')[0]})"
+    pod.db_update(summary)
 
+    return ok(
+        result={
+            "execution_results": results,
+            "total_commands": len(commands),
+            "successful_commands": sum(1 for r in results if r["success"]),
+        },
+        msg=custom_msg or "All commands completed."
+    )
 
 @router.delete(
     "/pods/{pod_id}/permissions/{user}",
@@ -330,6 +380,50 @@ def get_username(tapis_domain, token):
         raise Exception(f"Error looking up token info; debug: {e}")
     return username
 
+
+@router.post(
+    "/pods/{pod_id_net}/save_pod_as_template_tag",
+    tags=["Pods"],
+    summary="Endpoint to create a template tag from the definition of a pod.",
+    operation_id="save_pod_as_template_tag",
+    response_model=TemplateTagResponse)
+async def save_pod_as_template_tag(pod_id_net, new_template_tag_from_pod: NewTemplateTagFromPod):
+    """
+    Endpoint takes pod_id and derives a pod_definition to create a template tag from it.
+    Allows users to save the configuration of a particular pod as a template tag.
+
+    POST data contains location to save the tag and tag creation data
+
+    Return the template tag object.
+    """
+    logger.info(f"POST /pods/{pod_id_net}/save_pod_as_template_tag - Top of save_pod_as_template_tag.")
+    
+    pod = Pod.db_get_with_pk(pod_id_net, tenant=g.request_tenant_id, site=g.site_id)
+
+    # Auth already checks permissions for pod_id. We must also check permissions for template.
+    template = Template.db_get_with_pk(new_template_tag_from_pod.template_id, tenant=g.request_tenant_id, site=g.site_id)
+    if not template:
+        raise PermissionsException(f"Template with id '{new_template_tag_from_pod.template_id}' not found. Please ensure template exists.")
+
+    # Check permissions for user to create a template tag under the template
+    has_pem = check_permissions(user=g.username, object=template, object_type="template", level=USER , roles=g.roles)
+    if not has_pem:
+        logger.info("NOT allowing request.")
+        raise PermissionsException(f"Not authorized -- you do not have permission to create a template tag under the template_id: {new_template_tag_from_pod.template_id}")
+    current_pod_def, modified_fields = pod.get_pod_definition_for_template_tag()
+    logger.debug(f"Current pod definition: {current_pod_def}, modified_fields: {modified_fields}")
+
+    # Create a dict of only modified fields
+    modified_pod_def = {field: current_pod_def[field] for field in modified_fields if field not in ["pod_id"]}
+    logger.debug(f"Modified pod definition: {modified_pod_def}")
+
+    template_tag = TemplateTag(**new_template_tag_from_pod.dict(), pod_definition=modified_pod_def)
+
+    # Create template database entry
+    template_tag.db_create(tenant=g.request_tenant_id, site=g.site_id)
+    logger.debug(f"New template_tag saved in db. template_id: {template_tag.template_id}; tenant: {g.request_tenant_id}.")
+
+    return ok(result=template_tag.display(), msg="Template tag added successfully.")
 
 
 @router.get(

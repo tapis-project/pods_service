@@ -5,7 +5,7 @@ from sre_constants import ANY
 from string import ascii_letters, digits
 from secrets import choice
 from datetime import datetime
-from typing import List, Dict, Literal, Any, Set, Optional
+from typing import List, Dict, Literal, Any, Set, Optional, Union
 from wsgiref import validate
 from pydantic import BaseModel, Field, validator, root_validator, create_model
 from codes import PERMISSION_LEVELS, PermissionLevel
@@ -238,6 +238,28 @@ class Resources(TapisModel):
 
 
 class VolumeMount(TapisModel):
+    type: str =  Field("", description = "Type of volume to attach.")
+    mount_path: str = Field("/tapis_volume_mount", description = "Path to mount volume to.")
+    sub_path: str = Field("", description = "Path to mount volume to.")
+
+    @validator('type')
+    def check_type(cls, v):
+        v = v.lower()
+        valid_types = ['tapisvolume', 'tapissnapshot', 'pvc']
+        if v not in valid_types:
+            raise ValueError(f"volumemount.type must be one of the following: {valid_types}.")
+        return v
+
+    @validator('mount_path')
+    def check_mount_path(cls, v):
+        return v
+
+    @validator('sub_path')
+    def check_sub_path(cls, v):
+        return v
+
+
+class Probes(TapisModel):
     type: str =  Field("", description = "Type of volume to attach.")
     mount_path: str = Field("/tapis_volume_mount", description = "Path to mount volume to.")
     sub_path: str = Field("", description = "Path to mount volume to.")
@@ -694,14 +716,14 @@ class UpdatePod(TapisApiModel):
     networking: Optional[Dict[str, Networking]] = Field({"default": {"protocol": "http", "port": 5000}}, description = 'Networking information. {"url_suffix": {"protocol": "http"  "tcp", "port": int}}', sa_column=Column(JSON))
     resources: Optional[Resources] = Field({}, description = 'Pod resource management {"cpu_limit": 3000, "mem_limit": 3000, "cpu_request": 500, "mem_limit": 500, "gpu": 0}', sa_column=Column(JSON))
 
-
-class ExecutePodCommand(TapisApiModel):
-    """
-    Object with fields that users are allowed to specify for the Volume class.
-    """
-    # Required
-    command: List[str] = Field(..., description = "Comma delimited list of commands to run in pod. ex. `['sleep', '5000']` or `['/bin/bash', '-c', '(exec myscript.sh)']`")
     
+class ExecutePodCommands(BaseModel):
+    commands: Union[List[str], List[List[str]]] = Field(..., description = "List of commands to run in pod. ex. `['sleep 5000', 'ls -l']` or `[['sleep', '5000'], ['ls', '-l']]")
+    total_timeout: Optional[int] = Field(300, description = "Total time (sec) to wait for all commands to finish. Default 300 seconds.")
+    command_timeout: Optional[int] = Field(60, description = "Time (sec) to wait for each command to finish. Default 60 seconds.")
+    fail_on_non_success: Optional[bool] = Field(True, description = "If True, will fail if any command does not return 0. Default True.")
+
+
 class PodResponseModel(PodBaseRead):
     """
     Response object for Pod class.
