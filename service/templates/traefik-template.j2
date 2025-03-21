@@ -24,14 +24,20 @@ http:
       forwardAuth:
         address: {{ pdata.auth_url }}
         {% if pdata.tapis_auth_response_headers -%}
-        authResponseHeaders:
+        authResponseHeaders: # headers from auth check
           {% for header in pdata.tapis_auth_response_headers -%}
           - "{{ header }}"
           {% endfor %}
         {% endif -%}
-#        addAuthCookiesToResponse:
-#          - "X-TapisUsername"
-#          - "X-Tapis-Token"
+        #addAuthCookiesToResponse: # headers from initial request
+    {% endif -%}
+    {% endfor %}
+
+    {% for pname, pdata in http_proxy_info.items() -%}
+    {% if pdata.tapis_auth and pdata.ip_source_range -%}
+    tapis-auth-{{ pname }}-ipallowlist:
+      ipAllowList:
+        sourceRange: {{ pdata.ip_source_range }}
     {% endif -%}
     {% endfor %}
 
@@ -62,6 +68,12 @@ http:
         certResolver: tlsletsencrypt
     {% endfor %}
 
+    catch-all-error-handler:
+      rule: "PathPrefix(`/*`)"
+      middlewares:
+       - "error-handler"
+      service: pods-service
+
   services:
     pods-service:
       loadBalancer:
@@ -81,11 +93,25 @@ tcpServersTransport:
 
 {% if tcp_proxy_info or postgres_proxy_info -%}
 tcp:
+  middlewares:
+    {% for pname, pdata in tcp_proxy_info.items() -%}
+    {% if pdata.tapis_auth and pdata.ip_source_range -%}
+    tapis-auth-{{ pname }}-ipallowlist:
+      ipAllowList:
+        sourceRange: {{ pdata.ip_source_range }}
+    {% endif -%}
+    {% endfor %}
+
+
   routers:{% endif %}
     {% for pname, pdata in tcp_proxy_info.items() -%}
     {{ pname }}:
       entryPoints:
        - web
+      {% if pdata.tapis_auth and pdata.ip_source_range -%}
+      middlewares:
+       - "tapis-auth-{{ pname }}-ipallowlist"
+      {% endif -%}
       rule: "HostSNI(`{{ pdata.url }}`)"
       service: "{{ pname }}"
       tls:

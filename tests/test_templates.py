@@ -26,11 +26,13 @@ test_template_tag_1 = "fastapi" # the rest will have a template for the specifie
 test_template_tag_2 = "postgres"
 test_template_tag_3 = "recursive"
 test_template_tag_4 = "neo4j"
+test_template_tag_5 = "fastapi.withperiod"
 
 test_pod_1 = "testtemplatefastapi"
 test_pod_2 = "testtemplatepostgres"
 test_pod_3 = "testtemplaterecursive"
 test_pod_4 = "testtemplateneo4j"
+test_pod_5 = "testtemplateneo4jafterperiod"
 
 ##### Teardown
 @pytest.fixture(scope="module", autouse=True)
@@ -43,7 +45,7 @@ def teardown(headers):
     yield None
 
     # Delete all objects after the tests are done.
-    pods = [test_pod_1, test_pod_2, test_pod_3, test_pod_4]
+    pods = [test_pod_1, test_pod_2, test_pod_3, test_pod_4, test_pod_5]
     templates = [test_template_1]
     for pod_id in pods:
         rsp = client.delete(f'/pods/{pod_id}', headers=headers)
@@ -311,6 +313,28 @@ def test_list_template_tags_later(headers):
     assert len(result) == 5
 
 
+def test_add_template_fastapi_withperiods(headers):
+    # this is the second template tag on the same template
+    tag_def = {
+        "pod_definition": {
+            "image": "tiangolo/uvicorn-gunicorn-fastapi"
+        },
+        "tag": test_template_tag_5,
+        "commit_message": "fastapi test server which returns a fastapi startup message"
+    }
+    # Add tag to template
+    rsp = client.post(f"/pods/templates/{test_template_1}/tags", data=json.dumps(tag_def), headers=headers)
+    result = basic_response_checks(rsp)
+    assert test_template_tag_5 in result['tag_timestamp']
+
+
+def test_list_template_tags_with_period(headers):
+    rsp = client.get(f"/pods/templates/{test_template_1}/tags", headers=headers)
+    result = basic_response_checks(rsp)
+    assert len(result) == 6
+    for tag in result:
+        assert tag['tag'] in [test_template_tag_0, test_template_tag_1, test_template_tag_2, test_template_tag_3, test_template_tag_4, test_template_tag_5]
+
 ###
 ### Create pods with templates
 ###
@@ -359,6 +383,15 @@ def test_create_pod_from_neo4j_template(headers):
     assert result['pod_id'] == test_pod_4
     assert test_template_1 in result['template']
 
+def test_create_pod_from_neo4j_afterperiod_template(headers):
+    pod_def = {
+        "pod_id": test_pod_5,
+        "template": f"{test_template_1}:{test_template_tag_5}",
+    }
+    rsp = client.post("/pods", data=json.dumps(pod_def), headers=headers)
+    result = basic_response_checks(rsp)
+    assert result['pod_id'] == test_pod_5
+    assert test_template_1 in result['template']
 ###
 ### Check status of pods starting with templates
 ###
@@ -430,6 +463,22 @@ def test_startup_pod_from_neo4j_template_startup(headers):
     assert test_template_1 in result['template']
 
 
+def test_startup_pod_from_neo4j_afterperiod_template_startup(headers):
+    i = 0
+    while i < 10:
+        rsp = client.get(f"/pods/{test_pod_5}", headers=headers)
+        result = basic_response_checks(rsp)
+        if result['status'] == "AVAILABLE":
+            break
+        time.sleep(2)
+        i += 1
+    else:
+        assert False
+    assert result['status'] == "AVAILABLE"
+    assert result['pod_id'] == test_pod_5
+    assert test_template_1 in result['template']
+
+
 ##### Error testing
 ## Need to test with template with volume
 ## Need to check template deletion after we ensure tags deleted are not in use
@@ -462,6 +511,10 @@ def test_description_is_ascii_400(headers):
     assert rsp.status_code == 400
     assert any('description field may only contain ASCII characters' in msg for msg in data['message'])
 
+def test_stop_for_debug():
+    if True:
+        time.sleep(150)
+    
 def test_delete_template(headers):
     # Delete template
     rsp = client.delete(f"/pods/templates/{test_template_1}", headers=headers)

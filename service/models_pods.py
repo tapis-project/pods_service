@@ -31,7 +31,7 @@ from models_volumes import Volume
 from models_snapshots import Snapshot
 
 def get_queue_by_name(compute_queues, queue_name):
-    logger.debug("top of models_pods.deduct_queue_settings().")
+    logger.debug("top of models_pods.get_queue_by_name().")
 
     for queue in compute_queues:
         if queue['queue_name'] == queue_name:
@@ -475,7 +475,7 @@ class Pod(TapisPodBaseFull, table=True, validate=True):
 
         if template is not "" and tenant_id is not None and tenant_id is not "" and site_id is not None and site_id is not "":
             logger.debug(f"top of PodBaseFull.check_template() with template: {template}, tenant_id: {tenant_id}, site_id: {site_id}")
-            template_name_str, template, template_tag = derive_template_info(template, tenant_id, site_id)
+            template_name_str, template, template_tag = derive_template_info(template, tenant=tenant_id, site=site_id)
             values['template'] = template_name_str
         return values
 

@@ -333,24 +333,32 @@ async def start_pod(pod_id):
     summary="restart_pod",
     operation_id="restart_pod",
     response_model=PodResponse)
-async def restart_pod(pod_id):
+async def restart_pod(pod_id, grab_latest_template_tag: bool = False):
     """
     Restart a pod.
 
     Note:
     - Sets status_requested to RESTART. If pod status gets to STOPPED, status_requested will be flipped to ON. Health should then create new pod.
+    - If grab_latest_template_tag is True, attempts to grab the latest version of the template tag if the pod has a template.
 
     Returns updated pod object.
     """
     logger.info(f"GET /pods/{pod_id}/restart - Top of restart_pod.")
 
     pod = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
-    pod.status_requested = RESTART
 
+    if grab_latest_template_tag:
+        if pod.template:
+            logger.info(f"Attempting to grab the latest version of the template tag for pod {pod_id}.")
+            # get rid of timestamp so code can grab latest with current tag.
+            pod.template = pod.template.split("@")[0]
+        else:
+            logger.info(f"Pod {pod_id} does not have a template. No action taken.")
+
+    pod.status_requested = RESTART
     pod.db_update(f"'{g.username}' ran restart_pod, set to RESTART")
                   
-    return ok(result=pod.display(), msg = "Updated pod's status_requested to RESTART.")
-
+    return ok(result=pod.display(), msg="Updated pod's status_requested to RESTART.")
 
 def is_logged_in(cookies):
     """

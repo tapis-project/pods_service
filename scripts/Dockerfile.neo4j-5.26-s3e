@@ -1,0 +1,10 @@
+## Neo4j typically has users add plugins via environment variables unfortunately
+## once the Neo4j version is too far out of date, that mechanism breaks.
+## So I create a neo4j image with plugins pre-installed so we don't break due to upstream.
+FROM neo4j:5.26-enterprise
+# Download neosemantics plugin jar
+RUN wget -P $PWD/plugins https://github.com/neo4j-labs/neosemantics/releases/download/5.20.0/neosemantics-5.20.0.jar
+# Download apoc plugin jar
+RUN wget -P $PWD/plugins https://github.com/neo4j-contrib/neo4j-apoc-procedures/releases/download/5.23.0/apoc-5.23.0-extended.jar
+
+RUN apt-get update && apt-get install -y s3cmd

@@ -11,6 +11,7 @@ from tapisservice.tapisfastapi.utils import g
 from tapisservice.config import conf
 from tapisservice.logs import get_logger
 from tapisservice.errors import BaseTapisError
+from __init__ import t
 logger = get_logger(__name__)
 
 
@@ -44,7 +45,7 @@ def combine_pod_and_template_recursively(input_obj, template_name, seen_template
 
     if template_name:
         if template_name in seen_templates:
-            raise ValueError(f"Infinite loop detected: template {template_name} is referenced more than once in template waterfal.")
+            raise ValueError(f"Infinite loop detected: template {template_name} is referenced more than once in template waterfall.")
         seen_templates.add(template_name)
 
         template_name_str, template, template_tag = derive_template_info(template_name, tenant=tenant, site=site)
@@ -55,7 +56,7 @@ def combine_pod_and_template_recursively(input_obj, template_name, seen_template
 
         # Then, apply the current template to the input_obj
         try:
-            logger.debug("Attempting to combine pod and template recursively")
+            logger.debug("Attempting to combine pod and template recursively22")
             for mod_key, mod_val in modified_fields.items():
                 logger.debug(f"mod_key: {mod_key}; mod_val: {mod_val}")
                 if mod_key.startswith("resources."):
@@ -69,9 +70,35 @@ def combine_pod_and_template_recursively(input_obj, template_name, seen_template
                     # must take template3, update with template2, template,1 and then pod, in that order
                     # Preserving order of objs, pod being the most important.
                     final_network_obj = getattr(input_obj, mod_key)
-                    for network_name, network_def in template_tag.pod_definition[mod_key].items():                    
-                        final_network_obj.update({network_name: network_def})
+                    for network_name, network_def in template_tag.pod_definition[mod_key].items():
+                        # after that we need to derive the correct networking object.url
+                        # Get tenant_id from input_obj or use default from context
+                        tenant_id = getattr(input_obj, 'tenant_id')
+                        # Fetch base_url from tenant_cache
+                        logger.debug(f"Fetching base_url for pod {input_obj.pod_id} network {network_name}")
+                        base_url = t.tenant_cache.get_tenant_config(tenant_id=tenant_id).base_url
+                        # Generate URL based on network name
+                        if network_name == 'default':
+                            url = base_url.replace("https://", f"{input_obj.pod_id}.pods.")
+                        else:
+                            url = base_url.replace("https://", f"{input_obj.pod_id}-{network_name}.pods.")
+                        # Set the URL in network definition
+                        network_def['url'] = url
+                        final_network_obj.update({network_name: network_def})                        
                     setattr(input_obj, mod_key, final_network_obj)
+                elif mod_key == "environment_variables":
+                    logger.debug(f"environment_variables----")
+                    # Self-documenting method of either overwriting alls envs or appending to them
+                    if input_obj.environment_variables.get("_TAPIS_INTERNAL_USE_TEMPLATE_VARS", True):
+                        # inputobj and templateobj envs are dicts. If using template vars we use those as base and write input over
+                        input_envs = input_obj.environment_variables
+                        final_envs = template_tag.pod_definition[mod_key]
+                        final_envs.update(input_envs)
+                        setattr(input_obj, mod_key, final_envs)
+                        logger.debug(f"_TAPIS_INTERNAL_USE_TEMPLATE_VARS is True - input_obj.environment_variables: {input_obj.environment_variables}")
+                    else:
+                        # We're not using templateobj envs, so we only use inputobj envs
+                        logger.debug(f"_TAPIS_INTERNAL_USE_TEMPLATE_VARS is False - input_obj.environment_variables: {input_obj.environment_variables}")
                 elif mod_key.startswith("volume_mount."):
                     print('dog')
                 elif mod_key.startswith("template"):

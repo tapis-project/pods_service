@@ -203,7 +203,10 @@ def set_traefik_proxy():
     postgres_proxy_info = {}
     for input_pod in all_pods:
 #        logger.critical(f"TRAINING22-input_pod.tenant_id: {input_pod.tenant_id}, input_pod.site_id: {input_pod.site_id}")
-        pod = combine_pod_and_template_recursively(input_pod, input_pod.template, tenant=input_pod.tenant_id, site=input_pod.site_id)
+        try: 
+            pod = combine_pod_and_template_recursively(input_pod, input_pod.template, tenant=input_pod.tenant_id, site=input_pod.site_id)
+        except Exception as e:
+            logger.critical(f"Error combining pod and template. Skipping. e: {e}")
 #        logger.critical(f"TRAINING22-pod: HERE?")
         #logger.critical(f"TRAINNNED-pod: {pod}")
         # Each pod can have up to 3 networking objects with custom filled port/protocol/name

@@ -1,13 +1,14 @@
 # Tapis
-tapipy>=1.6.4a3
-tapisservice>=1.6.1a1
-# jsonschema==4.17.3 # Errors after this version with error below.
+tapipy>=1.8.1
+tapisservice>=1.7.0
+jsonschema==4.17.3 # Errors after this version with error below.
 # # Error reading local "notifications" resource. Ensure path is absolute /usr/local/lib/python3.10/site-packages/tapipy/resources/openapi_v3-notifications.yml. e:cannot import name '_legacy_validators' from 'jsonschema' (/usr/local/lib/python3.10/site-packages/jsonschema/__init__.py)
-# openapi_spec_validator==0.5.4
+openapi_spec_validator==0.5.4
 
 # Service API
 pydantic==1.10.13
-fastapi==0.103.2
+fastapi==0.115.8
+#fastapi==0.103.2
 python-multipart
 sqlmodel==0.0.8
 uvicorn
@@ -26,8 +27,9 @@ python-multipart
 pylint
 
 # Dev
-jupyterlab
+jupyterlab==4.1
 
 # Tests
 pytest
 httpx # Required for testing, imported by: from fastapi.testclient import TestClient
+paramiko
