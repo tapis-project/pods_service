@@ -29,7 +29,7 @@ from models_images import Image
 from typing import Optional
 
 
-def derive_template_info(input_template_name, tenant: str = g.request_tenant_id, site: str = g.site_id):
+def derive_template_info(input_template_name, update_template_tag: bool = False, tenant: str = g.request_tenant_id, site: str = g.site_id):
     # template is in the format template_id:template_tag@2024-06-10-17:20:27
     # template_id is required, template_tag and timestamp are optional
     # If no template_tag, default to latest
@@ -51,11 +51,11 @@ def derive_template_info(input_template_name, tenant: str = g.request_tenant_id,
     else:
         template_id = input_template_name
 
-    logger.debug(f"Top of derive_template_info for template: {input_template_name}, tenant: {tenant}, site: {site}")
+    logger.debug(f"Top of derive_template_info for input template: {input_template_name}, template_id: {template_id}, template_tag: {template_tag}, tenant: {tenant}, site: {site}")
     ## template_id check
     template = Template.db_get_with_pk(template_id, tenant=tenant, site=site)
     if not template:
-        raise ValueError(f"Error finding template. Could not find template with template_id: {template_id}.")
+        raise ValueError(f"Error finding template. Could not find template with template_id: {template_id}")
     if not template_tag:
         # If no template_tag, we'll use the latest tag.
         template_tag = "latest"
@@ -268,7 +268,7 @@ class TemplateTagPodDefinition(TapisModel):
     @validator('template')
     def check_template(cls, v):
         if v:
-            template_name_str, template, template_tag = derive_template_info(v, g.tenant_id, g.site_id)
+            template_name_str, template, template_tag = derive_template_info(v, tenant=g.tenant_id, site=g.site_id)
             return template_name_str
         else:
             return v
@@ -410,12 +410,6 @@ class TemplateTagPodDefinition(TapisModel):
             res = re.fullmatch(r'[a-z0-9]+', v)
             if not res:
                 raise ValueError(f"compute_queue must be lowercase alphanumeric.")
-
-            #### Not needed for template tag, only for pod creation
-            ### Check if the queue exists in config, database later
-            # deducted_queue = get_queue_by_name(conf.compute_queues, v)
-            # if not deducted_queue:
-            #     raise ValueError(f"compute_queue must be in compute_queues list in cluster configuration.")
         return v
 
 
@@ -458,7 +452,7 @@ class TemplateTag(TapisModel, table=True, validate=True):
     def check_tag(cls, v):
         # ensure description is lowercase alphanumeric and hyphen
         if not re.match("^[a-zA-Z0-9-.]+$", v):
-            raise ValueError(f"tag field may only contain lowercase alphanumeric characters and hyphens.")
+            raise ValueError(f"tag field may only contain lowercase alphanumeric characters, hyphens, and periods.")
         # make sure description < 80 characters
         if len(v) > 80:
             raise ValueError(f"tag field must be less than 80 characters. Inputted length: {len(v)}")
