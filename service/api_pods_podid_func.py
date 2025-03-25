@@ -485,16 +485,17 @@ async def pod_auth(pod_id_net, request: Request):
     
     # if not authenticated, start the OAuth flow
     pod_init = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
-    
+
+    # Derive the final pod object by combining the pod and templates
     if pod_init.template:
-        # Derive the final pod object by combining the pod and templates
         pod = combine_pod_and_template_recursively(pod_init, pod_init.template, tenant=g.request_tenant_id, site=g.site_id)
     else:
         pod = pod_init
 
+    # Get networking info for pod
     net_info = pod.networking.get(network_key, None)
     if not net_info:
-        raise Exception(f"Pod {pod_id} does not have networking key that matches pod_id_net: {pod_id_net}")
+        raise Exception(f"Pod {pod_id} has a misconfigured networking value for network_key: {network_key}")
 
     # check if dict
     # net_info
@@ -517,8 +518,8 @@ async def pod_auth(pod_id_net, request: Request):
     # The goal is: https://tacc.develop.tapis.io/v3/pods/{{pod_id}}/auth
     pod_id, tapis_domain = net_info['url'].split('.pods.') ## Should return `mypod` & `tacc.tapis.io` with proper tenant and schmu
     tapis_tenant = tapis_domain.split('.')[0]
-    if not net_info["tapis_auth"]:
-        return JSONResponse(content = f"This pod does not have tapis_auth configured in networking for this pod_id_net: {pod_id_net}. Leave or remedy.", status_code = 403)        
+    if not net_info.get("tapis_auth", False):
+        return JSONResponse(content = f"This pod does not have tapis_auth configured in networking for this pod_id_net: {pod_id_net}. Leave or remedy. Initial Auth", status_code = 403)
     
     
     auth_url =  f"https://{tapis_domain}/v3/pods/{pod_id_net}/auth"
@@ -609,7 +610,7 @@ def callback(pod_id_net, request: Request):
     pod_id, tapis_domain = net_info['url'].split('.pods.') ## Should return `mypod` & `tacc.tapis.io` with proper tenant and schmu
     tapis_tenant = tapis_domain.split('.')[0]
     if not net_info.get("tapis_auth", False):
-        return JSONResponse(content = f"This pod does not have tapis_auth configured in networking for this pod_id_net: {pod_id_net}. Leave or remedy.", status_code = 403)
+        return JSONResponse(content = f"This pod does not have tapis_auth configured in networking for this pod_id_net: {pod_id_net}. Leave or remedy. Callback", status_code = 403)
 
     client_id = f"PODS-SERVICE-{pod.k8_name}-{network_key}"
 
@@ -652,6 +653,7 @@ def callback(pod_id_net, request: Request):
         
         logger.debug(f"GET /pods/{pod_id_net}/auth/callback - pod_auth_callback, username: {username}, tapis_domain: {tapis_domain}")
 
+        tapis_auth_allowed_users = net_info.get("tapis_auth_allowed_users", [])
         if tapis_auth_allowed_users:
             if username.lower() not in tapis_auth_allowed_users and "*" not in tapis_auth_allowed_users:
                 raise Exception(f"User {username} not in allowed users list {tapis_auth_allowed_users} for pod_id: {pod_id_net}.")
