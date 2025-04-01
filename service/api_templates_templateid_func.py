@@ -13,7 +13,7 @@ router = APIRouter()
 ### Permissions
 @router.get(
     "/pods/templates/{template_id}/permissions",
-    tags=["Templates"],
+    tags=["Permissions"],
     summary="get_template_permissions",
     operation_id="get_template_permissions",
     response_model=TemplatePermissionsResponse)
@@ -37,7 +37,7 @@ async def get_template_permissions(template_id):
 
 @router.post(
     "/pods/templates/{template_id}/permissions",
-    tags=["Templates"],
+    tags=["Permissions"],
     summary="set_template_permission",
     operation_id="set_template_permission",
     response_model=TemplatePermissionsResponse)
@@ -78,7 +78,7 @@ async def set_template_permission(template_id, set_permission: SetPermission):
 
 @router.delete(
     "/pods/templates/{template_id}/permissions/{user}",
-    tags=["Templates"],
+    tags=["Permissions"],
     summary="delete_template_permission",
     operation_id="delete_template_permission",
     response_model=TemplatePermissionsResponse)

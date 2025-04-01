@@ -85,76 +85,76 @@ def is_logged_in(cookies):
     return False, None, None
 
 
-@router.get("/pods/auth",
-    tags=["Misc"],
-    summary="OAuth2 endpoint to act as middleware between pods and user traffic, checking for authorization on a per url basis.",
-    operation_id="auth")
-async def api_auth(request: Request, username: str = None):
-    """
-    Write to session
+# @router.get("/pods/auth",
+#     tags=["Misc"],
+#     summary="OAuth2 endpoint to act as middleware between pods and user traffic, checking for authorization on a per url basis.",
+#     operation_id="auth")
+# async def api_auth(request: Request, username: str = None):
+#     """
+#     Write to session
 
-    Traefik continues to user pod if 200, otherwise goes to result.
-    Process a callback from a Tapis authorization server:
-      1) Get the authorization code from the query parameters.
-      2) Exchange the code for a token
-      3) Add the user and token to the sessionhttps
-      4) Redirect to the /data endpoint.
-    """
-    logger.debug(f"In pod-auth, headers: {request.headers}, request.cookies: {request.cookies}")
-    #return JSONResponse(status_code=400,content = str(request.headers))
+#     Traefik continues to user pod if 200, otherwise goes to result.
+#     Process a callback from a Tapis authorization server:
+#       1) Get the authorization code from the query parameters.
+#       2) Exchange the code for a token
+#       3) Add the user and token to the sessionhttps
+#       4) Redirect to the /data endpoint.
+#     """
+#     logger.debug(f"In pod-auth, headers: {request.headers}, request.cookies: {request.cookies}")
+#     #return JSONResponse(status_code=400,content = str(request.headers))
     
-    ## Headers contains x-forwarded stuff we can use to deduct correct tenant (x-forwarded-host)
-    ## example data for future reference
-    # 'x-forwarded-for': '10.233.72.192'
-    # 'x-forwarded-host': 'tacc.develop.tapis.io'
-    # 'x-forwarded-port': '80', 'x-forwarded-prefix': '/v3'
-    # 'x-forwarded-proto': 'http'
-    # 'x-forwarded-server': 'pods-traefik-65c7ccb5fd-ffk4g'
-    # 'x-real-ip': '10.233.72.193'
+#     ## Headers contains x-forwarded stuff we can use to deduct correct tenant (x-forwarded-host)
+#     ## example data for future reference
+#     # 'x-forwarded-for': '10.233.72.192'
+#     # 'x-forwarded-host': 'tacc.develop.tapis.io'
+#     # 'x-forwarded-port': '80', 'x-forwarded-prefix': '/v3'
+#     # 'x-forwarded-proto': 'http'
+#     # 'x-forwarded-server': 'pods-traefik-65c7ccb5fd-ffk4g'
+#     # 'x-real-ip': '10.233.72.193'
 
     
-    ## if x-tapis-token in headers or in session, continue, otherwise authorize and set one or both.
-    xTapisToken = "test"
-    if username:
-        return JSONResponse(
-            status_code=200,
-            content=ok(f"I promise I'm username: {username}."),
-            # session={
-            #     "X-TapisUsername": username,
-            #     "X-Tapis-Token": xTapisToken
-            # },
-            headers={
-                "X-TapisUsername": username,
-                "X-Tapis-Token": xTapisToken
-            })
-    else:
-        authenticated, _, _ = is_logged_in(request.cookies)
-        # if already authenticated, return 200, which will allow the request to continue in Traefik
-        if authenticated:
-            return {'code': 200} #result = {'path':'/', 'code': 302}
+#     ## if x-tapis-token in headers or in session, continue, otherwise authorize and set one or both.
+#     xTapisToken = "test"
+#     if username:
+#         return JSONResponse(
+#             status_code=200,
+#             content=ok(f"I promise I'm username: {username}."),
+#             # session={
+#             #     "X-TapisUsername": username,
+#             #     "X-Tapis-Token": xTapisToken
+#             # },
+#             headers={
+#                 "X-TapisUsername": username,
+#                 "X-Tapis-Token": xTapisToken
+#             })
+#     else:
+#         authenticated, _, _ = is_logged_in(request.cookies)
+#         # if already authenticated, return 200, which will allow the request to continue in Traefik
+#         if authenticated:
+#             return {'code': 200} #result = {'path':'/', 'code': 302}
 
-        # if not authenticated, start the OAuth flow
-        app_base_url = "https://tacc.develop.tapis.io"
+#         # if not authenticated, start the OAuth flow
+#         app_base_url = "https://tacc.develop.tapis.io"
 
-        client_def = {
-            "client_id": "testdev",
-            "client_key": "4STQ^t&RGa$sah!SZ9zCP9UScGoEkS^GYLZDjjtjPBipp4kVLyrr@X",
-            "callback_url": "https://tacc.develop.tapis.io/v3/pods/auth/callback",
-            "display_name": "pods-tacc-tacc-client-1",
-            "description": "Testing client for Pods traefik auth"
-        }
+#         client_def = {
+#             "client_id": "testdev",
+#             "client_key": "4STQ^t&RGa$sah!SZ9zCP9UScGoEkS^GYLZDjjtjPBipp4kVLyrr@X",
+#             "callback_url": "https://tacc.develop.tapis.io/v3/pods/auth/callback",
+#             "display_name": "pods-tacc-tacc-client-1",
+#             "description": "Testing client for Pods traefik auth"
+#         }
 
-        client_id = "testdev"
-        callback_url = f"{app_base_url}/oauth2/callback" # should match client callback_url  
-        tapis_url = f"{app_base_url}/v3/oauth2/authorize?client_id={client_id}&redirect_uri={callback_url}&response_type=code"
-        # print('no, not auth, redirect to:',tapis_url)
-        result = {'path': tapis_url, 'code': 302}
-        return RedirectResponse(url=tapis_url, status_code=302)
-        return JSONResponse(content = str(result))
+#         client_id = "testdev"
+#         callback_url = f"{app_base_url}/oauth2/callback" # should match client callback_url  
+#         tapis_url = f"{app_base_url}/v3/oauth2/authorize?client_id={client_id}&redirect_uri={callback_url}&response_type=code"
+#         # print('no, not auth, redirect to:',tapis_url)
+#         result = {'path': tapis_url, 'code': 302}
+#         return RedirectResponse(url=tapis_url, status_code=302)
+#         return JSONResponse(content = str(result))
 
-    # Shouldn't be able to get here
-    raise Exception(f"not implemented")
-    return ok("I promise I'm healthy.")
+#     # Shouldn't be able to get here
+#     raise Exception(f"not implemented")
+#     return ok("I promise I'm healthy.")
 
 
 
@@ -177,38 +177,38 @@ def get_username(token):
         raise Exception(f"Error looking up token info; debug: {e}")
     return username
 
-@router.get("/pods/auth/callback",
-    tags=["Misc"],
-    summary="callback.",
-    operation_id="auth")
-def callback(request: Request):
-    # return JSONResponse(content = str(dir(request)))
-    # code = request.args.get('code')
-    # if not code:
-    #     raise Exception(f"Error: No code in request; debug: {request.args}")
-    url = f"{config['tapis_base_url']}/v3/oauth2/tokens"
-    data = {
-        "code": "code",
-        "redirect_uri": f"{config['app_base_url']}/oauth2/callback",
-        "grant_type": "authorization_code",
-    }
-    try:
-        response = requests.post(url, data=data, auth=(config['client_id'], config['client_key']))
-        response.raise_for_status()
-        json_resp = json.loads(response.text)
-        token = json_resp['result']['access_token']['access_token']
-    except Exception as e:
-        raise Exception(f"Error generating Tapis token; debug: {e}")
+# @router.get("/pods/auth/callback",
+#     tags=["Misc"],
+#     summary="callback.",
+#     operation_id="auth")
+# def callback(request: Request):
+#     # return JSONResponse(content = str(dir(request)))
+#     # code = request.args.get('code')
+#     # if not code:
+#     #     raise Exception(f"Error: No code in request; debug: {request.args}")
+#     url = f"{config['tapis_base_url']}/v3/oauth2/tokens"
+#     data = {
+#         "code": "code",
+#         "redirect_uri": f"{config['app_base_url']}/oauth2/callback",
+#         "grant_type": "authorization_code",
+#     }
+#     try:
+#         response = requests.post(url, data=data, auth=(config['client_id'], config['client_key']))
+#         response.raise_for_status()
+#         json_resp = json.loads(response.text)
+#         token = json_resp['result']['access_token']['access_token']
+#     except Exception as e:
+#         raise Exception(f"Error generating Tapis token; debug: {e}")
 
-    username = auth.get_username(token)
+#     username = auth.get_username(token)
     
-    response = make_response(redirect(os.environ['FRONT_URL'], code=302))
+#     response = make_response(redirect(os.environ['FRONT_URL'], code=302))
 
-    domain = os.environ.get('COOKIE_DOMAIN', ".pods.icicle.tapis.io")
-    response.set_cookie("token", token, domain=domain, secure=True)
-    response.set_cookie("username", username, domain=domain, secure=True)    
+#     domain = os.environ.get('COOKIE_DOMAIN', ".pods.icicle.tapis.io")
+#     response.set_cookie("token", token, domain=domain, secure=True)
+#     response.set_cookie("username", username, domain=domain, secure=True)    
     
-    return response
+#     return response
 
 
 def login():

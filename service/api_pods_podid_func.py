@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import JSONResponse, RedirectResponse
 from models_pods import Pod, Password, PodResponse, PodPermissionsResponse, PodCredentialsResponse, PodLogsResponse, ExecutePodCommands
 from models_templates_tags import Template, TemplateTag, TemplateTagResponse, NewTemplateTagFromPod
@@ -27,7 +27,7 @@ router = APIRouter()
 
 @router.get(
     "/pods/{pod_id}/credentials",
-    tags=["Credentials"],
+    tags=["Pods"],
     summary="get_pod_credentials",
     operation_id="get_pod_credentials",
     response_model=PodCredentialsResponse)
@@ -52,7 +52,7 @@ async def get_pod_credentials(pod_id):
 
 @router.get(
     "/pods/{pod_id}/logs",
-    tags=["Logs"],
+    tags=["Pods"],
     summary="get_pod_logs",
     operation_id="get_pod_logs",
     response_model=PodLogsResponse)
@@ -140,7 +140,7 @@ async def set_pod_permission(pod_id, set_permission: SetPermission):
 
 @router.post(
     "/pods/{pod_id}/exec",
-    tags=["Executions"],
+    tags=["Pods"],
     summary="exec_pod_commands",
     operation_id="exec_pod_commands")
 async def exec_pod_commands(pod_id, command: ExecutePodCommands):
@@ -360,39 +360,37 @@ async def restart_pod(pod_id, grab_latest_template_tag: bool = False):
                   
     return ok(result=pod.display(), msg="Updated pod's status_requested to RESTART.")
 
-def is_logged_in(cookies):
+def validate_token(request: Request):
     """
-    Check whether the current session contains a valid login;
-    If so: return True, username, roles
-    Otherwise: return False, None, None
+    Validate a Tapis JWT from cookies or headers by making a call to the get_userinfo endpoint.
+    Returns authorized:bool, username:str, roles:List[str]
     """
-    logger.debug(f"Checking if logged in: {cookies}")
-    if 'X-Tapis-Username' in cookies:
-        return True, cookies['X-Tapis-Username'], None
-    return False, None, None
+    logger.debug(f"Validating token from request: cookies={request.cookies}, headers={request.headers}")
+    token = request.cookies.get('X-Tapis-Token') or request.headers.get('X-Tapis-Token')
+    if not token:
+        logger.debug("Token not found in cookies or headers.")
+        return False, None, None
 
-
-def get_username(tapis_domain, token):
-    """
-    Validate a Tapis JWT, `token`, and resolve it to a username.
-    """
-    headers = {'Content-Type': 'text/html'}
-    # call the userinfo endpoint
-    url = f"https://{tapis_domain}/v3/oauth2/userinfo"
+    url = f"{request.base_url}v3/oauth2/userinfo"
     headers = {'X-Tapis-Token': token}
     try:
         rsp = requests.get(url, headers=headers)
         rsp.raise_for_status()
         username = rsp.json()['result']['username']
+        email = rsp.json()['result']['email']
+        name = rsp.json()['result']['name']
+        roles = rsp.json()['result']['roles']
+        logger.debug(f"Token validated successfully. Username: {username}, Email: {email}, Name: {name}")
+        return True, username, roles
     except Exception as e:
-        raise Exception(f"Error looking up token info; debug: {e}")
-    return username
-
+        logger.error(f"Error with request to userinfo and parsing: {e}")
+        return False, None, None
+        #raise HTTPException(status_code=401, detail="Invalid or expired authentication token.")
 
 @router.post(
     "/pods/{pod_id_net}/save_pod_as_template_tag",
     tags=["Pods"],
-    summary="Endpoint to create a template tag from the definition of a pod.",
+    summary="save_pod_as_template_tag",
     operation_id="save_pod_as_template_tag",
     response_model=TemplateTagResponse)
 async def save_pod_as_template_tag(pod_id_net, new_template_tag_from_pod: NewTemplateTagFromPod):
@@ -437,7 +435,7 @@ async def save_pod_as_template_tag(pod_id_net, new_template_tag_from_pod: NewTem
 @router.get(
     "/pods/{pod_id_net}/auth",
     tags=["Pods"],
-    summary="OAuth2 endpoint to act as middleware between pods and user traffic, checking for authorization on a per pod basis.",
+    summary="pod_auth",
     operation_id="pod_auth",
     response_model=PodResponse)
 async def pod_auth(pod_id_net, request: Request):
@@ -487,7 +485,7 @@ async def pod_auth(pod_id_net, request: Request):
     pod_init = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
 
     # Derive the final pod object by combining the pod and templates
-    if pod_init.template:
+    if pod_init.get("template"):
         pod = combine_pod_and_template_recursively(pod_init, pod_init.template, tenant=g.request_tenant_id, site=g.site_id)
     else:
         pod = pod_init
@@ -505,15 +503,16 @@ async def pod_auth(pod_id_net, request: Request):
         except Exception as e:
             raise Exception(f"Error converting net_info to dict: {e}")
 
-    authenticated, xTapisUsername, _ = is_logged_in(request.cookies)
-    # if already authenticated, return 200, which will allow the request to continue in Traefik
-    if authenticated:
-        username = xTapisUsername + "@tapis.io"
-        logger.debug(f"GET /pods/{pod_id_net}/auth - pod-auth, already authenticated X-Tapis-Username: {username}")
-        #return {'code': 200} #result = {'path':'/', 'code': 302}
-        return JSONResponse(content=ok("Already authenticated"), status_code=200, headers={"X-Tapis-Username": username})
 
-    
+    ## We now want to check if session/headers have a valid Tapis token for the current site/tenant. If so, we can return 200.
+    ## Session and headers can both be manually modified, this is where we must validate the token is valid via a call to get_userinfo.
+    try:
+        username = validate_token(request)
+        logger.debug(f"User authenticated: {username}")
+        return JSONResponse(content=ok("Already authenticated"), status_code=200, headers={"X-Tapis-Username": username})
+    except HTTPException as e:
+        logger.debug(f"Authentication failed: {e.detail}")
+
     # Get info for clients
     # The goal is: https://tacc.develop.tapis.io/v3/pods/{{pod_id}}/auth
     pod_id, tapis_domain = net_info['url'].split('.pods.') ## Should return `mypod` & `tacc.tapis.io` with proper tenant and schmu
@@ -568,8 +567,9 @@ async def pod_auth(pod_id_net, request: Request):
                 msg = (f"Error updating client_id: {client_id}. e: {e.args}, e: {e}, dir(e): {dir(e)}")
                 logger.warning(msg)
                 return JSONResponse(content = msg, status_code = 500)
-        msg = (f"Error creating client_id: {client_id}. e.message: {e.message}, e.request: {e.request}, e.response: {e.response}, tapis_debug = {td}")
-        logger.warning(msg)
+        else:
+            msg = (f"Error creating client_id: {client_id}. e.message: {e.message}, e.request: {e.request}, e.response: {e.response}, tapis_debug = {td}")
+            logger.warning(msg)
 
 #       return JSONResponse(content = msg, status_code = 500)
     oauth2_url = f"https://{tapis_domain}/v3/oauth2/authorize?client_id={client_id}&redirect_uri={auth_callback_url}&response_type=code"

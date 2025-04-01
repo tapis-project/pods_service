@@ -81,7 +81,7 @@ async def list_templates_and_tags(full: bool = Query(True, description="Returns 
     summary="add_template",
     operation_id="add_template",
     response_model=TemplateResponse)
-async def add_template(new_template: Template):
+async def add_template(new_template: NewTemplate):
     """
     Add a template with inputted information.
     

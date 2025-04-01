@@ -77,49 +77,6 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
-  /pods/auth:
-    get:
-      tags:
-      - Misc
-      summary: OAuth2 endpoint to act as middleware between pods and user traffic,
-        checking for authorization on a per url basis.
-      description: "Write to session\n\nTraefik continues to user pod if 200, otherwise\
-        \ goes to result.\nProcess a callback from a Tapis authorization server:\n\
-        \  1) Get the authorization code from the query parameters.\n  2) Exchange\
-        \ the code for a token\n  3) Add the user and token to the sessionhttps\n\
-        \  4) Redirect to the /data endpoint."
-      operationId: auth
-      parameters:
-      - required: false
-        schema:
-          type: string
-          title: Username
-        name: username
-        in: query
-      responses:
-        '200':
-          description: Successful Response
-          content:
-            application/json:
-              schema: {}
-        '422':
-          description: Validation Error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-  /pods/auth/callback:
-    get:
-      tags:
-      - Misc
-      summary: callback.
-      operationId: auth
-      responses:
-        '200':
-          description: Successful Response
-          content:
-            application/json:
-              schema: {}
   /pods/templates:
     get:
       tags:
@@ -150,7 +107,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/Template'
+              $ref: '#/components/schemas/NewTemplate'
         required: true
       responses:
         '200':
@@ -404,7 +361,7 @@ paths:
   /pods/templates/{template_id}/permissions:
     get:
       tags:
-      - Templates
+      - Permissions
       summary: get_template_permissions
       description: 'Get a templates permissions.
 
@@ -442,7 +399,7 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
     post:
       tags:
-      - Templates
+      - Permissions
       summary: set_template_permission
       description: 'Set a permission for a template.
 
@@ -477,7 +434,7 @@ paths:
   /pods/templates/{template_id}/permissions/{user}:
     delete:
       tags:
-      - Templates
+      - Permissions
       summary: delete_template_permission
       description: 'Delete a permission from a template.
 
@@ -1547,7 +1504,7 @@ paths:
   /pods/{pod_id}/credentials:
     get:
       tags:
-      - Credentials
+      - Pods
       summary: get_pod_credentials
       description: 'Get the credentials created for a pod.
 
@@ -1582,7 +1539,7 @@ paths:
   /pods/{pod_id}/logs:
     get:
       tags:
-      - Logs
+      - Pods
       summary: get_pod_logs
       description: 'Get a pods stdout logs and action_logs.
 
@@ -1690,7 +1647,7 @@ paths:
   /pods/{pod_id}/exec:
     post:
       tags:
-      - Executions
+      - Pods
       summary: exec_pod_commands
       description: 'Execute one or more commands in a pod.
 
@@ -1897,7 +1854,7 @@ paths:
     post:
       tags:
       - Pods
-      summary: Endpoint to create a template tag from the definition of a pod.
+      summary: save_pod_as_template_tag
       description: 'Endpoint takes pod_id and derives a pod_definition to create a
         template tag from it.
 
@@ -1938,8 +1895,7 @@ paths:
     get:
       tags:
       - Pods
-      summary: OAuth2 endpoint to act as middleware between pods and user traffic,
-        checking for authorization on a per pod basis.
+      summary: pod_auth
       description: "Auth endpoint for each pod. When a networking object defines tapis_auth=True,\
         \ this endpoint manages auth.\n\nTraefik has a forwardAuth middleware for\
         \ http routes. This redirects users, auth happens, if traefik gets 200 then\
@@ -2304,7 +2260,6 @@ components:
           format: date-time
           title: Creation Ts
           description: Time (UTC) that this image was created.
-          default: '2025-03-20T02:31:21.302626'
         added_by:
           type: string
           title: Added By
@@ -2532,6 +2487,35 @@ components:
       title: NewSnapshot
       description: Object with fields that users are allowed to specify for the Snapshot
         class.
+    NewTemplate:
+      properties:
+        template_id:
+          type: string
+          title: Template Id
+          description: Name of template.
+        description:
+          type: string
+          title: Description
+          description: Description of template.
+          default: ''
+        metatags:
+          items:
+            type: string
+          type: array
+          title: Metatags
+          description: Metadata tags for additional search/listing functionality for
+            the template.
+          default: []
+        archive_message:
+          type: string
+          title: Archive Message
+          description: If set, metadata message to give users of this template.
+          default: ''
+      additionalProperties: false
+      type: object
+      required:
+      - template_id
+      title: NewTemplate
     NewTemplateTag:
       properties:
         pod_definition:
@@ -3059,62 +3043,6 @@ components:
       - status
       - version
       title: SnapshotsResponse
-    Template:
-      properties:
-        template_id:
-          type: string
-          title: Template Id
-          description: Name of template.
-        description:
-          type: string
-          title: Description
-          description: Description of template.
-          default: ''
-        metatags:
-          items:
-            type: string
-          type: array
-          title: Metatags
-          description: Metadata tags for additional search/listing functionality for
-            the template.
-          default: []
-        archive_message:
-          type: string
-          title: Archive Message
-          description: If set, metadata message to give users of this template.
-          default: ''
-        creation_ts:
-          type: string
-          format: date-time
-          title: Creation Ts
-          description: Time (UTC) that this template was created.
-        update_ts:
-          type: string
-          format: date-time
-          title: Update Ts
-          description: Time (UTC) that this template was updated.
-        tenant_id:
-          type: string
-          title: Tenant Id
-          description: Tapis tenant used during creation of this template.
-          default: ''
-        site_id:
-          type: string
-          title: Site Id
-          description: Tapis site used during creation of this template.
-          default: ''
-        permissions:
-          items:
-            type: string
-          type: array
-          title: Permissions
-          description: Template permissions in user:level format.
-          default: []
-      additionalProperties: false
-      type: object
-      required:
-      - template_id
-      title: Template
     TemplateDeleteResponse:
       properties:
         message:
