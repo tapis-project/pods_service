@@ -466,11 +466,12 @@ async def pod_auth(pod_id_net, request: Request):
 
      - tapis_auth_allowed_users, checks username against .lower() of username list to make sure it's in list. otherwise deny
     """
-    logger.debug(f"GET /pods/{pod_id_net}/auth - pod-auth, headers: {request.headers}, request.cookies: {request.cookies}")
+    logger.debug(f"GET /pods/{pod_id_net}/auth - pod-auth, headers: {request.headers}, request.cookies: {request.cookies}, request_tenant_id: {g.request_tenant_id}, site_id: {g.site_id}")
     # In cases where networking key is not 'default', the pod_id_net is f"{pod_id}-{network_key}"
     parts = pod_id_net.split('-', 1)
     pod_id = parts[0]
     network_key = parts[1] if len(parts) > 1 else 'default'
+    logger.debug(f"In pod_auth, pod_id: {pod_id}, network_key: {network_key}")
 
     ## Headers contains x-forwarded stuff we can use to deduct correct tenant (x-forwarded-host)
     ## example data for future reference
