@@ -360,13 +360,13 @@ async def restart_pod(pod_id, grab_latest_template_tag: bool = False):
                   
     return ok(result=pod.display(), msg="Updated pod's status_requested to RESTART.")
 
-def validate_token(request: Request):
+def validate_token(request: Request, token: str = None):
     """
     Validate a Tapis JWT from cookies or headers by making a call to the get_userinfo endpoint.
     Returns authorized:bool, username:str, roles:List[str]
     """
     logger.debug(f"Validating token from request: cookies={request.cookies}, headers={request.headers}")
-    token = request.cookies.get('X-Tapis-Token') or request.headers.get('X-Tapis-Token')
+    token = token or request.cookies.get('X-Tapis-Token') or request.headers.get('X-Tapis-Token')
     if not token:
         logger.debug("Token not found in cookies or headers.")
         return False, None, None
@@ -629,7 +629,7 @@ def callback(pod_id_net, request: Request):
     code = request.query_params.get('code')
     if not code:
         raise Exception(f"Error: No code in request; debug: {request.query_params}")
-    logger.debug(f"GET /pods/{pod_id_net}/auth/callback - pod_auth_callback, code: {code}")
+    logger.debug(f"GET /pods/{pod_id_net}/auth/callback - pod_auth_callback1, tapis_domain: {tapis_domain}, code: {code}")
     url = f"https://{tapis_domain}/v3/oauth2/tokens"
     data = {
         "code": code,
@@ -638,7 +638,7 @@ def callback(pod_id_net, request: Request):
     }
 
     try:
-        logger.debug(dir(res))
+        #logger.debug(dir(res))
         response = requests.post(url, data=data, auth=(client_id, res.client_key))
         response.raise_for_status()
         logger.debug(f"GET /pods/{pod_id_net}/auth/callback callback request response: {response.text}")
@@ -649,11 +649,11 @@ def callback(pod_id_net, request: Request):
         raise Exception(f"Error generating Tapis token; debug: {e}")
 
     try:
-        logger.debug(f"GET /pods/{pod_id_net}/auth/callback - pod_auth_callback, token: {token}")
+        logger.debug(f"GET /pods/{pod_id_net}/auth/callback - pod_auth_callback2, token: {token}")
 
-        authorized, username, roles = validate_token(request)
+        authorized, username, roles = validate_token(request, token=token)
         
-        logger.debug(f"GET /pods/{pod_id_net}/auth/callback - pod_auth_callback, username: {username}, tapis_domain: {tapis_domain}")
+        logger.debug(f"GET /pods/{pod_id_net}/auth/callback - pod_auth_callback3, username: {username}, tapis_domain: {tapis_domain}")
 
         tapis_auth_allowed_users = net_info.get("tapis_auth_allowed_users", [])
         if tapis_auth_allowed_users:
