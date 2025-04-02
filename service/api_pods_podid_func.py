@@ -486,7 +486,7 @@ async def pod_auth(pod_id_net, request: Request):
     pod_init = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
 
     # Derive the final pod object by combining the pod and templates
-    if pod_init.get("template"):
+    if pod_init.template:
         pod = combine_pod_and_template_recursively(pod_init, pod_init.template, tenant=g.request_tenant_id, site=g.site_id)
     else:
         pod = pod_init
