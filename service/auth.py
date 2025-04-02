@@ -6,12 +6,13 @@ import timeit
 
 import jwt
 import requests
-from tapisservice.tapisfastapi.utils import g
 import codes
 
 from __init__ import t, Tenants
+from tapisservice.tapisfastapi.utils import g
 from tapisservice.logs import get_logger
 from tapisservice.config import conf
+from tapisservice.auth import resolve_tenant_id_for_request
 logger = get_logger(__name__)
 
 from errors import ResourceError, PermissionsException
@@ -221,7 +222,7 @@ def check_route_permissions(request):
         logger.debug(f"Matched NEED-BASEURL: g.request_tenant_id: {g.request_tenant_id}, g.username: {g.username}")
         # We might not have g.request_tenant_id yet, so we need to resolve it
         if not g.request_tenant_id:
-            auth.resolve_tenant_id_for_request(g, request, t.tenant_cache.get_tenants())
+            resolve_tenant_id_for_request(g, request, t.tenant_cache.get_tenants())
         get_user_site_id()
         has_pem = True
 
