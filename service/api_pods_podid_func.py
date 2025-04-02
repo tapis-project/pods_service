@@ -508,9 +508,10 @@ async def pod_auth(pod_id_net, request: Request):
     ## We now want to check if session/headers have a valid Tapis token for the current site/tenant. If so, we can return 200.
     ## Session and headers can both be manually modified, this is where we must validate the token is valid via a call to get_userinfo.
     try:
-        username = validate_token(request)
-        logger.debug(f"User authenticated: {username}")
-        return JSONResponse(content=ok("Already authenticated"), status_code=200, headers={"X-Tapis-Username": username})
+        authorized, username, roles = validate_token(request)
+        if authorized:
+            logger.debug(f"User authenticated: {username}")
+            return JSONResponse(content=ok("Already authenticated"), status_code=200, headers={"X-Tapis-Username": username})
     except HTTPException as e:
         logger.debug(f"Authentication failed: {e.detail}")
 
