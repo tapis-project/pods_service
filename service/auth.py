@@ -180,8 +180,8 @@ def check_route_permissions(request):
         ["/pods/{pod_id}/restart", "GET", codes.ADMIN],
         ["/pods/{pod_id}/derived", "GET", codes.READ],
         ["/pods/{pod_id}/exec", "POST", codes.ADMIN],
-        ["/pods/{pod_id_net}/auth", "GET", codes.NONE], # oauth
-        ["/pods/{pod_id_net}/auth/callback", "GET", codes.NONE], # oauth
+        ["/pods/{pod_id_net}/auth", "GET", "NEED-BASEURL"], # oauth
+        ["/pods/{pod_id_net}/auth/callback", "GET", "NEED-BASEURL"], # oauth
         ["/pods/{pod_id}", "GET", codes.READ],
         ["/pods/{pod_id}", "PUT", codes.USER],
         ["/pods/{pod_id}", "DELETE", codes.ADMIN],
@@ -216,6 +216,14 @@ def check_route_permissions(request):
     if matched_route[2] == "NOT-API":
         has_pem = True
         return
+    elif matched_route[2] == "NEED-BASEURL":
+        ## Needed for auth where we need tenant/site info, but not token info.
+        logger.debug(f"Matched NEED-BASEURL: g.request_tenant_id: {g.request_tenant_id}, g.username: {g.username}")
+        # We might not have g.request_tenant_id yet, so we need to resolve it
+        if not g.request_tenant_id:
+            auth.resolve_tenant_id_for_request(g, request, t.tenant_cache.get_tenants())
+        get_user_site_id()
+        has_pem = True
 
     # Sets g.site_id and g.roles.
     # Required for all API routes
