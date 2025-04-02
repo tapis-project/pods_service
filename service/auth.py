@@ -222,7 +222,8 @@ def check_route_permissions(request):
         logger.debug(f"Matched NEED-BASEURL: g.request_tenant_id: {g.request_tenant_id}, g.username: {g.username}")
         # We might not have g.request_tenant_id yet, so we need to resolve it
         if not g.request_tenant_id:
-            resolve_tenant_id_for_request(g, request, t.tenant_cache.get_tenants())
+            resolve_tenant_id_for_request(g, request, Tenants)
+            logger.debug(f"Resolved NEED-BASEURL route. g.request_tenant_id: {g.request_tenant_id}")
         get_user_site_id()
         has_pem = True
 
