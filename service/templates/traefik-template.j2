@@ -50,7 +50,7 @@ http:
       rule: "PathPrefix(`/v3/pods`)"
       middlewares:
        - "path-strip-v3"
-       - "dev-host-headers"
+       #- "dev-host-headers" # Only for dev to allow localhost access
        - "error-handler"
       service: pods-service
 
