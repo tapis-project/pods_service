@@ -226,6 +226,7 @@ def check_route_permissions(request):
             logger.debug(f"Resolved NEED-BASEURL route. g.request_tenant_id: {g.request_tenant_id}")
         get_user_site_id()
         has_pem = True
+        return
 
     # Sets g.site_id and g.roles.
     # Required for all API routes
