@@ -111,9 +111,9 @@ def authorization(request):
         raise ResourceError(
             "Invalid request: the API endpoint does not exist or the provided HTTP method is not allowed.", 405)
 
-
     # We check permissions, if user does not have permission, these functions will error and provide context.
     check_route_permissions(request)
+
 
 def check_route_permissions(request):
     has_pem = False
@@ -125,9 +125,6 @@ def check_route_permissions(request):
         ["/openapi.json", "GET", "NOT-API"],
         ["/traefik-config", "GET", "NOT-API"],
         ["/error-handler/{status}", "GET", "NOT-API"],
-        # OAuth2
-        ["/pods/auth", "GET", "NOT-API"],#codes.NONE],
-        ["/pods/auth/callback", "GET", "NOT-API"],#codes.NONE],
         # IMAGES
         ["/pods/images/{image_id:path}", "GET", codes.NONE],
         ["/pods/images/{image_id}", "DELETE", codes.NONE],#"ONLY-ADMIN"], # this should require admin, but can't use codes.ADMIN as permissions not defined on # just need to edit tests for this to work
@@ -183,8 +180,8 @@ def check_route_permissions(request):
         ["/pods/{pod_id}/restart", "GET", codes.ADMIN],
         ["/pods/{pod_id}/derived", "GET", codes.READ],
         ["/pods/{pod_id}/exec", "POST", codes.ADMIN],
-        ["/pods/{pod_id_net}/auth", "GET", "NOT-API"],
-        ["/pods/{pod_id_net}/auth/callback", "GET", "NOT-API"],
+        ["/pods/{pod_id_net}/auth", "GET", codes.NONE], # oauth
+        ["/pods/{pod_id_net}/auth/callback", "GET", codes.NONE], # oauth
         ["/pods/{pod_id}", "GET", codes.READ],
         ["/pods/{pod_id}", "PUT", codes.USER],
         ["/pods/{pod_id}", "DELETE", codes.ADMIN],
