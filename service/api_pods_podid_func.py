@@ -651,7 +651,7 @@ def callback(pod_id_net, request: Request):
     try:
         logger.debug(f"GET /pods/{pod_id_net}/auth/callback - pod_auth_callback, token: {token}")
 
-        username = get_username(tapis_domain=tapis_domain, token=token)
+        authorized, username, roles = validate_token(request)
         
         logger.debug(f"GET /pods/{pod_id_net}/auth/callback - pod_auth_callback, username: {username}, tapis_domain: {tapis_domain}")
 
