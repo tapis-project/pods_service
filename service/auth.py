@@ -212,6 +212,12 @@ def check_route_permissions(request):
     if not matched_route:
         raise PermissionsException(f"Could not match request to an API route.")
 
+    ## check for options
+    if request.method == "OPTIONS":
+        logger.debug(f"OPTIONS request. Allowing request.")
+        has_pem = True
+        return
+
     # check for level="NOT-API"
     # NOT-API routes don't use url/user/tenant info
     if matched_route[2] == "NOT-API":
