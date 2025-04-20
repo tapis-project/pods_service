@@ -202,13 +202,11 @@ def set_traefik_proxy():
     http_proxy_info = {}
     postgres_proxy_info = {}
     for input_pod in all_pods:
-#        logger.critical(f"TRAINING22-input_pod.tenant_id: {input_pod.tenant_id}, input_pod.site_id: {input_pod.site_id}")
+        #logger.critical(f"TESTINGERROR-input_pod.tenant_id: {input_pod.tenant_id}, input_pod.site_id: {input_pod.site_id}")
         try: 
             pod = combine_pod_and_template_recursively(input_pod, input_pod.template, tenant=input_pod.tenant_id, site=input_pod.site_id)
         except Exception as e:
             logger.critical(f"Error combining pod and template. Skipping. e: {e}")
-#        logger.critical(f"TRAINING22-pod: HERE?")
-        #logger.critical(f"TRAINNNED-pod: {pod}")
         # Each pod can have up to 3 networking objects with custom filled port/protocol/name
         for net_name, net_info in pod.networking.items():
             if not isinstance(net_info, dict):
@@ -224,7 +222,15 @@ def set_traefik_proxy():
             template_info = {"routing_port": net_info['port'],
                              "url": net_info['url'],
                              "k8_service": pod.k8_name}
-
+            ## cors headers
+            cors_info = {
+                "cors_allow_origins": net_info.get('cors_allow_origins', []),
+                "cors_allow_methods": net_info.get('cors_allow_methods', []),
+                "cors_allow_headers": net_info.get('cors_allow_headers', []),
+                "cors_allow_credentials": net_info.get('cors_allow_credentials', False),
+                "cors_max_age": net_info.get('cors_max_age', 100),
+            }
+            ## tapis auth
             # The goal is: https://tacc.develop.tapis.io/v3/pods/{{pod_id}}/auth
             pod_id_section, tapis_domain = net_info['url'].split('.pods.') ## Should return `mypod` & `tacc.tapis.io` with proper tenant and schmu
             if '-' in pod_id_section:
@@ -236,16 +242,29 @@ def set_traefik_proxy():
                 "auth_url": f"https://{tapis_domain}/v3/pods/{pod_id}/auth",
                 "tapis_auth_response_headers": net_info.get('tapis_auth_response_headers', {}),
             }
-            logger.debug(f"pod_id: {pod_id}, tapis_domain: {tapis_domain}, net_info: {net_info}, traefik_forward_auth_info: {forward_auth_info}")
-
+            ## ip allow list
+            ip_allow_list_info = {
+                "ip_allow_list": net_info.get('ip_allow_list', [])
+            }
+            logger.debug(f"pod_id: {pod_id}, tapis_domain: {tapis_domain}, net_info: {net_info}, traefik_forward_auth_info: {forward_auth_info}, cors_info: {cors_info}, ip_allow_list: {ip_allow_list_info}")
             match net_info['protocol']:
                 case "tcp":
+                    # ip_allow_list
+                    template_info.update(ip_allow_list_info)
                     tcp_proxy_info[traefik_service_name] = template_info
                 case "http":
-                    http_proxy_info[traefik_service_name] = template_info
+                    # tapis auth
                     if forward_auth_info['tapis_auth']:
                         template_info.update(forward_auth_info)
+                    # cors settings
+                    if cors_info['cors_allow_origins']:
+                        template_info.update(cors_info)
+                    # ip_allow_list
+                    template_info.update(ip_allow_list_info)
+                    http_proxy_info[traefik_service_name] = template_info
                 case "postgres":
+                    # ip_allow_list
+                    template_info.update(ip_allow_list_info)
                     postgres_proxy_info[traefik_service_name] = template_info
                 case "local_only":
                     # when users only need networking to connect to other pods in the same namespace

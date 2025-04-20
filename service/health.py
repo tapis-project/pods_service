@@ -252,7 +252,7 @@ def check_k8_pods(k8_pods):
         logs = get_k8_logs(k8_pod['k8_name'])
         if pod.logs != logs:
             pod.logs = logs
-            logger.critical(f"UPDATING:: Before update with logs: {pod}")
+            #logger.critical(f"UPDATING:: Before update with logs: {pod}")
             try:
                 pod.db_update()  # just adding logs, no action_logs needed.
             except Exception as e:

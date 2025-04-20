@@ -91,6 +91,11 @@ class Networking(TapisModel):
     tapis_auth_response_headers: Dict[str, str] = Field({}, description = "Specification of headers to forward to the pod when using Tapis auth.")
     tapis_auth_allowed_users: list[str] = Field(["*"], description = "List of users allowed to access the pod when using Tapis auth.")
     tapis_auth_return_path: str = Field("/", description = "Path to redirect to when accessing the pod via Tapis auth.")
+    cors_allow_origins: list[str] = Field([], description = "List of CORS allowed origins. ex. ['https://tacc.develop.tapis.io', 'https://tacc.tapis.io']")
+    cors_allow_methods: list[str] = Field([], description = "List of CORS allowed methods. ex. ['GET', 'POST', 'PUT', 'DELETE']")
+    cors_allow_headers: list[str] = Field([], description = "List of CORS allowed headers. ex. ['Content-Type', 'X-Tapis-Token']")
+    cors_allow_credentials: bool = Field(False, description = "Boolean to allow credentials to be sent with CORS requests.")
+    cors_max_age: int = Field(100, description = "Max age of CORS preflight requests in seconds.")
     tapis_ui_uri: str = Field("", description = "Path to redirect to when accessing the pod via Tapis UI.")
     tapis_ui_uri_redirect: bool = Field(False, description = "If true, will redirect to the tapis_ui_uri when accessing the pod via Tapis UI. Otherwise, just read-only uri.")
     tapis_ui_uri_description: str = Field("", description = "Describing where the tapis_ui_uri will redirect to.")
@@ -153,13 +158,83 @@ class Networking(TapisModel):
             raise ValueError(f"tapis_ui_uri_description field must be less than 255 characters. Inputted length: {len(v)}")
         return v
 
+    # create validators for the 5 cors fields
+    @validator('cors_allow_origins')
+    def check_cors_allow_origins(cls, v):
+        if v:
+            if not isinstance(v, list):
+                raise TypeError(f"networking.cors_allow_origins must be list. Got '{type(v).__name__}'.")
+            for origin in v:
+                if not isinstance(origin, str):
+                    raise TypeError(f"networking.cors_allow_origins must be list of str. Got '{type(origin).__name__}'.")
+        return v
+    
+    @validator('cors_allow_methods')
+    def check_cors_allow_methods(cls, v):
+        if v:
+            if not isinstance(v, list):
+                raise TypeError(f"networking.cors_allow_methods must be list. Got '{type(v).__name__}'.")
+            for method in v:
+                if not isinstance(method, str):
+                    raise TypeError(f"networking.cors_allow_methods must be list of str. Got '{type(method).__name__}'.")
+        return v
+
+    @validator('cors_allow_headers')
+    def check_cors_allow_headers(cls, v):
+        if v:
+            if not isinstance(v, list):
+                raise TypeError(f"networking.cors_allow_headers must be list. Got '{type(v).__name__}'.")
+            for header in v:
+                if not isinstance(header, str):
+                    raise TypeError(f"networking.cors_allow_headers must be list of str. Got '{type(header).__name__}'.")
+        return v
+
+    @validator('cors_allow_credentials')
+    def check_cors_allow_credentials(cls, v):
+        if v:
+            if not isinstance(v, bool):
+                raise TypeError(f"networking.cors_allow_credentials must be bool. Got '{type(v).__name__}'.")
+        return v
+
+    @validator('cors_max_age')
+    def check_cors_max_age(cls, v):
+        if v:
+            if not isinstance(v, int):
+                raise TypeError(f"networking.cors_max_age must be int. Got '{type(v).__name__}'.")
+            if v < 0:
+                raise ValueError(f"networking.cors_max_age must be greater than 0. Got {v}")
+            # max is 100s
+            if v > 100:
+                raise ValueError(f"networking.cors_max_age must be less than 100 seconds. Got {v}")
+        return v
+
+    @validator('ip_allow_list')
+    def check_ip_allow_list(cls, v):
+        if v:
+            if not isinstance(v, list):
+                raise TypeError(f"networking.ip_allow_list must be list. Got '{type(v).__name__}'.")
+            for ip in v:
+                if not isinstance(ip, str):
+                    raise TypeError(f"networking.ip_allow_list must be list of str. Got '{type(ip).__name__}'.")
+        return v
+
     @root_validator(pre=False)
-    def check_tapis_auth_fields(cls, values):
+    def check_tapis_protocol_with_configured_options(cls, values):
         protocol = values.get('protocol')
         tapis_auth = values.get('tapis_auth')
+        # cors too are http only
+        cors_allow_origins = values.get('cors_allow_origins')
+        cors_allow_methods = values.get('cors_allow_methods')
+        cors_allow_headers = values.get('cors_allow_headers')
+        cors_allow_credentials = values.get('cors_allow_credentials')
+        cors_max_age = values.get('cors_max_age')
 
         if tapis_auth and protocol != "http":
-            raise ValueError(f"tapis_auth can only be used with protocol 'http'.")
+            raise ValueError(f"networking.tapis_auth can only be used with protocol 'http'. Got protocol {protocol}.")
+
+        if (cors_allow_origins or cors_allow_methods or cors_allow_headers or cors_allow_credentials or cors_max_age):
+            if protocol != "http":
+                raise ValueError(f"networking.cors_* can only be used with protocol 'http'. Got protocol {protocol}.")
 
         return values
 

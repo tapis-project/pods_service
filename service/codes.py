@@ -28,6 +28,8 @@ class PermissionLevel(object):
             self.level = 2
         elif name == 'ADMIN':
             self.level = 3
+        elif name == 'APPROVEDADMIN':
+            self.level = 4
 
     def __lt__(self, other):
         if isinstance(other, PermissionLevel):
@@ -55,13 +57,15 @@ class PermissionLevel(object):
     def authorized_levels(self):
         match self.name:
             case 'NONE':
-                return ['NONE', 'READ', 'USER', 'ADMIN']
+                return ['NONE', 'READ', 'USER', 'ADMIN', 'APPROVEDADMIN']
             case 'READ':
-                return ['READ', 'USER', 'ADMIN']
+                return ['READ', 'USER', 'ADMIN', 'APPROVEDADMIN']
             case 'USER':
-                return ['USER', 'ADMIN']
+                return ['USER', 'ADMIN', 'APPROVEDADMIN']
             case 'ADMIN':
-                return ['ADMIN']
+                return ['ADMIN', 'APPROVEDADMIN']
+            case 'APPROVEDADMIN':
+                return ['APPROVEDADMIN']
             case _:
                 raise KeyError(f"Found PermissionLevel name that is unknown. {self.name}")
 
@@ -69,9 +73,10 @@ NONE = PermissionLevel('NONE')
 READ = PermissionLevel('READ')
 USER = PermissionLevel('USER')
 ADMIN = PermissionLevel('ADMIN')
+APPROVEDADMIN = PermissionLevel('APPROVEDADMIN')
 
 
-PERMISSION_LEVELS = (NONE.name, READ.name, USER.name, ADMIN.name)
+PERMISSION_LEVELS = (NONE.name, READ.name, USER.name, ADMIN.name, APPROVEDADMIN.name)
 
 # roles - only used when Tapis's JWT Auth is activated.
 # the admin role allows users full access to Abaco, including modifying workers assigned to actors.

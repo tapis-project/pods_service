@@ -34,10 +34,43 @@ http:
     {% endfor %}
 
     {% for pname, pdata in http_proxy_info.items() -%}
-    {% if pdata.tapis_auth and pdata.ip_source_range -%}
-    tapis-auth-{{ pname }}-ipallowlist:
+    {% if pdata.cors_allow_origins -%}
+    tapis-cors-{{ pname }}:
+      headers:
+          accessControlAllowOriginList:
+            {% for origin in pdata.cors_allow_origins -%}
+            - "{{ origin }}"
+            {% endfor %}
+          {% if pdata.cors_allow_methods -%}
+          accessControlAllowMethods:
+            {% for method in pdata.cors_allow_methods -%}
+            - "{{ method }}"
+            {% endfor %}
+          {% endif -%}
+          {% if pdata.cors_allow_headers -%}
+          accessControlAllowHeaders:
+            {% for header in pdata.cors_allow_headers -%}
+            - "{{ header }}"
+            {% endfor %}
+          {% endif -%}
+          {% if pdata.cors_allow_credentials is not none -%}
+          accessControlAllowCredentials: {{ pdata.cors_allow_credentials | lower }}
+          {% endif -%}
+          {% if pdata.cors_max_age is not none -%}
+          accessControlMaxAge: {{ pdata.cors_max_age }}
+          {% endif -%}
+          addVaryHeader: false
+    {% endif -%}
+    {% endfor %}
+
+    {% for pname, pdata in http_proxy_info.items() -%}
+    {% if pdata.ip_allow_list -%}
+    tapis-ipallowlist-{{ pname }}:
       ipAllowList:
-        sourceRange: {{ pdata.ip_source_range }}
+        sourceRange:
+          {% for ip in pdata.ip_allow_list -%}
+          - "{{ ip }}"
+          {% endfor %}
     {% endif -%}
     {% endfor %}
 
@@ -59,10 +92,18 @@ http:
       entryPoints:
        - web
       rule: "Host(`{{ pdata.url }}`)"
-      {% if pdata.tapis_auth -%}
+      {% if pdata.tapis_auth or pdata.cors_allow_origins or pdata.ip_allow_list -%}
       middlewares:
-       - "tapis-auth-{{ pname }}"
-      {% endif -%}
+        {% if pdata.tapis_auth -%}
+        - "tapis-auth-{{ pname }}"
+        {% endif -%}
+        {% if pdata.cors_allow_origins -%}
+        - "tapis-cors-{{ pname }}"
+        {% endif -%}
+        {% if pdata.ip_allow_list -%}
+        - "tapis-ipallowlist-{{ pname }}"
+        {% endif -%}
+      {% endif %}
       service: "{{ pname }}"
       tls:
         certResolver: tlsletsencrypt
@@ -95,10 +136,13 @@ tcpServersTransport:
 tcp:
   middlewares:
     {% for pname, pdata in tcp_proxy_info.items() -%}
-    {% if pdata.tapis_auth and pdata.ip_source_range -%}
-    tapis-auth-{{ pname }}-ipallowlist:
+    {% if pdata.ip_allow_list -%}
+    tapis-ipallowlist-{{ pname }}:
       ipAllowList:
-        sourceRange: {{ pdata.ip_source_range }}
+        sourceRange:
+          {% for ip in pdata.ip_allow_list -%}
+          - "{{ ip }}"
+          {% endfor %}
     {% endif -%}
     {% endfor %}
 
@@ -108,11 +152,11 @@ tcp:
     {{ pname }}:
       entryPoints:
        - web
-      {% if pdata.tapis_auth and pdata.ip_source_range -%}
-      middlewares:
-       - "tapis-auth-{{ pname }}-ipallowlist"
-      {% endif -%}
       rule: "HostSNI(`{{ pdata.url }}`)"
+      {% if pdata.ip_allow_list -%}
+      middlewares:
+       - "tapis-ipallowlist-{{ pname }}"
+      {% endif -%}
       service: "{{ pname }}"
       tls:
         certResolver: tlsletsencrypt
@@ -120,6 +164,10 @@ tcp:
     {% for pname, pdata in postgres_proxy_info.items() -%}
     {{ pname }}:
       rule: "HostSNI(`{{ pdata.url }}`)"
+      {% if pdata.ip_allow_list -%}
+      middlewares:
+       - "tapis-ipallowlist-{{ pname }}"
+      {% endif -%}
       service: "{{ pname }}"
       tls:
         certResolver: tlsletsencrypt

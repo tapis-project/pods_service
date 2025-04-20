@@ -509,8 +509,13 @@ def create_pod(name: str,
         'KUBERNETES_PORT_443_TCP_PROTO': ""        
     })
     env = []
+    image_pull_secret = ""
     for env_name, env_val in environment.items():
         env.append(client.V1EnvVar(name=env_name, value=str(env_val)))
+        ## if imagePullSecret in env we use value to deal with image
+        if imagePullSecret in env_name:
+            image_pull_secret = env_val
+            logger.debug(f"imagePullSecret found in env: {env_name}. Value: {env_val}")
     logger.debug(f"Pod declared environment variables: {env}")
 
     ### Volumes/Volume Mounts
@@ -565,6 +570,14 @@ def create_pod(name: str,
     else:
         init_containers = []
 
+    # Image secrets for different creds
+    if image_pull_secret:
+        image_pull_secrets = [
+            client.V1LocalObjectReference(name=image_pull_secret)
+        ]
+    else:
+        image_pull_secrets = None
+
     ### Define and start the pod
     try:
         container = client.V1Container(
@@ -587,7 +600,8 @@ def create_pod(name: str,
             security_context=security_context,
             enable_service_links=False,
             tolerations=tolerations,
-            node_selector=node_selector
+            node_selector=node_selector,
+            image_pull_secrets=image_pull_secrets
         )
         pod_metadata = client.V1ObjectMeta(
             name=name,
