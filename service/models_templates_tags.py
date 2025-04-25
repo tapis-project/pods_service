@@ -232,7 +232,7 @@ class Networking(TapisModel):
         if tapis_auth and protocol != "http":
             raise ValueError(f"networking.tapis_auth can only be used with protocol 'http'. Got protocol {protocol}.")
 
-        if (cors_allow_origins or cors_allow_methods or cors_allow_headers or cors_allow_credentials or cors_max_age):
+        if cors_allow_origins:
             if protocol != "http":
                 raise ValueError(f"networking.cors_* can only be used with protocol 'http'. Got protocol {protocol}.")
 

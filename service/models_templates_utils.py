@@ -4,7 +4,6 @@ from models_templates_tags import TemplateTag, TemplateTagPodDefinition, derive_
 from kubernetes_utils import create_pod, create_service, create_pvc, KubernetesError
 from kubernetes import client, config
 
-from volume_utils import get_nfs_ip
 import re
 
 from tapisservice.tapisfastapi.utils import g

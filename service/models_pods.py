@@ -10,7 +10,6 @@ from wsgiref import validate
 from pydantic import BaseModel, Field, validator, root_validator, create_model
 from codes import PERMISSION_LEVELS, PermissionLevel
 
-from stores import pg_store
 from tapisservice.tapisfastapi.utils import g
 from tapisservice.config import conf
 from tapisservice.logs import get_logger
@@ -251,7 +250,7 @@ class Networking(TapisModel):
         if tapis_auth and protocol != "http":
             raise ValueError(f"networking.tapis_auth can only be used with protocol 'http'. Got protocol {protocol}.")
 
-        if (cors_allow_origins or cors_allow_methods or cors_allow_headers or cors_allow_credentials or cors_max_age):
+        if cors_allow_origins:
             if protocol != "http":
                 raise ValueError(f"networking.cors_* can only be used with protocol 'http'. Got protocol {protocol}.")
 
@@ -561,22 +560,19 @@ class Pod(TapisPodBaseFull, table=True, validate=True):
         permissions = values.get('permissions')
         networking = values.get('networking')
 
-        # Check TAPIS-imagePullSecrets
+        # Check TAPIS_PODS_IMAGEPULLSECRET
         if permissions and environment_variables:
-            # Check if TAPIS-imagePullSecrets is set
-            if "TAPIS-imagePullSecrets" in environment_variables:
-                imagePullSecrets = environment_variables.get("TAPIS-imagePullSecrets")
-                if not isinstance(imagePullSecrets, str):
-                    raise TypeError(f"environment_variables TAPIS-imagePullSecrets must be str. Got {type(imagePullSecrets).__name__}.")
-
-                # Ensure the username in TAPIS-imagePullSecrets has APPROVEDADMIN permission
-                approved_admin = any(permission == f"{imagePullSecrets}:APPROVEDADMIN" for permission in permissions)
-                if not approved_admin:
-                    raise ValueError(f"User '{imagePullSecrets}' does not have APPROVEDADMIN permission to set TAPIS-imagePullSecrets. Contact admin for approval.")
+            # Check if TAPIS_PODS_IMAGEPULLSECRET is set
+            if "TAPIS_PODS_IMAGEPULLSECRET" in environment_variables:
+                image_pull_secret_user = environment_variables.get("TAPIS_PODS_IMAGEPULLSECRET")
+                if not isinstance(image_pull_secret_user, str):
+                    raise TypeError(f"environment_variables TAPIS_PODS_IMAGEPULLSECRET must be str. Got {type(image_pull_secret_user).__name__}.")
 
         # Check CORS settings in Networking
         if networking:
             for net_name, net_info in networking.items():
+                if not isinstance(net_info, dict):
+                    net_info = net_info.dict()
                 cors_allow_origins = net_info.get('cors_allow_origins', [])
                 cors_allow_methods = net_info.get('cors_allow_methods', [])
                 cors_allow_headers = net_info.get('cors_allow_headers', [])
@@ -584,13 +580,13 @@ class Pod(TapisPodBaseFull, table=True, validate=True):
                 cors_max_age = net_info.get('cors_max_age', None)
                 protocol = net_info.get('protocol')
 
-                # If any CORS setting is configured
-                if cors_allow_origins or cors_allow_methods or cors_allow_headers or cors_allow_credentials or cors_max_age:
+                # If cors are used.
+                if cors_allow_origins:
                     # Ensure at least one user has APPROVEDADMIN permission
                     approved_admin = any(permission.endswith(":APPROVEDADMIN") for permission in permissions)
                     if not approved_admin:
                         raise ValueError(
-                            f"No user has APPROVEDADMIN permission to configure CORS settings for networking object '{net_name}'. Contact admin for approval."
+                            f"No user has APPROVEDADMIN permission to configure CORS settings for networking object '{net_name}', cors_allow_origins: {cors_allow_origins}. Contact admin for approval."
                         )
         return values
 
@@ -648,7 +644,7 @@ class Pod(TapisPodBaseFull, table=True, validate=True):
                 if g.tenant_id in allowed_image.tenants or "*" in allowed_image.tenants:
                     custom_allow_list.append(allowed_image.image)
             # Then we add images from the conf.image_allow_list
-            custom_allow_list += conf.image_allow_list or []
+            custom_allow_list += conf.get('image_allow_list', [])
 
             logger.debug(f"Bottom of check_image(). image: {image}, custom_allow_list: {custom_allow_list}")
             if image not in custom_allow_list:

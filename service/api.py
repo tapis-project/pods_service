@@ -46,16 +46,8 @@ tags_metadata = [
         "description": "Create and command pods.",
     },
     {
-        "name": "Credentials",
-        "description": "Manage pod's credentials used.",
-    },
-    {
-        "name": "Logs",
-        "description": "Manage pod logs.",
-    },
-    {
-        "name": "Permissions",
-        "description": "Manage pod permissions. Grant specific TACC users **READ**, **USER**, and **ADMIN** level permissions.",
+        "name": "Templates",
+        "description": "Create and manage templated pod definitions for use in pod deployment.",
     },
     {
         "name": "Volumes",
@@ -64,15 +56,22 @@ tags_metadata = [
     {
         "name": "Snapshots",
         "description": "Create and manage snapshots.",
+    },
+    {
+        "name": "Images",
+        "description": "Create and manage docker images available in the service.",
+    },
+    {
+        "name": "Permissions",
+        "description": "Manage pod permissions. Grant specific TACC users **READ**, **USER**, and **ADMIN** level permissions.",
     }
-
 ]
 
 api = FastAPI(
     title="Tapis Pods Service",
     description=description,
     openapi_tags=tags_metadata,
-    version="1.6.0",
+    version="1.8.3",
     contact={
         "name": "CIC Support",
         "email": "cicsupport@tacc.utexas.edu",

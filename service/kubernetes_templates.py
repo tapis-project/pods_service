@@ -70,10 +70,10 @@ def start_generic_pod(input_pod, revision: int):
     volumes = []
     volume_mounts = []
 
-    nfs_nfs_ip = get_nfs_ip()
 
     # Create PVC if requested.
     if pod.volume_mounts:
+        nfs_nfs_ip = get_nfs_ip()
         for vol_name, vol_info in pod.volume_mounts.items():
             vol_info = vol_info.dict() # turn Resource back into dict.
             full_k8_name = f"{pod.k8_name}--{vol_name}"

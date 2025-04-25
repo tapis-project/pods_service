@@ -17,8 +17,8 @@ logger = get_logger(__name__)
 
 from tapisservice.config import conf
 from codes import AVAILABLE, CREATING
-from stores import SITE_TENANT_DICT
-from stores import pg_store
+# from stores import SITE_TENANT_DICT
+# from stores import pg_store
 from sqlmodel import select
 
 # k8 client creation
@@ -512,10 +512,43 @@ def create_pod(name: str,
     image_pull_secret = ""
     for env_name, env_val in environment.items():
         env.append(client.V1EnvVar(name=env_name, value=str(env_val)))
-        ## if imagePullSecret in env we use value to deal with image
-        if imagePullSecret in env_name:
-            image_pull_secret = env_val
-            logger.debug(f"imagePullSecret found in env: {env_name}. Value: {env_val}")
+        ## if TAPIS_PODS_IMAGEPULLSECRET in env we use value to deal with image
+        if "TAPIS_PODS_IMAGEPULLSECRET" in env_name:
+            image_pull_secret_user = env_val
+            logger.debug(f"TAPIS_PODS_IMAGEPULLSECRET found in env: {env_name}. Value: {env_val}")
+            if not isinstance(image_pull_secret_user, str):
+                raise TypeError(f"environment_variables TAPIS_PODS_IMAGEPULLSECRET must be str. Got {type(image_pull_secret_user).__name__}.")
+            # Ensure the username in TAPIS_PODS_IMAGEPULLSECRET has APPROVEDADMIN permission
+            for permission in permissions:
+                if permission.startswith(image_pull_secret_user+":"):
+                    _, user_current_permission = permission.split(":")
+                    break
+                else:
+                    user_current_permission = None
+                    msg = f"TAPIS_PODS_IMAGEPULLSECRET specifies user: '{image_pull_secret_user}'. User does not have any persmissions on this pod. User must have APPROVEDADMIN permission to pod which admin can approve. Contact admin for help."
+                    logger.error(msg)
+                    raise KubernetesStartContainerError(msg)
+            
+            if user_current_permission != "APPROVEDADMIN":
+                msg = f"User '{image_pull_secret_user}' has {user_current_permission.upper()} permission and not APPROVEDADMIN permission needed to set TAPIS_PODS_IMAGEPULLSECRET. Contact admin for approval."
+                logger.error(msg)
+                raise KubernetesStartContainerError(msg)
+
+            # name the k8 scret object
+            image_pull_secret = f'tapis-pods-imagepullsecret-{env_val.replace("@", "at").replace(".", "dot")}'
+            logger.debug(f"TAPIS_PODS_IMAGEPULLSECRET. Kubernetes imagee pull secret name: {image_pull_secret}")
+            # check kubernetes for image pull secret existence
+            try:
+                k8.read_namespaced_secret(name=image_pull_secret, namespace=NAMESPACE)
+            except client.ApiException as e:
+                if e.status == 404:
+                    msg = f"Image pull secret not found: {image_pull_secret}. Exception: {e}"
+                    logger.error(msg)
+                    raise KubernetesStartContainerError(msg)
+                else:
+                    msg = f"Got exception trying to read image pull secret: {image_pull_secret}. Exception: {e}"
+                    logger.error(msg)
+                    raise KubernetesStartContainerError(msg)
     logger.debug(f"Pod declared environment variables: {env}")
 
     ### Volumes/Volume Mounts
