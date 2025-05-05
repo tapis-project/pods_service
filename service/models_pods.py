@@ -778,7 +778,7 @@ class Pod(TapisPodBaseFull, table=True, validate=True):
         return template_tag_bit, modified_fields
 
     @classmethod
-    def db_get_all_with_permission(cls, user, level, tenant, site):
+    def db_get_all_with_permission(cls, user, level, tenant, site, omit_logs=True):
         """
         Get all and ensure permission exists.
         """
@@ -796,7 +796,10 @@ class Pod(TapisPodBaseFull, table=True, validate=True):
             permission_list.append(f"{user}:{authed_level}")
 
         # Create statement
-        stmt = select(Pod).where(Pod.permissions.overlap(permission_list))
+        if omit_logs:
+            stmt = select(Pod).options(defer('logs')).where(Pod.permissions.overlap(permission_list))
+        else:
+            stmt = select(Pod).where(Pod.permissions.overlap(permission_list))
 
         # Run command
         results = store.run("execute", stmt, scalars=True, all=True)
