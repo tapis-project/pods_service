@@ -27,45 +27,86 @@ def start_generic_pod(input_pod, revision: int):
     # This all is needed as I need an object that can validate (PodBaseFull)
     # And I need template or non-template pods to have the same fields. get_with_pk returns complete dict
     # PodBaseFull returns dict with Pydantic models as vals. This forces both cases to work the same.
-    pod = PodBaseFull(**input_pod.dict().copy()) # Create a copy of pod data we'll merge template data into
-    logger.debug(f"Attempting to start generic pod; name: {pod.k8_name}; revision: {revision}")
+    pod_init = PodBaseFull(**input_pod.dict().copy()) # Create a copy of pod data we'll merge template data into
+    logger.debug(f"Attempting to start generic pod; name: {pod_init.k8_name}; revision: {revision}")
 
-    if pod.template:
-        # Derive the final pod object by combining the pod and templates
-        final_pod = combine_pod_and_template_recursively(pod, pod.template, tenant=pod.tenant_id, site=pod.site_id)
-        logger.debug(f"final_pod -----------------------\n{final_pod.display()}")
+    # Derive the final pod object by combining the pod and templates
+    if pod_init.template:
+        pod = combine_pod_and_template_recursively(pod_init, pod_init.template, tenant=pod_init.tenant_id, site=pod_init.site_id)
+    else:
+        pod = pod_init
+    logger.debug(f"derived_pod - pod_init.template: {pod_init.template} - template exists?: {bool(pod_init.template)}-------------\n{pod.display()}")
 
-        ###
-        ### SECRETS
-        ###
-        # Need to replace all "<<TAPIS_vars>>" with vals from secrets for example needs to work for "dsadsadsa <<TAPIS_mysecret>> dsadsadsa".
-        # currently just the passwords db table. Eventually that'll become pods_env which itself could reference sk if that's needed.
-        pods_env = Password.db_get_with_pk(pod.pod_id, pod.tenant_id, pod.site_id)
-        pods_env = pods_env.dict()
-        if final_pod.environment_variables:
-            for key, val in final_pod.environment_variables.items():
-                new_val = val
-                if isinstance(val, str):
-                    # regex to create list of [<<TAPIS_*>> strings, str of inner variable without >><<]
-                    matches = re.findall(r'<<TAPIS_(.*?)>>', val)
-                    for match in matches:
-                        new_val = new_val.replace(f"<<TAPIS_{match}>>", pods_env.get(match))
-                    final_pod.environment_variables[key] = new_val
+    ###
+    ### SECRETS
+    ###
+    # Need to replace all "<<TAPIS_vars>>"(legacy) or "<<tapissecret_vars>>" with vals from secrets
+    # currently just the passwords db table. Eventually that'll become pods_env which itself could reference sk if that's needed.
+    pods_env = Password.db_get_with_pk(pod.pod_id, pod.tenant_id, pod.site_id)
+    pods_env = pods_env.dict()
+    if pod.environment_variables:
+        for key, val in pod.environment_variables.items():
+            new_val = val
+            if isinstance(val, str):
+                # Find both TAPIS_ and tapissecret_ patterns
+                tapis_matches = re.findall(r'<<TAPIS_(.*?)>>', val)
+                tapissecret_matches = re.findall(r'<<tapissecret_(.*?)>>', val)
+                
+                # Handle TAPIS_ replacements
+                for match in tapis_matches:
+                    new_val = new_val.replace(f"<<TAPIS_{match}>>", pods_env.get(match, ""))
+                
+                # Handle tapissecret_ replacements
+                for match in tapissecret_matches:
+                    new_val = new_val.replace(f"<<tapissecret_{match}>>", pods_env.get(match, ""))
+                
+                pod.environment_variables[key] = new_val
 
-        # #command
-        # if final_pod.command:
-        #     for key in final_pod.command:
-        #         if isinstance(key, str):
-        #             matches = re.findall(r'<<TAPIS_(.*?)>>', key)
-        #             for match in matches:
-        #                 final_pod.command[key] = key.replace(f"<<TAPIS_{match}>>", pods_env.get(match))
-        # #arguments
-        # if final_pod.arguments:
-        #     for key in final_pod.arguments:
-        #         if isinstance(key, str):
-        #             matches = re.findall(r'<<TAPIS_(.*?)>>', key)
-        #             for match in matches:
-        #                 final_pod.arguments[key] = key.replace(f"<<TAPIS_{match}>>", pods_env.get(match))
+    # command
+    if pod.command and isinstance(pod.command, list):
+        new_command = []
+        for item in pod.command:
+            if isinstance(item, str):
+                # Find both TAPIS_ and tapissecret_ patterns
+                tapis_matches = re.findall(r'<<TAPIS_(.*?)>>', item)
+                tapissecret_matches = re.findall(r'<<tapissecret_(.*?)>>', item)
+                
+                new_item = item
+                # Handle TAPIS_ replacements
+                for match in tapis_matches:
+                    new_item = new_item.replace(f"<<TAPIS_{match}>>", pods_env.get(match, ""))
+                
+                # Handle tapissecret_ replacements
+                for match in tapissecret_matches:
+                    new_item = new_item.replace(f"<<tapissecret_{match}>>", pods_env.get(match, ""))
+                    
+                new_command.append(new_item)
+            else:
+                new_command.append(item)
+        pod.command = new_command
+
+    # arguments
+    if pod.arguments and isinstance(pod.arguments, list):
+        new_arguments = []
+        for item in pod.arguments:
+            if isinstance(item, str):
+                # Find both TAPIS_ and tapissecret_ patterns
+                tapis_matches = re.findall(r'<<TAPIS_(.*?)>>', item)
+                tapissecret_matches = re.findall(r'<<tapissecret_(.*?)>>', item)
+                
+                new_item = item
+                # Handle TAPIS_ replacements
+                for match in tapis_matches:
+                    new_item = new_item.replace(f"<<TAPIS_{match}>>", pods_env.get(match, ""))
+                
+                # Handle tapissecret_ replacements
+                for match in tapissecret_matches:
+                    new_item = new_item.replace(f"<<tapissecret_{match}>>", pods_env.get(match, ""))
+                    
+                new_arguments.append(new_item)
+            else:
+                new_arguments.append(item)
+        pod.arguments = new_arguments
 
     volumes = []
     volume_mounts = []

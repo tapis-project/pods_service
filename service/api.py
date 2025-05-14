@@ -12,6 +12,7 @@ from auth import authorization, authentication
 from api_pods import router as router_pods
 from api_pods_podid import router as router_pods_podsid
 from api_pods_podid_func import router as router_pods_podsid_func
+from api_pods_podid_jupyter import router as router_pods_podsid_jupyter
 from api_volumes import router as router_volumes
 from api_volumes_volid import router as router_volumes_volumeid
 from api_volumes_volid_func import router as router_volumes_volumeid_func
@@ -124,6 +125,8 @@ api.include_router(router_snapshots_snapshotid_func)
 api.include_router(router_volumes)
 api.include_router(router_volumes_volumeid)
 api.include_router(router_volumes_volumeid_func)
+# jupyter
+api.include_router(router_pods_podsid_jupyter)
 # pods
 api.include_router(router_pods)
 api.include_router(router_pods_podsid)

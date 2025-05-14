@@ -125,18 +125,25 @@ async def get_derived_pod(pod_id):
     ###
     ### SECRETS
     ###
-    # Need to replace all "<<TAPIS_vars>>" with vals from secrets for example needs to work for "dsadsadsa <<TAPIS_mysecret>> dsadsadsa".
+    # Need to replace all "<<TAPIS_vars>>" or "<<tapissecret_vars>>" with vals from secrets
     # currently just the passwords db table. Eventually that'll become pods_env which itself could reference sk if that's needed.
     pods_env = Password.db_get_with_pk(pod.pod_id, pod.tenant_id, pod.site_id)
     pods_env = pods_env.dict()
     for key, val in final_pod.environment_variables.items():
         new_val = val
         if isinstance(val, str):
-            # regex to create list of [<<TAPIS_*>> strings, str of inner variable without >><<]
-            matches = re.findall(r'<<TAPIS_(.*?)>>', val)
-            for match in matches:
-                new_val = new_val.replace(f"<<TAPIS_{match}>>", pods_env.get(match))
+            # Find both TAPIS_ and tapissecret_ patterns
+            tapis_matches = re.findall(r'<<TAPIS_(.*?)>>', val)
+            tapissecret_matches = re.findall(r'<<tapissecret_(.*?)>>', val)
+            
+            # Handle TAPIS_ replacements
+            for match in tapis_matches:
+                new_val = new_val.replace(f"<<TAPIS_{match}>>", pods_env.get(match, ""))
+            
+            # Handle tapissecret_ replacements
+            for match in tapissecret_matches:
+                new_val = new_val.replace(f"<<tapissecret_{match}>>", pods_env.get(match, ""))
+                
             final_pod.environment_variables[key] = new_val
-
 
     return ok(result=final_pod.display(), msg="Final derived pod retrieved successfully.")

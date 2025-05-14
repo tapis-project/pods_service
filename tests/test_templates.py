@@ -222,8 +222,8 @@ def test_add_template_postgres(headers):
                 "-c", "ssl_key_file=/etc/ssl/private/ssl-cert-snakeoil.key"
             ],
             "environment_variables": {
-                "POSTGRES_USER": "<<TAPIS_user_username>>",
-                "POSTGRES_PASSWORD": "<<TAPIS_user_password>>",
+                "POSTGRES_USER": "<<tapissecret_user_username>>",
+                "POSTGRES_PASSWORD": "<<tapissecret_user_password>>",
             },
             "networking": {
                 "default": {
@@ -294,9 +294,9 @@ def test_add_template_neo4j(headers):
                 "NEO4J_apoc_export_file_enabled": "true",
                 # Create users here with env and apoc. Different format than Neo4J. Kinda borked, might change. github.com/neo4j-contrib/neo4j-apoc-procedures/issues/2120
                 # Pods admin user
-                "apoc.initializer.system.1": f"CREATE USER <<TAPIS_admin_username>> IF NOT EXISTS SET PLAINTEXT PASSWORD '<<TAPIS_admin_password>>' SET PASSWORD CHANGE NOT REQUIRED",
+                "apoc.initializer.system.1": f"CREATE USER <<tapissecret_admin_username>> IF NOT EXISTS SET PLAINTEXT PASSWORD '<<tapissecret_admin_password>>' SET PASSWORD CHANGE NOT REQUIRED",
                 # Users user
-                "apoc.initializer.system.2": f"CREATE USER <<TAPIS_user_username>> IF NOT EXISTS SET PLAINTEXT PASSWORD '<<TAPIS_user_password>>' SET PASSWORD CHANGE NOT REQUIRED"
+                "apoc.initializer.system.2": f"CREATE USER <<tapissecret_user_username>> IF NOT EXISTS SET PLAINTEXT PASSWORD '<<tapissecret_user_password>>' SET PASSWORD CHANGE NOT REQUIRED"
             },
         },
         "tag": test_template_tag_4,

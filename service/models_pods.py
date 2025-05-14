@@ -399,7 +399,7 @@ class PodBaseFull(PodBaseRead):
     
     def display(self):
         display = self.dict()
-        display.pop('logs')
+        display.pop('logs', None)
         display.pop('k8_name')
         display.pop('tenant_id')
         display.pop('permissions')
@@ -747,7 +747,7 @@ class Pod(TapisPodBaseFull, table=True, validate=True):
 
     def display(self):
         display = self.dict()
-        display.pop('logs')
+        display.pop('logs', None)
         display.pop('k8_name')
         display.pop('tenant_id')
         display.pop('permissions')
@@ -763,7 +763,7 @@ class Pod(TapisPodBaseFull, table=True, validate=True):
         template_tag_bit.pop('tenant_id')
         template_tag_bit.pop('site_id')
         template_tag_bit.pop('k8_name')
-        template_tag_bit.pop('logs')
+        template_tag_bit.pop('logs', None)
         template_tag_bit.pop('permissions')
         template_tag_bit.pop('action_logs')
         template_tag_bit.pop('status_requested')

@@ -94,11 +94,11 @@ http:
       rule: "Host(`{{ pdata.url }}`)"
       {% if pdata.tapis_auth or pdata.cors_allow_origins or pdata.ip_allow_list -%}
       middlewares:
-        {% if pdata.cors_allow_origins -%}
-        - "tapis-cors-{{ pname }}"
-        {% endif -%}
         {% if pdata.ip_allow_list -%}
         - "tapis-ipallowlist-{{ pname }}"
+        {% endif -%}
+        {% if pdata.cors_allow_origins -%}
+        - "tapis-cors-{{ pname }}"
         {% endif -%}
         {% if pdata.tapis_auth -%}
         - "tapis-auth-{{ pname }}"

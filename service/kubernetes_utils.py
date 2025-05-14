@@ -201,6 +201,62 @@ def get_k8_logs(name: str):
     except Exception as e:
         return ""
 
+def k8s_copy_bytes_to_pod(
+    k8_name: str,
+    dest_path: str,
+    file_bytes: bytes,
+    namespace: str = "",
+    container: str = None
+):
+    """
+    Streams bytes directly into a file inside a running Kubernetes pod using an exec session.
+
+    Args:
+        k8_name (str): The name of the Kubernetes pod.
+        dest_path (str): The absolute path inside the pod where the file will be written.
+        file_bytes (bytes): The file content as bytes to write into the pod.
+        namespace (str, optional): The Kubernetes namespace where the pod resides. Defaults to "" (will use default or configured namespace).
+        container (str, optional): The name of the container within the pod to execute the command in.
+            - If not specified, the first container in the pod will be used.
+            - Use this if your pod has multiple containers and you want to target a specific one.
+
+    Returns:
+        None
+
+    Raises:
+        Exception: If the exec or file write fails.
+
+    Example:
+        k8s_copy_bytes_to_pod(
+            k8_name="my-pod",
+            dest_path="/tmp/uploaded.txt",
+            file_bytes=b"hello world",
+            namespace="my-namespace",
+            container="main"
+        )
+    """
+
+    exec_command = [
+        '/bin/sh',
+        '-c',
+        f'cat > {dest_path}'
+    ]
+    resp = stream.stream(
+        k8.connect_get_namespaced_pod_exec,
+        k8_name,
+        namespace or NAMESPACE,
+        command=exec_command,
+        stderr=True,
+        stdin=True,
+        stdout=True,
+        tty=False,
+        container=container,
+        _preload_content=False
+    )
+    resp.write_stdin(file_bytes)
+    resp.close()
+
+
 def run_k8_exec(k8_name: str, command: list, namespace: str = "", timeout: int = 60):
     # This starts a Kubernetes exec in the background. We can poll progress/status
     # if the exec is still running with resp.is_open().

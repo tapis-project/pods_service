@@ -47,7 +47,10 @@ def get_user_sk_roles():
     if total > 4000:
         logger.critical(f"t.sk.getUserRoles took {total} to run for user {g.username}, tenant: {g.request_tenant_id}")
     roles_list = roles_obj.names
-    logger.debug(f"Roles received: {roles_list}")
+    if len(roles_list) < 10:
+        logger.debug(f"Roles received: {roles_list}")
+    else: 
+        logger.debug(f"Roles received: {roles_list[:10]}... and {len(roles_list) - 10} more")
     g.roles = roles_list
 
 
@@ -169,6 +172,9 @@ def check_route_permissions(request):
         ["/pods/snapshots/{snapshot_id}", "DELETE", codes.ADMIN],
         ["/pods/snapshots", "GET", codes.NONE],
         ["/pods/snapshots", "POST", codes.NONE],
+        # JUPYTER
+        ["/pods/jupyter/{pod_id}/upload", "POST", codes.USER],
+        ["/pods/jupyter/ensure", "GET", codes.USER],
         # PODS
         ["/pods/{pod_id}/permissions", "GET", codes.USER],
         ["/pods/{pod_id}/permissions/{user}", "DELETE", codes.ADMIN],
@@ -176,6 +182,7 @@ def check_route_permissions(request):
         ["/pods/{pod_id}/logs", "GET", codes.READ],
         ["/pods/{pod_id}/credentials", "GET", codes.USER],
         ["/pods/{pod_id}/save_pod_as_template_tag", "POST", codes.ADMIN],
+        ["/pods/{pod_id}/upload_to_pod", "POST", codes.ADMIN],
         ["/pods/{pod_id}/stop", "GET", codes.ADMIN],
         ["/pods/{pod_id}/start", "GET", codes.ADMIN],
         ["/pods/{pod_id}/restart", "GET", codes.ADMIN],
@@ -243,11 +250,18 @@ def check_route_permissions(request):
         has_pem = True
 
     if "{pod_id_net}" in matched_route[0]:
+        logger.debug(f"Matched {{pod_id_net}} route. request.url.path: {request.url.path}")
         # pod_id_net can be `myid-networking3` for example. We need to get rid of the networking bit for permissions check
         pod = check_object_id(request, 'pod', 2)
         pod.pod_id = pod.pod_id.split("-")[0]
         has_pem = check_permissions(user=g.username, object=pod, object_type="pod", level=matched_route[2] , roles=g.roles)
+    elif "jupyter/{pod_id}" in matched_route[0]:
+        logger.debug(f"Matched jupyter/--pod_id-- route. request.url.path: {request.url.path}")
+        # moves field to 3rd position
+        pod = check_object_id(request, 'pod', 3)
+        has_pem = check_permissions(user=g.username, object=pod, object_type="pod", level=matched_route[2] , roles=g.roles)
     elif "{pod_id}" in matched_route[0]:
+        logger.debug(f"Matched /--pod_id-- route. request.url.path: {request.url.path}")
         pod = check_object_id(request, 'pod', 2)
         has_pem = check_permissions(user=g.username, object=pod, object_type="pod", level=matched_route[2] , roles=g.roles)
     elif "{volume_id}" in matched_route[0]:
@@ -263,6 +277,9 @@ def check_route_permissions(request):
         image = check_object_id(request, 'image', 3)
         # images don't have permissions
         #has_pem = check_permissions(user=g.username, object=image, object_type="image", level=matched_route[2] , roles=g.roles)
+    elif "jupyter/ensure" in matched_route[0]:
+        # jupyter/ensure doesn't have permissions
+        has_pem = True
 
     # check for codes.NONE
     if matched_route[2] == codes.NONE:
@@ -273,7 +290,7 @@ def check_route_permissions(request):
     # Last minute check for stragglers
     if not has_pem:
         logger.info("NOT allowing request.")
-        raise PermissionsException(f"Not authorized -- you do not have access to this endpoint. {matched_route[1]}-{matched_route[0]}")
+        raise PermissionsException(f"Not authorized -- you do not have access to this endpoint. {matched_route[1]} {matched_route[0]}")
 
 
 def authentication(request):

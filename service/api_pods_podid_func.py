@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Request, HTTPException, UploadFile, File, Form
 from fastapi.responses import JSONResponse, RedirectResponse
 from models_pods import Pod, Password, PodResponse, PodPermissionsResponse, PodCredentialsResponse, PodLogsResponse, ExecutePodCommands
 from models_templates_tags import Template, TemplateTag, TemplateTagResponse, NewTemplateTagFromPod
@@ -11,11 +11,16 @@ from tapisservice.tapisfastapi.utils import g, ok
 from tapisservice.config import conf
 from __init__ import t, BadRequestError
 from typing import List, Any
-from kubernetes_utils import run_k8_exec
+from kubernetes_utils import run_k8_exec, k8s_copy_bytes_to_pod, NAMESPACE
 from utils import check_permissions
 from errors import ResourceError, PermissionsException
 from datetime import datetime
 import time
+import re
+import asyncio
+
+CHUNK_TIMEOUT = 60  # seconds per chunk
+CHUNK_SIZE = 2 * 1024 * 1024  # 2MB chunkscv
 
 from tapisservice.logs import get_logger
 logger = get_logger(__name__)
@@ -176,6 +181,33 @@ async def exec_pod_commands(pod_id, command: ExecutePodCommands):
     for n, cmd in enumerate(commands):
         try:
             logger.debug(f"Running command ({n+1}/{len(commands)}) in pod {pod_id}: {cmd}")
+            ## each command can use <<podssecret_*>> or <<TAPIS_*>>(legacy) variables, so we need to replace them with the values from the pod_env
+            pods_env = Password.db_get_with_pk(pod.pod_id, pod.tenant_id, pod.site_id).dict()
+
+            # Replace <<TAPIS_*>> variables in command
+            if isinstance(cmd, list):
+                cmd_before_replace = cmd
+                new_cmd = []
+                for item in cmd:
+                    if isinstance(item, str):
+                        # Find both TAPIS_ and tapissecret_ patterns
+                        tapis_matches = re.findall(r'<<TAPIS_(.*?)>>', item)
+                        tapissecret_matches = re.findall(r'<<tapissecret_(.*?)>>', item)
+                        
+                        new_item = item
+                        # Handle TAPIS_ replacements
+                        for match in tapis_matches:
+                            new_item = new_item.replace(f"<<TAPIS_{match}>>", pods_env.get(match, ""))
+                        
+                        # Handle tapissecret_ replacements
+                        for match in tapissecret_matches:
+                            new_item = new_item.replace(f"<<tapissecret_{match}>>", pods_env.get(match, ""))
+                            
+                        new_cmd.append(new_item)
+                    else:
+                        new_cmd.append(item)
+                cmd = new_cmd
+
             cmd_start_time = time.time()
             stdout, stderr, duration, status, success = run_k8_exec(pod.k8_name, cmd, timeout=command.command_timeout)
             
@@ -213,14 +245,86 @@ async def exec_pod_commands(pod_id, command: ExecutePodCommands):
         summary += f" ({custom_msg.split(' Consider')[0]})"
     pod.db_update(summary)
 
+    total_commands = len(commands)
+    successful_commands = sum(1 for r in results if r["success"])
+
+    # Create a more descriptive message about command success
+    if successful_commands == total_commands:
+        success_msg = "All Commands Successful"
+    else:
+        success_msg = f"{successful_commands} of {total_commands} commands successful"
+    
+    # Append custom message if exists
+    if custom_msg:
+        final_msg = f"{success_msg} - {custom_msg}"
+    else:
+        final_msg = success_msg
+
     return ok(
         result={
             "execution_results": results,
-            "total_commands": len(commands),
-            "successful_commands": sum(1 for r in results if r["success"]),
+            "total_commands": total_commands,
+            "successful_commands": successful_commands,
         },
-        msg=custom_msg or "All commands completed."
+        msg=final_msg
     )
+
+
+@router.post(
+    "/pods/{pod_id}/upload_to_pod",
+    tags=["Pods"],
+    summary="Upload a file directly into the pod's filesystem",
+    operation_id="upload_to_pod",
+)
+async def upload_to_pod(
+    pod_id: str,
+    file: UploadFile = File(...),
+    dest_path: str = Form(...)
+):
+    """
+    Upload a file to a specific path inside the pod using Kubernetes exec/copy (chunked streaming, no temp file).
+    """
+    logger.info(f"POST /pods/{pod_id}/upload_to_pod - Top of upload_to_pod.")
+    pod = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
+
+    if not pod or getattr(pod, "status_requested", None) != "ON":
+        return JSONResponse(content="Can't find suitable running pod for upload.", status_code=404)
+
+    if not dest_path:
+        return JSONResponse(content=f"Destination path is required, got: {dest_path}", status_code=400)
+
+    # Open exec session to pod
+    from kubernetes.stream import stream
+    from kubernetes import client as k8s_client
+    exec_command = ['/bin/sh', '-c', f'cat > {dest_path}']
+    api = k8s_client.CoreV1Api()
+    try:
+        resp = stream(
+            api.connect_get_namespaced_pod_exec,
+            pod.k8_name,
+            NAMESPACE,
+            command=exec_command,
+            stderr=True,
+            stdin=True,
+            stdout=True,
+            tty=False,
+            container=None,  # or pod.k8_container if needed
+            _preload_content=False
+        )
+
+        # Read and send file in chunks
+        while True:
+            chunk = await file.read(2 * 1024 * 1024)  # 2MB chunks - not too worried about memory quite yet
+            if not chunk:
+                break
+            resp.write_stdin(chunk)
+        resp.close()
+    except Exception as e:
+        logger.error(f"Error uploading file to pod: {e}")
+        return JSONResponse(content=f"Failed to upload file to pod: {e}", status_code=500)
+
+    return ok(result={"uploaded": dest_path, "pod_name": pod.pod_id}, msg="File uploaded to pod successfully.")
+
 
 @router.delete(
     "/pods/{pod_id}/permissions/{user}",
@@ -387,7 +491,6 @@ def validate_token(request: Request, token: str = None):
     except Exception as e:
         logger.error(f"Error with request to userinfo and parsing: {e}")
         return False, None, None
-        #raise HTTPException(status_code=401, detail="Invalid or expired authentication token.")
 
 
 @router.post(
