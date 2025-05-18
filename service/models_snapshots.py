@@ -7,7 +7,7 @@ from secrets import choice
 from datetime import datetime
 from typing import List, Dict, Literal, Any, Set, Optional
 from wsgiref import validate
-from pydantic import BaseModel, Field, validator, root_validator, create_model
+from pydantic import BaseModel, Field, validator, model_validator, create_model
 from codes import PermissionLevel, USER
 
 from stores import pg_store
@@ -113,7 +113,7 @@ class Snapshot(TapisSnapshotBaseFull, table=True, validate=True):
             raise ValueError(f"description field must be less than 255 characters. Inputted length: {len(v)}")
         return v
 
-    @validator('source_volume_id', pre=False)
+    @validator('source_volume_id')
     def check_source_volume_id(cls, v):
         # Check volume_id because there's no reason not to. Should follow same rules as initate volume_id create.
         # Regex match full source_volume_id to ensure a-z0-9.
@@ -142,25 +142,26 @@ class Snapshot(TapisSnapshotBaseFull, table=True, validate=True):
             raise ValueError(f"size_limit must be between 1 and 3072 (MB)")
         return v
 
-    @root_validator(pre=False)
+    @model_validator(mode="after")
     def set_k8_name_and_networking_urls(cls, values):
         # NOTE: Pydantic loops during validation, so for a few calls, tenant_id and site_id will be NONE.
         # Must account for this. By end of loop, everything will be set properly.
         # In this case "tacc" tenant is backup.
-        site_id = values.get('site_id')
-        tenant_id = values.get('tenant_id') or "tacc"
-        pod_id = values.get('pod_id')
-        ### k8_name: podvol-<site>-<tenant>-<pod_id>
-        values['k8_name'] = f"podvol-{site_id}-{tenant_id}-{pod_id}"
+        site_id = getattr(values, 'site_id', None)
+        tenant_id = getattr(values, 'tenant_id', 'tacc')
+        pod_id = getattr(values, 'pod_id', None)
+        ### k8_name: pods-<site>-<tenant>-<pod_id>
+        #values.k8_name = f"pods-{site_id}-{tenant_id}-{pod_id}"
+        object.__setattr__(values, "k8_name", f"podvol-{site_id}-{tenant_id}-{pod_id}")
         return values
 
-    @root_validator(pre=False)
+    @model_validator(mode="after")
     def check_source_volume_id_and_path(cls, values):
         # NOTE: Pydantic loops during validation, so for a few calls, source_volume_id and source_volume_path will be NONE.
         # Must account for this. By end of loop, everything will be set properly.
-        source_volume_id = values.get('source_volume_id')
-        source_volume_path = values.get('source_volume_path')
-        destination_path = values.get('destination_path')
+        source_volume_id = getattr(values, 'source_volume_id', None)
+        source_volume_path = getattr(values, 'source_volume_path', None)
+        destination_path = getattr(values, 'destination_path', None)
 
         if source_volume_path and source_volume_id and destination_path is not None:
             # Ensure source_volume_id exists in database.

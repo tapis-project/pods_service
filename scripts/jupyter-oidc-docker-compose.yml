@@ -1,0 +1,34 @@
+
+
+###
+#### WARN - I think this is just for jupyterhub, not jupyterlab. could be wrong, went with another method.
+#### This might be a good start for hub if we want to deploy.
+###
+
+version: "3.8"
+services:
+  jupyter:
+    image: quay.io/jupyter/scipy-notebook:2024-05-27
+    container_name: jupyterhub
+    environment:
+      # OAuth2 / OIDC parameters for GenericOAuthenticator
+      OAUTH2_CLIENT_ID:      "${OAUTH2_CLIENT_ID}"        # your client ID :contentReference[oaicite:0]{index=0}
+      OAUTH2_CLIENT_SECRET:  "${OAUTH2_CLIENT_SECRET}"    # your client secret :contentReference[oaicite:1]{index=1}
+      OAUTH2_AUTHORIZE_URL:  "${OAUTH2_AUTHORIZE_URL}"    # e.g. https://issuer.com/oauth2/authorize :contentReference[oaicite:2]{index=2}
+      OAUTH2_TOKEN_URL:      "${OAUTH2_TOKEN_URL}"        # e.g. https://issuer.com/oauth2/token :contentReference[oaicite:3]{index=3}
+      OAUTH2_USERDATA_URL:   "${OAUTH2_USERDATA_URL}"     # e.g. https://issuer.com/oauth2/userinfo :contentReference[oaicite:4]{index=4}
+      OAUTH2_USERNAME_KEY:   "${OAUTH2_USERNAME_KEY:-preferred_username}"  # JSON field for the username :contentReference[oaicite:5]{index=5}
+
+    # Mount any persistent storage you need (not required for config injection)
+#    volumes:
+#      - jupyter-data:/home/jovyan
+    command: >
+      bash -c "
+        echo 'c.JupyterHub.authenticator_class = \"oauthenticator.generic.GenericOAuthenticator\"' >> /etc/jupyter/jupyter_service_config.py &&
+        echo 'c.GenericOAuthenticator.client_id = \"'${OAUTH_CLIENT_ID}'\"' >> /etc/jupyter/jupyter_service_config.py &&
+        echo 'c.GenericOAuthenticator.client_secret = \"'${OAUTH_CLIENT_SECRET}'\"' >> /etc/jupyter/jupyter_service_config.py &&
+        echo 'c.GenericOAuthenticator.oauth_callback_url = \"'${OAUTH_CALLBACK_URL}'\"' >> /etc/jupyter/jupyter_service_config.py &&
+        tini -g -- start.sh start-notebook.py
+      "
+    ports:
+      - 8888:8888

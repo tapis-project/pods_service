@@ -7,7 +7,7 @@ from secrets import choice
 from datetime import datetime
 from typing import List, Dict, Literal, Any, Set
 from wsgiref import validate
-from pydantic import BaseModel, Field, validator, root_validator, conint, create_model
+from pydantic import BaseModel, Field, validator, conint, create_model
 from codes import PermissionLevel
 
 from stores import pg_store

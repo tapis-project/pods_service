@@ -6,7 +6,7 @@ from logging.config import fileConfig
 import re
 import os
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy import pool
 
 from alembic import context
@@ -37,16 +37,16 @@ all_urls = {}
 for site, tenants in pg_store.items():
     # Create database and fail gracefully if it already exists
     try:
-        pg_default.run('execute', f'CREATE DATABASE "{site}"', autocommit=True)
-    except:
-        msg = f"Database for site: {site}, already exists. Skipping."
+        pg_default.run('execute', text(f'CREATE DATABASE "{site}"'), autocommit=True)
+    except Exception as e:
+        msg = f"Database for site: {site}, already exists. Skipping. Error: {repr(e)}"
         logger.warning(msg)
     
     # Create schemas for each tenant
     for tenant, pg in tenants.items():
         try:
             # TODO indexes! #CREATE CONSTRAINT FOR (p:Pod) REQUIRE p.name IS UNIQUE
-            pg.run("execute", f'CREATE SCHEMA IF NOT EXISTS "{tenant}"', autocommit=True)
+            pg.run("execute", text(f'CREATE SCHEMA IF NOT EXISTS "{tenant}"'), autocommit=True)
         except Exception as e:
             msg = f"Error when creating schemas for tenant: {tenant}. e: {repr(e)}"
             logger.warning(msg)
@@ -55,7 +55,7 @@ for site, tenants in pg_store.items():
         conninfo = f"postgresql://{username}:{password}@{host}/{site}"#?options=-csearch_path%3Ddbo,{tenant}"
         name = f"{site}_{tenant}".replace("-", "HYPHEN") # Some tenants have - in their names. This messes up alembic later.
         all_urls[site] = conninfo
-        engines[name] = create_engine(conninfo, future=False)
+        engines[name] = create_engine(conninfo)
         config.set_section_option(name, "sqlalchemy.url", conninfo)
 
 # Add databases to alembic's list of databases.
@@ -111,34 +111,67 @@ def run_migrations_online():
             # Reference https://alembic.sqlalchemy.org/en/latest/cookbook.html#rudimental-schema-level-multi-tenancy-for-postgresql-databases
             # Get engine/connection/transaction and add some schema stuff to it.
             logger.info(f"{engine}")
-            connection = engine.connect()
-            logger.info(f"{connection}")
-            connection.execute(f'set search_path to "{tenant}"')
-            connection.dialect.default_schema_name = tenant
-            connections.append(connection)
-            # Create transaction
-            transaction = connection.begin()
-            transactions.append(transaction)
-            # Create context
-            context.configure(
-                connection=connection,
-                include_schemas=False, # Has to be False else migrations will be made per schema, when we want it done for all.
-                upgrade_token=f"upgrade_alltenants",
-                downgrade_token=f"downgrade_alltenants",
-                target_metadata=target_metadata,
-                process_revision_directives=process_revision_directives
-            )
-            context.run_migrations(engine_name=name)
-
-        for transaction in transactions:
-            transaction.commit()
-    except:
-        for transaction in transactions:
-            transaction.rollback()
+            with engine.connect() as connection:
+                logger.info(f"{connection}")
+                # Start a transaction context
+                with connection.begin():
+                    connection.execute(text(f'SET search_path TO "{tenant}"'))
+                    connection.dialect.default_schema_name = tenant
+                    context.configure(
+                        connection=connection,
+                        include_schemas=False,
+                        upgrade_token=f"upgrade_alltenants",
+                        downgrade_token=f"downgrade_alltenants",
+                        target_metadata=target_metadata,
+                        process_revision_directives=process_revision_directives
+                    )
+                    context.run_migrations(engine_name=name)
+    except Exception:
+        logger.exception("Migration failed")
         raise
-    finally:
-        for connection in connections:
-            connection.close()
+    logger.debug("==========================================")
+    logger.debug("Migration completed successfully")
+
+    # try:
+    #     # Create tables in each tenant(schema) in each database.
+    #     for name, engine in engines.items():
+    #         site, tenant = name.split('_')
+    #         tenant = tenant.replace('HYPHEN', '-')
+
+    #         ## GO THROUGH ALL TENANTS, MEANING MIGRATE TO EACH SCHEMA!
+    #         logger.info(f"Migrating database {site}; tenant {tenant}")
+    #         # Reference https://alembic.sqlalchemy.org/en/latest/cookbook.html#rudimental-schema-level-multi-tenancy-for-postgresql-databases
+    #         # Get engine/connection/transaction and add some schema stuff to it.
+    #         logger.info(f"{engine}")
+    #         connection = engine.connect()
+    #         logger.info(f"{connection}")
+    #         # Use text() for SQL expressions
+    #         connection.execute(text(f'set search_path to "{tenant}"'))
+    #         connection.dialect.default_schema_name = tenant
+    #         connections.append(connection)
+    #         # Create transaction
+    #         transaction = connection.begin()
+    #         transactions.append(transaction)
+    #         # Create context
+    #         context.configure(
+    #             connection=connection,
+    #             include_schemas=False, # Has to be False else migrations will be made per schema, when we want it done for all.
+    #             upgrade_token=f"upgrade_alltenants",
+    #             downgrade_token=f"downgrade_alltenants",
+    #             target_metadata=target_metadata,
+    #             process_revision_directives=process_revision_directives
+    #         )
+    #         context.run_migrations(engine_name=name)
+
+    #     for transaction in transactions:
+    #         transaction.commit()
+    # except:
+    #     for transaction in transactions:
+    #         transaction.rollback()
+    #     raise
+    # finally:
+    #     for connection in connections:
+    #         connection.close()
 
 
 run_migrations_online()

@@ -7,7 +7,7 @@ from secrets import choice
 from datetime import datetime
 from typing import List, Dict, Literal, Any, Set, Optional
 from wsgiref import validate
-from pydantic import BaseModel, Field, validator, root_validator, create_model
+from pydantic import BaseModel, Field, validator, model_validator, create_model
 from codes import PERMISSION_LEVELS, PermissionLevel
 
 from stores import pg_store
@@ -102,16 +102,17 @@ class Volume(TapisVolumeBaseFull, table=True, validate=True):
             raise ValueError(f"description field must be less than 255 characters. Inputted length: {len(v)}")
         return v
 
-    @root_validator(pre=False)
+    @model_validator(mode="after")
     def set_k8_name_and_networking_urls(cls, values):
         # NOTE: Pydantic loops during validation, so for a few calls, tenant_id and site_id will be NONE.
         # Must account for this. By end of loop, everything will be set properly.
         # In this case "tacc" tenant is backup.
-        site_id = values.get('site_id')
-        tenant_id = values.get('tenant_id') or "tacc"
-        pod_id = values.get('pod_id')
-        ### k8_name: podvol-<site>-<tenant>-<pod_id>
-        values['k8_name'] = f"podvol-{site_id}-{tenant_id}-{pod_id}"
+        site_id = getattr(values, 'site_id', None)
+        tenant_id = getattr(values, 'tenant_id', 'tacc')
+        pod_id = getattr(values, 'pod_id', None)
+        ### k8_name: pods-<site>-<tenant>-<pod_id>
+        #values.k8_name = f"pods-{site_id}-{tenant_id}-{pod_id}"
+        object.__setattr__(values, "k8_name", f"podvol-{site_id}-{tenant_id}-{pod_id}")
         return values
 
     def display(self):

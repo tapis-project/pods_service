@@ -7,7 +7,7 @@ from secrets import choice
 from datetime import datetime
 from typing import List, Dict, Literal, Any, Set
 from wsgiref import validate
-from pydantic import BaseModel, Field, validator, root_validator, conint, create_model
+from pydantic import BaseModel, Field, validator, model_validator, conint, create_model
 from codes import PermissionLevel
 
 from stores import pg_store
@@ -63,7 +63,7 @@ def derive_template_info(input_template_name, update_template_tag: bool = False,
     ## template_tag check
     if template_tag and tag_timestamp:
         full_tag = f"{template_tag}@{tag_timestamp}"
-        template_tags = TemplateTag.db_get_where(where_params=[['tag_timestamp', '.eq', full_tag]], sort_column='creation_ts', tenant=tenant, site=site)
+        template_tags = TemplateTag.db_get_where(where_params=[['tag_timestamp', '.eq', str(full_tag)]], sort_column='creation_ts', tenant=tenant, site=site)
         if not template_tags:
             raise ValueError(f"Error finding template tag. Could not find tag_timestamp matching: {input_template_name}. tenant: {tenant}, site: {site}.")
         if len(template_tags) > 1:
@@ -218,16 +218,16 @@ class Networking(TapisModel):
                     raise TypeError(f"networking.ip_allow_list must be list of str. Got '{type(ip).__name__}'.")
         return v
 
-    @root_validator(pre=False)
+    @model_validator(mode="after")
     def check_tapis_protocol_with_configured_options(cls, values):
-        protocol = values.get('protocol')
-        tapis_auth = values.get('tapis_auth')
+        protocol = getattr(values, 'protocol', None)
+        tapis_auth = getattr(values, 'tapis_auth', None)
         # cors too are http only
-        cors_allow_origins = values.get('cors_allow_origins')
-        cors_allow_methods = values.get('cors_allow_methods')
-        cors_allow_headers = values.get('cors_allow_headers')
-        cors_allow_credentials = values.get('cors_allow_credentials')
-        cors_max_age = values.get('cors_max_age')
+        cors_allow_origins = getattr(values, 'cors_allow_origins', None)
+        cors_allow_methods = getattr(values, 'cors_allow_methods', None)
+        cors_allow_headers = getattr(values, 'cors_allow_headers', None)
+        cors_allow_credentials = getattr(values, 'cors_allow_credentials', None)
+        cors_max_age = getattr(values, 'cors_max_age', None)
 
         if tapis_auth and protocol != "http":
             raise ValueError(f"networking.tapis_auth can only be used with protocol 'http'. Got protocol {protocol}.")
@@ -243,13 +243,13 @@ class Networking(TapisModel):
 class Resources(TapisModel):
     # CPU/Mem defaults are set in configschema.json
     # CPU
-    cpu_request: int = Field(None, description = "CPU allocation pod requests at startup. In millicpus (m). 1000 = 1 cpu.")
-    cpu_limit: int = Field(None, description = "CPU allocation pod is allowed to use. In millicpus (m). 1000 = 1 cpu.")
+    cpu_request: int | None = Field(None, description = "CPU allocation pod requests at startup. In millicpus (m). 1000 = 1 cpu.")
+    cpu_limit: int | None = Field(None, description = "CPU allocation pod is allowed to use. In millicpus (m). 1000 = 1 cpu.")
     # Mem
-    mem_request: int = Field(None, description = "Memory allocation pod requests at startup. In megabytes (Mi)")
-    mem_limit: int = Field(None, description = "Memory allocation pod is allowed to use. In megabytes (Mi)")
+    mem_request: int | None = Field(None, description = "Memory allocation pod requests at startup. In megabytes (Mi)")
+    mem_limit: int | None = Field(None, description = "Memory allocation pod is allowed to use. In megabytes (Mi)")
     # GPU
-    gpus: int = Field(None, description = "GPU allocation pod is allowed to use. In integers of GPUs. (we only have 1 currently ;) )")
+    gpus: int | None = Field(None, description = "GPU allocation pod is allowed to use. In integers of GPUs. (we only have 1 currently ;) )")
 
     @validator('cpu_request', 'cpu_limit')
     def check_cpu_resources(cls, v):
@@ -283,14 +283,14 @@ class Resources(TapisModel):
                  " User requires extra role to break bounds. Contact admin."
                 )
         return v
-    @root_validator(pre=False)
+    @model_validator(mode="after")
     def ensure_request_lessthan_limit(cls, values):
-        cpu_request = values.get("cpu_request")
-        cpu_limit = values.get("cpu_limit")
-        mem_request = values.get("mem_request")
-        mem_limit = values.get("mem_limit")
-        gpus = values.get("gpus") # There's no request/limit for gpus, just an int validated in check_gpus
-        
+        cpu_request = getattr(values, "cpu_request", None)
+        cpu_limit = getattr(values, "cpu_limit", None)
+        mem_request = getattr(values, "mem_request", None)
+        mem_limit = getattr(values, "mem_limit", None)
+        gpus = getattr(values, "gpus", None) # There's no request/limit for gpus, just an int validated in check_gpus
+
         # Check cpu values
         if cpu_request and cpu_limit and cpu_request > cpu_limit:
             raise ValueError(f"resources.cpu_x found cpu_request({cpu_request}) > cpu_limit({cpu_limit}). Request must be less than or equal to limit.")
@@ -327,9 +327,9 @@ class VolumeMount(TapisModel):
 class TemplateTagPodDefinition(TapisModel):
     # All fields are optional and default to None or empty objects for easier parsing of modified fields later
     # Optional
-    image: str = Field(None, description = "Which docker image to use, must be on allowlist, check /pods/images for list.")
-    template: str = Field(None, description = "Name of template to base this template off of.")
-    description: str = Field(None, description = "Description of this pod.")
+    image: str | None = Field(None, description = "Which docker image to use, must be on allowlist, check /pods/images for list.")
+    template: str | None = Field(None, description = "Name of template to base this template off of.")
+    description: str | None= Field(None, description = "Description of this pod.")
     command: List[str] | None = Field(None, description = 'Command to run in pod. ex. `["sleep", "5000"]` or `["/bin/bash", "-c", "(exec myscript.sh)"]`', sa_column=Column(ARRAY(String)))
     arguments: List[str] | None = Field(None, description = "Arguments for the Pod's command.", sa_column=Column(ARRAY(String)))
     environment_variables: Dict[str, Any] = Field({}, description = "Environment variables to inject into k8 pod; Only for custom pods.", sa_column=Column(JSON))
@@ -545,15 +545,16 @@ class TemplateTag(TapisModel, table=True, validate=True):
             return v
         return datetime.utcnow()
     
-    @root_validator(pre=False)
+    @model_validator(mode="after")
     def set_tag_timestamp(cls, values):
-        creation_ts = values.get('creation_ts')
-        tag = values.get('tag')
+        creation_ts = getattr(values, 'creation_ts', None)
+        tag = getattr(values, 'tag', None)
         if not creation_ts:
             # must wait for creation_ts to be set before we can set tag_timestamp
             return values
 
-        values['tag_timestamp'] = f"{tag}@{creation_ts.strftime('%Y-%m-%d-%H:%M:%S')}"
+        tag_timestamp = f"{tag}@{creation_ts.strftime('%Y-%m-%d-%H:%M:%S')}"
+        object.__setattr__(values, "tag_timestamp", tag_timestamp)
         return values
 
     def display(self):

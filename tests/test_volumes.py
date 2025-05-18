@@ -167,9 +167,10 @@ def test_update_volume_no_change(headers):
 
 ### Pod with Volume Mounted!
 def test_create_pod_with_volume(headers):
+    time.sleep(2)
     pod_def = {
         "pod_id": test_pod_1,
-        "image": "tiangolo/uvicorn-gunicorn-fastapi",
+        "image": "notchristiangarcia/testserver:fastapi",
         "description": "Test fastapi server pod",
         "networking": {
             "default": {
@@ -196,7 +197,7 @@ def test_create_pod_with_volume(headers):
 def test_pod_with_volume_startup(headers):
     # Wait for pod to be available
     i = 0
-    while i < 10:
+    while i < 30:
         rsp = client.get(f"/pods/{test_pod_1}", headers=headers)
         result = basic_response_checks(rsp)
         if result['status'] == "AVAILABLE":

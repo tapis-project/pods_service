@@ -42,7 +42,7 @@ async def update_pod(pod_id, update_pod: UpdatePod):
     post_update_pod = pod.dict().copy()
 
     # Only update if there's a change
-    if pod != pre_update_pod:
+    if post_update_pod != pre_update_pod:
         updated_fields = {key: post_update_pod[key] for key in post_update_pod if key in pre_update_pod and post_update_pod[key] != pre_update_pod[key]}
         pod.db_update(f"'{g.username}' updated pod, updated_fields: {updated_fields}")
     else:

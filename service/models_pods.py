@@ -7,7 +7,7 @@ from secrets import choice
 from datetime import datetime
 from typing import List, Dict, Literal, Any, Set, Optional, Union
 from wsgiref import validate
-from pydantic import BaseModel, Field, validator, root_validator, create_model
+from pydantic import BaseModel, Field, validator, model_validator, create_model
 from codes import PERMISSION_LEVELS, PermissionLevel
 
 from tapisservice.tapisfastapi.utils import g
@@ -18,6 +18,7 @@ logger = get_logger(__name__)
 from __init__ import t
 
 from sqlalchemy import UniqueConstraint
+from sqlalchemy.orm import defer
 from sqlalchemy.inspection import inspect
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlmodel import Field, Session, SQLModel, select, JSON, Column, String
@@ -43,19 +44,21 @@ class Password(TapisModel, table=True, validate=True):
     pod_id: str = Field(..., description = "Name of this pod.", primary_key = True)
     # Provided
     admin_username: str = Field("podsservice", description = "Admin username for pod.")
-    admin_password: str = Field(None, description = "Admin password for pod.")
-    user_username: str = Field(None, description = "User username for pod.")
-    user_password: str = Field(None, description = "User password for pod.")
+    admin_password: str = Field("", description = "Admin password for pod.")
+    user_username: str = Field("", description = "User username for pod.")
+    user_password: str = Field("", description = "User password for pod.")
     # Provided
-    tenant_id: str = Field(g.request_tenant_id, description = "Tapis tenant used during creation of this password's pod.")
-    site_id: str = Field(g.site_id, description = "Tapis site used during creation of this password's pod.")
+    tenant_id: str = Field("", description = "Tapis tenant used during creation of this password's pod.")
+    site_id: str = Field("", description = "Tapis site used during creation of this password's pod.")
 
     @validator('tenant_id')
     def check_tenant_id(cls, v):
+        logger.debug(f"top of models_pods.Password.check_tenant_id() {g.request_tenant_id}")
         return g.request_tenant_id
 
     @validator('site_id')
     def check_site_id(cls, v):
+        logger.debug(f"top of models_pods.Password.check_site_id() {g.site_id}")
         return g.site_id
 
     @validator('admin_password')
@@ -68,9 +71,9 @@ class Password(TapisModel, table=True, validate=True):
         password = ''.join(choice(ascii_letters + digits) for i in range(30))
         return password
 
-    @root_validator(pre=False)
+    @model_validator(mode="after")
     def set_user_username(cls, values):
-        values['user_username'] = values.get('pod_id')
+        object.__setattr__(values, "user_username", getattr(values, "pod_id"))
         return values
 
 
@@ -236,16 +239,16 @@ class Networking(TapisModel):
                     raise TypeError(f"networking.ip_allow_list must be list of str. Got '{type(ip).__name__}'.")
         return v
 
-    @root_validator(pre=False)
+    @model_validator(mode="after")
     def check_tapis_protocol_with_configured_options(cls, values):
-        protocol = values.get('protocol')
-        tapis_auth = values.get('tapis_auth')
+        protocol = getattr(values, 'protocol', None)
+        tapis_auth = getattr(values, 'tapis_auth', None)
         # cors too are http only
-        cors_allow_origins = values.get('cors_allow_origins')
-        cors_allow_methods = values.get('cors_allow_methods')
-        cors_allow_headers = values.get('cors_allow_headers')
-        cors_allow_credentials = values.get('cors_allow_credentials')
-        cors_max_age = values.get('cors_max_age')
+        cors_allow_origins = getattr(values, 'cors_allow_origins', None)
+        cors_allow_methods = getattr(values, 'cors_allow_methods', None)
+        cors_allow_headers = getattr(values, 'cors_allow_headers', None)
+        cors_allow_credentials = getattr(values, 'cors_allow_credentials', None)
+        cors_max_age = getattr(values, 'cors_max_age', None)
 
         if tapis_auth and protocol != "http":
             raise ValueError(f"networking.tapis_auth can only be used with protocol 'http'. Got protocol {protocol}.")
@@ -293,13 +296,13 @@ class Resources(TapisModel):
                  " User requires extra role to break bounds. Contact admin."
                 )
         return v
-    @root_validator(pre=False)
+    @model_validator(mode="after")
     def ensure_request_lessthan_limit(cls, values):
-        cpu_request = values.get("cpu_request")
-        cpu_limit = values.get("cpu_limit")
-        mem_request = values.get("mem_request")
-        mem_limit = values.get("mem_limit")
-        gpus = values.get("gpus") # There's no request/limit for gpus, just an int validated in check_gpus
+        cpu_request = getattr(values, 'cpu_request')
+        cpu_limit = getattr(values, 'cpu_limit')
+        mem_request = getattr(values, 'mem_request')
+        mem_limit = getattr(values, 'mem_limit')
+        gpus = getattr(values, 'gpus') # There's no request/limit for gpus, just an int validated in check_gpus
         
         # Check cpu values
         if cpu_request and cpu_limit and cpu_request > cpu_limit:
@@ -542,23 +545,24 @@ class Pod(TapisPodBaseFull, table=True, validate=True):
                     raise ValueError(f"User specified @timestamp without :tag. Template should be formated as 'template_name:template_tag@tag_timestamp'. Got {v}")
         return v
 
-    @root_validator(pre=False)
+    @model_validator(mode="after")
     def check_template_global(cls, values):
-        template = values.get('template')
-        tenant_id = values.get('tenant_id')
-        site_id = values.get('site_id')
+        template = getattr(values, 'template', None)
+        tenant_id = getattr(values, 'tenant_id', None)
+        site_id = getattr(values, 'site_id', None)
 
         if template != "" and tenant_id != None and tenant_id != "" and site_id != None and site_id != "":
             logger.debug(f"top of PodBaseFull.check_template() with template: {template}, tenant_id: {tenant_id}, site_id: {site_id}")
             template_name_str, template, template_tag = derive_template_info(template, tenant=tenant_id, site=site_id)
-            values['template'] = template_name_str
+            object.__setattr__(values, "template", template_name_str)
+            
         return values
 
-    @root_validator(pre=False)
+    @model_validator(mode="after")
     def check_approvedadmin_settings(cls, values):
-        environment_variables = values.get('environment_variables')
-        permissions = values.get('permissions')
-        networking = values.get('networking')
+        environment_variables = getattr(values, 'environment_variables', None)
+        permissions = getattr(values, 'permissions', None)
+        networking = getattr(values, 'networking', None)
 
         # Check TAPIS_PODS_IMAGEPULLSECRET
         if permissions and environment_variables:
@@ -590,15 +594,15 @@ class Pod(TapisPodBaseFull, table=True, validate=True):
                         )
         return values
 
-    @root_validator(pre=False) # image and template if image not provided
+    @model_validator(mode="after") # image and template if image not provided
     def check_image(cls, values):
-        image = values.get('image')
-        template = values.get('template')
-        tenant_id = values.get('tenant_id')
-        site_id = values.get('site_id')
+        image = getattr(values, 'image', None)
+        template = getattr(values, 'template', None)
+        tenant_id = getattr(values, 'tenant_id', None)
+        site_id = getattr(values, 'site_id', None)
 
-        logger.info(f"top of PodBaseFull.check_image() with image: {image}, template: {template}, tenant_id: {tenant_id}, site_id: {site_id}")
-        logger.debug(f"image type: {type(image).__name__}, template type: {type(template).__name__}, tenant_id type: {type(tenant_id).__name__}, site_id type: {type(site_id).__name__}")
+        #logger.info(f"top of PodBaseFull.check_image() with image: {image}, template: {template}, tenant_id: {tenant_id}, site_id: {site_id}")
+        #logger.debug(f"image type: {type(image).__name__}, template type: {type(template).__name__}, tenant_id type: {type(tenant_id).__name__}, site_id type: {type(site_id).__name__}")
         # pydantic sets None if not validated, and "" for validated strings; we wait until values are not None.
         if image != None and template != None and tenant_id != "" and tenant_id != None and site_id != None and site_id != "":        
             logger.debug("got into image and template check.")
@@ -709,24 +713,29 @@ class Pod(TapisPodBaseFull, table=True, validate=True):
                 raise ValueError(f"compute_queue must be in compute_queues list in cluster configuration.")
         return v
 
-    @root_validator(pre=False)
+    @model_validator(mode="after")
     def set_k8_name_and_networking_urls(cls, values):
         # NOTE: Pydantic loops during validation, so for a few calls, tenant_id and site_id will be NONE.
         # Must account for this. By end of loop, everything will be set properly.
         # In this case "tacc" tenant is backup.
-        site_id = values.get('site_id')
-        tenant_id = values.get('tenant_id') or "tacc"
-        pod_id = values.get('pod_id')
+        site_id = getattr(values, 'site_id', None)
+        tenant_id = getattr(values, 'tenant_id', 'tacc')
+        pod_id = getattr(values, 'pod_id', None)
         ### k8_name: pods-<site>-<tenant>-<pod_id>
-        values['k8_name'] = f"pods-{site_id}-{tenant_id}-{pod_id}"
+        #values.k8_name = f"pods-{site_id}-{tenant_id}-{pod_id}"
+        object.__setattr__(values, "k8_name", f"pods-{site_id}-{tenant_id}-{pod_id}")
         ### url: podname-networking_name.pods.tacc.develop.tapis.io
         # base_url in the form of https://tacc.develop.tapis.io.
-        logger.debug("Fetching base_url for k8_name Pod root_validator from tenant_cache")
+        logger.debug("Fetching base_url for k8_name Pod model_validator from tenant_cache")
+        if not tenant_id or not site_id:
+            logger.debug("tenant_id or site_id is None, returning values")
+            return values
+        logger.debug(f"tenant_id: {tenant_id}, site_id: {site_id}")
         base_url = t.tenant_cache.get_tenant_config(tenant_id=tenant_id).base_url
 
         # Ensure the object already exists, this function loops a lot before value is set.
-        if values.get('networking'):
-            for net_name, net_info in values['networking'].items():
+        if getattr(values, 'networking'):
+            for net_name, net_info in values.networking.items():
                 # The Networking model needs to be transformed to a dict if it's being used. When we get with alchemy
                 # the entire object is already a dict though. So we always expect a dict.
                 if not isinstance(net_info, dict):
@@ -740,7 +749,7 @@ class Pod(TapisPodBaseFull, table=True, validate=True):
                     url = base_url.replace("https://", f"{pod_id}-{net_name}.pods.")
                 # Set 'url' in networking dict.
                 try:
-                    setattr(values['networking'][net_name], 'url', url)
+                    object.__setattr__(values.networking[net_name], 'url', url)
                 except AttributeError:
                     pass
         return values
@@ -797,7 +806,7 @@ class Pod(TapisPodBaseFull, table=True, validate=True):
 
         # Create statement
         if omit_logs:
-            stmt = select(Pod).options(defer('logs')).where(Pod.permissions.overlap(permission_list))
+            stmt = select(Pod).options(defer(Pod.logs)).where(Pod.permissions.overlap(permission_list))
         else:
             stmt = select(Pod).where(Pod.permissions.overlap(permission_list))
 

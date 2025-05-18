@@ -21,7 +21,7 @@ client = TestClient(api, base_url="https://dev.develop.tapis.io", raise_server_e
 test_pod_1 = "testnewimages"
 test_image_1 = "postgres:14"
 test_image_1_no_tag = test_image_1.split(':')[0]
-test_image_2 = "tiangolo/uvicorn-gunicorn-fastapi"
+test_image_2 = "notchristiangarcia/testserver:fastapi"
 test_pod_error_1 = "errorpod"
 
 ##### Teardown

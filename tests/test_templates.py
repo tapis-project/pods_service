@@ -160,7 +160,7 @@ def test_pod_created_with_archived_template(headers):
 def test_add_template_helloworld(headers):
     tag_def = {
         "pod_definition": {
-            "image": "tiangolo/uvicorn-gunicorn-fastapi",
+            "image": "notchristiangarcia/testserver:fastapi",
             "command": ["echo", "Hello, World!"],
             "resources": {
                 "cpu_request": 500 # setting this so recursive can overwrite it later.
@@ -187,7 +187,7 @@ def test_add_template_fastapi(headers):
     # this is the second template tag on the same template
     tag_def = {
         "pod_definition": {
-            "image": "tiangolo/uvicorn-gunicorn-fastapi"
+            "image": "notchristiangarcia/testserver:fastapi"
         },
         "tag": test_template_tag_1,
         "commit_message": "fastapi test server which returns a fastapi startup message"
@@ -317,7 +317,7 @@ def test_add_template_fastapi_withperiods(headers):
     # this is the second template tag on the same template
     tag_def = {
         "pod_definition": {
-            "image": "tiangolo/uvicorn-gunicorn-fastapi"
+            "image": "notchristiangarcia/testserver:fastapi"
         },
         "tag": test_template_tag_5,
         "commit_message": "fastapi test server which returns a fastapi startup message"
@@ -512,7 +512,7 @@ def test_description_is_ascii_400(headers):
     assert any('description field may only contain ASCII characters' in msg for msg in data['message'])
 
 def test_stop_for_debug():
-    if True:
+    if False:
         time.sleep(150)
     
 def test_delete_template(headers):

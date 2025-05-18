@@ -56,7 +56,7 @@ def test_list_pods(headers):
 def test_create_neo4j_pod(headers):
     pod_def = {
         "pod_id": test_pod_1,
-        "image": "tiangolo/uvicorn-gunicorn-fastapi",
+        "image": "notchristiangarcia/testserver:fastapi",
         "description": "Test fastapi server pod",
         "networking": {
             "default": {
@@ -72,7 +72,7 @@ def test_create_neo4j_pod(headers):
     # Check the pod
     assert result['status'] == "REQUESTED"
     assert result['pod_id'] == test_pod_1
-    assert result['image'] == "tiangolo/uvicorn-gunicorn-fastapi"
+    assert result['image'] == "notchristiangarcia/testserver:fastapi"
 
 def test_pod_startup(headers):
     i = 0
@@ -90,7 +90,7 @@ def test_pod_startup(headers):
     # Check the pod object
     assert result['status'] == "AVAILABLE"
     assert result['pod_id'] == test_pod_1
-    assert result['image'] == "tiangolo/uvicorn-gunicorn-fastapi"
+    assert result['image'] == "notchristiangarcia/testserver:fastapi"
 
 
 ### Testing Volumes

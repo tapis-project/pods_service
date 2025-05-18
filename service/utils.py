@@ -42,9 +42,16 @@ async def error_handler(request: Request, exc):
             response = error(msg=exc.msg)
             status_code = exc.code
         elif isinstance(exc, IntegrityError):
+
             extra_end_str = "\\n')"
             response = error(msg=f"Duplicate key found:{repr(exc).split('DETAIL: ')[1].replace(extra_end_str, '')}")
             status_code = 500
+            if "psycopg2.errors.NotNullViolation" in repr(exc):
+                msg = f"Got IntegrityError - psycopg2.errors.NotNullViolation: {repr(exc).split('DETAIL: ')[1].replace(extra_end_str, '')}"
+                response = error(msg=msg)
+            elif "psycopg2.errors.UniqueViolation" in repr(exc):
+                msg = f"Got IntegrityError - psycopg2.errors.UniqueViolation : {repr(exc).split('DETAIL: ')[1].replace(extra_end_str, '')}"
+                response = error(msg=msg)
         elif isinstance(exc, RequestValidationError) or isinstance(exc, ValidationError):
             error_list = []
             logger.debug(f"Got validation error: {repr(exc)}")

@@ -3,7 +3,7 @@ from string import ascii_letters, digits
 from secrets import choice
 from datetime import datetime
 from typing import List, Dict, Literal, Any, Set
-from pydantic import BaseModel, Field, validator, root_validator
+from pydantic import BaseModel, Field, validator
 
 from stores import pg_store
 from tapisservice.logs import get_logger
@@ -22,7 +22,7 @@ class TapisApiModel(BaseModel):
 class TapisModel(SQLModel):
     #__table_args__ = ({"schema": "defaulttables"},)
     class Config:
-        orm_mode = True
+        from_attributes = True
         validate_assignment = True
         extra = "forbid"
 

@@ -220,7 +220,7 @@ def test_update_snapshot_no_change(headers):
 def test_create_pod_with_snapshot(headers):
     pod_def = {
         "pod_id": test_pod_1,
-        "image": "tiangolo/uvicorn-gunicorn-fastapi",
+        "image": "notchristiangarcia/testserver:fastapi",
         "description": "Test fastapi server pod",
         "networking": {
             "default": {

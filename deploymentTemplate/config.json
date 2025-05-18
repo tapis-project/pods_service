@@ -29,10 +29,10 @@
         "jstubbs/abaco_test",
         "tuyamei/smartfoodshed-server",
         "ssquid/kapp",
-        "tiangolo/uvicorn-gunicorn-fastapi",
         "av11/sd-webui-auto-bulk",
         "postgres",
-        "notchristiangarcia/neo4j"
+        "notchristiangarcia/neo4j",
+        "notchristiangarcia/testserver"
     ],
     "nfs_pvc_name": "pods-nfs-vol",
     "nfs_base_path": "/podsnfs",

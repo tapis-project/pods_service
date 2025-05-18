@@ -1,9 +1,9 @@
-
-
 from tapisservice.config import conf
 from stores import get_site_rabbitmq_uri
 from queues import BinaryTaskQueue
 from tapisservice.tapisfastapi.utils import g
+import pika
+import pickle
 
 def site():
     site_id = g.site_id or conf.get('site_id')
@@ -31,3 +31,40 @@ class CommandChannel(BinaryTaskQueue):
                'site_id': site_id}
 
         self.put(msg)
+
+class PikaCommandChannel:
+    """Work with commands on the command channel using pika."""
+    def __init__(self, name: str = "tacc"):
+        self.queue_name = f'command_channel_{name}'
+        self.uri = get_site_rabbitmq_uri(site())
+        params = pika.URLParameters(self.uri)
+        self.connection = pika.BlockingConnection(params)
+        self.channel = self.connection.channel()
+        self.channel.queue_declare(queue=self.queue_name, durable=True)
+
+    def put_cmd(self, object_id, object_type, tenant_id, site_id):
+        msg = {'object_id': object_id,
+               'object_type': object_type,
+               'tenant_id': tenant_id,
+               'site_id': site_id}
+        self.channel.basic_publish(
+            exchange='',
+            routing_key=self.queue_name,
+            body=msg,
+            properties=pika.BasicProperties(delivery_mode=2)
+        )
+
+    def get_one(self):
+        try:
+            method_frame, header_frame, body = self.channel.basic_get(queue=self.queue_name, auto_ack=False)
+            if method_frame:
+                msg = pickle.loads(body)
+                return msg, (lambda: self.channel.basic_ack(delivery_tag=method_frame.delivery_tag))
+            else:
+                return None, None
+        except Exception as e:
+            print(f"Error getting message from queue: {e}")
+            return None, None
+
+    def close(self):
+        self.connection.close()

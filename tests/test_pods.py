@@ -50,7 +50,7 @@ def test_list_pods(headers):
 def test_create_pod(headers):
     pod_def = {
         "pod_id": test_pod_1,
-        "image": "tiangolo/uvicorn-gunicorn-fastapi",
+        "image": "notchristiangarcia/testserver:fastapi",
         "description": "Test fastapi server pod",
         "networking": {
             "default": {
@@ -65,7 +65,7 @@ def test_create_pod(headers):
     # Check the pod object
     assert result['status'] == "REQUESTED"
     assert result['pod_id'] == test_pod_1
-    assert result['image'] == "tiangolo/uvicorn-gunicorn-fastapi"
+    assert result['image'] == "notchristiangarcia/testserver:fastapi"
 
 def test_check_list_pods(headers):
     rsp = client.get("/pods", headers=headers)
@@ -92,7 +92,7 @@ def test_pod_startup(headers):
     # Check the pod object
     assert result['status'] == "AVAILABLE"
     assert result['pod_id'] == test_pod_1
-    assert result['image'] == "tiangolo/uvicorn-gunicorn-fastapi"
+    assert result['image'] == "notchristiangarcia/testserver:fastapi"
 
 def test_get_pod(headers):
     rsp = client.get(f"/pods/{test_pod_1}", headers=headers)
@@ -101,7 +101,7 @@ def test_get_pod(headers):
     # Check the pod object
     #assert result['status'] == "AVAILABLE"
     assert result['pod_id'] == test_pod_1
-    assert result['image'] == "tiangolo/uvicorn-gunicorn-fastapi"
+    assert result['image'] == "notchristiangarcia/testserver:fastapi"
 
 def test_get_pod_logs(headers):
     rsp = client.get(f"/pods/{test_pod_1}/logs",
@@ -166,7 +166,7 @@ def test_description_length_400(headers):
     # Definition
     pod_def = {
         "pod_id": test_pod_error_1,
-        "image": "tiangolo/uvicorn-gunicorn-fastapi",
+        "image": "notchristiangarcia/testserver:fastapi",
         "description": "Test" * 200
     }
     # Attempt to create pod
@@ -181,7 +181,7 @@ def test_description_is_ascii_400(headers):
     # Definition
     pod_def = {
         "pod_id": test_pod_error_1,
-        "image": "tiangolo/uvicorn-gunicorn-fastapi",
+        "image": "notchristiangarcia/testserver:fastapi",
         "description": "cafè"
     }
     # Attempt to create pod

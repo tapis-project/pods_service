@@ -8,7 +8,7 @@ from codes import ERROR, SPAWNER_SETUP, CREATING, REQUESTED, DELETING, ON
 from health import graceful_rm_pod, graceful_rm_volume
 from models_pods import Pod, Password
 from models_volumes import Volume
-from channels import CommandChannel
+from channels import PikaCommandChannel
 from kubernetes_templates import start_generic_pod #, start_neo4j_pod, start_postgres_pod
 from kubernetes_utils import create_pvc
 from tapisservice.config import conf
@@ -24,21 +24,33 @@ class SpawnerException(BaseTapisError):
 class Spawner(object):
     def __init__(self):
         self.queue = os.environ.get('queue', 'tacc') # Which site is being worked on by this spawner.
-        self.cmd_ch = CommandChannel(name=self.queue)
+        self.cmd_ch = PikaCommandChannel(name=self.queue)
         self.host_id = conf.spawner_host_id
 
     def run(self):
         executor = ThreadPoolExecutor(6) # 6 threads, meaning 6 spawning processes at once.
         while True:
-            cmd, msg_obj = self.cmd_ch.get_one()
-            # directly ack the messages from the command channel; problems generated from starting pods are
-            # handled downstream; e.g., by setting the pod to an ERROR state; command messages should not be re-queued
-            msg_obj.ack()
             try:
-                executor.submit(self.process, cmd)
+                cmd, ack_fn = self.cmd_ch.get_one()
+                if cmd is None:
+                    sleep_time = 1
+                    time.sleep(sleep_time)
+                    logger.debug(f"No command found in spawner queue. Sleeping for {sleep_time} seconds.")
+                    continue
+                # directly ack the messages from the command channel; problems generated from starting pods are
+                # handled downstream; e.g., by setting the pod to an ERROR state; command messages should not be re-queued
+                try:
+                    ack_fn()
+                except Exception as e:
+                    logger.error(f"Spawner got an exception trying to ack command: {cmd}. "
+                                f"Exception type: {type(e).__name__}. Exception: {e}")
+                try:
+                    executor.submit(self.process, cmd)
+                except Exception as e:
+                    logger.error(f"Spawner got an exception trying to process cmd: {cmd}. "
+                                f"Exception type: {type(e).__name__}. Exception: {e}")
             except Exception as e:
-                logger.error(f"Spawner got an exception trying to process cmd: {cmd}. "
-                             f"Exception type: {type(e).__name__}. Exception: {e}")
+                logger.error(f"Spawner got an exception trying to get a command from the command channel. Exception: {e}")
 
     def process(self, cmd):
         """Main spawner method for processing a command from the CommandChannel."""
@@ -134,15 +146,15 @@ def main():
     logger.debug(msg)
     # Start spawner
     idx = 0
-    while idx < 10:
+    while idx < 30:
         try:
-            time.sleep(10)
+            time.sleep(4)
             sp = Spawner()
             logger.info("Spawner made connection to rabbit, entering main loop")
             sp.run()
         except (rabbitpy.exceptions.ConnectionException, RuntimeError, rabbitpy.exceptions.ConnectionClosed, Exception):
             # rabbit seems to take a few seconds to come up
-            logger.info(f"Attempt to connect to rabbit again. idx {idx} of 10.")
+            logger.info(f"Attempt to connect to rabbit again. idx {idx} of 20.")
             time.sleep(5)
             idx += 1
     logger.critical("spawner could not connect to rabbitMQ. Shutting down!")
