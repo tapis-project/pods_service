@@ -1,8 +1,10 @@
 from fastapi import APIRouter
-from models_pods import Pod, NewPod, Password, PodsResponse, PodResponse, PodBase
 from channels import CommandChannel
-from tapisservice.tapisfastapi.utils import g, ok
 from codes import REQUESTED, ON
+from pydantic import ValidationError
+
+from models_pods import Pod, NewPod, Password, PodsResponse, PodResponse, PodBase, PodBaseRead
+from tapisservice.tapisfastapi.utils import g, ok
 from tapisservice.logs import get_logger
 logger = get_logger(__name__)
 
@@ -27,11 +29,28 @@ async def list_pods():
     # TODO search
     pods =  Pod.db_get_all_with_permission(user=g.username, level='READ', tenant=g.request_tenant_id, site=g.site_id)
     pods_to_show = []
+    metadata = {}
+    final_msg = "Pods retrieved successfully."
     for pod in pods:
-        pods_to_show.append(pod.display())
+        try:
+            # Validate using your response model (e.g., PodBase or whatever Pod.display() returns)
+            pod_data = pod.display()
+            PodBaseRead(**pod_data)  # This will raise if invalid
+            pods_to_show.append(pod_data)
+        except ValidationError as e:
+            # Remove 'url' from each error dict because it's unsightly and not useful to end user
+            error_list = e.errors()
+            for err in error_list:
+                err.pop('url', None)
+            logger.warning(f"Pod {getattr(pod, 'pod_id', 'COULD NOT FIND PODID')} failed validation: {error_list}")
+            if "warnings" not in metadata:
+                metadata["warnings"] = []
+            metadata["warnings"].append(
+                f"Pod {getattr(pod, 'pod_id', None)} failed validation; omitting; reach out to admin; this debug might help: {error_list}"
+            )
+            final_msg = "Some pods failed validation. Please check metadata.warnings for details."
     logger.info("Pods retrieved.")
-    return ok(result=pods_to_show, msg="Pods retrieved successfully.")
-
+    return ok(result=pods_to_show, metadata=metadata, msg=final_msg)
 
 @router.post(
     "/pods",

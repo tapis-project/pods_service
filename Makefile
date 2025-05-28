@@ -70,169 +70,171 @@ export DEV_TOOLS := false
 
 # Got from: https://stackoverflow.com/a/59087509
 help:
-	@grep -B1 -E "^[a-zA-Z0-9_-]+\:([^\=]|$$)" Makefile \
-	| grep -v -- -- \
-	| sed 'N;s/\n/###/' \
-	| sed -n 's/^#: \(.*\)###\(.*\):.*/\2###\1/p' \
-	| column -t  -s '###'
-
-
+	@awk ' \
+		BEGIN { GREEN = "\033[0;32m"; NC = "\033[0m"; } \
+		/^#:/ { desc=$$0; getline; if ($$0 ~ /^[a-zA-Z0-9_-]+:/) { \
+			sub(/^#:[ ]*/, "", desc); \
+			sub(/:.*/, "", $$0); \
+			printf "%s%s%s\t%s\n", GREEN, $$0, NC, desc; \
+		}}' $(MAKEFILE_LIST) | column -s $$'\t' -t
 # Gets all remote images and starts pods in daemon mode
 #: Deploy service
 up: vars build
-	@echo "Makefile: $(GREEN)up$(NC)"
-	@echo "  🔍 : Looking to run ./burnup in deployment folder."
+	@printf "Makefile: $(GREEN)up$(NC)\n"
+	@printf "  🔍 : Looking to run ./burnup in deployment folder.\n"
 	rm -rf deployment; mkdir deployment; cp -r deploymentTemplate/* deployment;
 	cd deployment
-	@echo "  🔨 : Created deployment folder with templates."
+	@printf "  🔨 : Created deployment folder with templates.\n"
 	@sed -i 's/"version".*/"version": "$(TAG)",/g' config.json
 	@sed -i 's/MAKEFILE_SERVICE_NAME/$(SERVICE_NAME)/g' *
 	@sed -i 's/MAKEFILE_SERVICE_PASS/$(SERVICE_PASS)/g' *
 	@sed -i 's/MAKEFILE_TEST_ABACO_SERVICE_PASS/$(TEST_ABACO_SERVICE_PASS)/g' *
 	@sed -i 's/MAKEFILE_STATIC_NFS_IP/$(STATIC_NFS_IP)/g' *
 	@sed -i 's/MAKEFILE_TAG/$(TAG)/g' *
-	@echo "  🔥 : Running burnup."
+	@printf "  🔥 : Running burnup.\n"
 ifeq ($(DEV_TOOLS),true)
 	@sed -i 's/#DEV//g' *
 # Delete #DEV lines when DEV_TOOLS is set to false. Config can break b/c it has to be proper JSON.
 else
 	@sed -i '/#DEV/d' *
-	@echo "  🔗 : Jupyter Lab URL: dev_tools is set to 'false'"
+	@printf "  🔗 : Jupyter Lab URL: dev_tools is set to 'false'\n"
 endif
-	@echo ""
+	@printf "\n"
 	./burnup
-	echo ""
+	printf "\n"
 
 ifeq ($(DEV_TOOLS),true)
-	@echo "  🔗 : Jupyter Lab URL: $(LCYAN)http://$$(minikube ip):$$(kubectl get service pods-api-jupyter | grep -o -P '(?<=8888:).*(?=/TCP)')$(NC)"
+	@printf "  🔗 : Jupyter Lab URL: $(LCYAN)http://$$(minikube ip):$$(kubectl get service pods-api-jupyter | grep -o -P '(?<=8888:).*(?=/TCP)')$(NC)\n"
 else
-	@echo "  🔗 : Jupyter Lab URL: dev_tools is set to 'false'"
+	@printf "  🔗 : Jupyter Lab URL: dev_tools is set to 'false'\n"
 endif
-	@echo "  🔗 : API URL: $(LCYAN)http://$$(minikube ip):$$(kubectl get service pods-traefik | grep -o -P '(?<= 80:)\d+(?=/TCP)')$(NC)/v3"
-	@echo "  🔗 : Docs URL: $(LCYAN)http://$$(minikube ip):$$(kubectl get service pods-api | grep -o -P '(?<=8000:)\d+(?=/TCP)')$(NC)/docs"
-	@echo "  🔗 : Spec URL: $(LCYAN)http://$$(minikube ip):$$(kubectl get service pods-api | grep -o -P '(?<=8000:)\d+(?=/TCP)')$(NC)/openapi.json"
-	@echo "  🔗 : Traefik Dash URL: $(LCYAN)http://$$(minikube ip):$$(kubectl get service pods-traefik | grep -o -P '(?<=8080:)\d+(?=/TCP)')$(NC)/dashboard"
-	@echo ""
+	@printf "  🔗 : API URL: $(LCYAN)http://$$(minikube ip):$$(kubectl get service pods-traefik | grep -o -P '(?<= 80:)\d+(?=/TCP)')$(NC)/v3\n"
+	@printf "  🔗 : Docs URL: $(LCYAN)http://$$(minikube ip):$$(kubectl get service pods-api | grep -o -P '(?<=8000:)\d+(?=/TCP)')$(NC)/docs\n"
+	@printf "  🔗 : Spec URL: $(LCYAN)http://$$(minikube ip):$$(kubectl get service pods-api | grep -o -P '(?<=8000:)\d+(?=/TCP)')$(NC)/openapi.json\n"
+	@printf "  🔗 : Traefik Dash URL: $(LCYAN)http://$$(minikube ip):$$(kubectl get service pods-traefik | grep -o -P '(?<=8080:)\d+(?=/TCP)')$(NC)/dashboard\n"
+	@printf "\n"
 
 
 #: Initialize a few templates
 init-data:
-	@echo "Not yet implemented"
+	@printf "Not yet implemented\n"
 
 
 # Runs pytest in the pods-api container
 #: Run tests in pods-api container
 test:
-	@echo "Tests are a work in progress"
-	@echo "Makefile: $(GREEN)test$(NC)"
-	@echo "  📝  : Running Tests"
-	@echo ""
+	@printf "Tests are a work in progress\n"
+	@printf "Makefile: $(GREEN)test$(NC)\n"
+	@printf "  📝  : Running Tests\n"
+	@printf "\n"
 	kubectl exec -it deploy/pods-api -- pytest tests/*.py --disable-pytest-warnings
-	@echo ""
+	@printf "\n"
 
 
 # Builds core locally and sets to correct tag. This should take priority over DockerHub images
 #: Build core image
 build: vars
-	@echo "Makefile: $(GREEN)build$(NC)"
-	@echo "  🔨 : Running image build."
-	@echo "  🌎 : Using daemon: $(LCYAN)minikube$(NC)"
-	@echo "  🏃 : Building: This part takes a while if it takes a while."
-	@echo ""
+	@printf "Makefile: $(GREEN)build$(NC)\n"
+	@printf "  🔨 : Running image build.\n"
+	@printf "  🌎 : Using daemon: $(LCYAN)minikube$(NC)\n"
+	@printf "  🏃 : Building: This part takes a while if it takes a while.\n"
+	@printf "\n"
 	minikube image build -t $(SERVICE_NAME)/pods-api:$$TAG ./
-	@echo ""
+	#minikube image build -t $(SERVICE_NAME)/pods-api-remote:$$TAG -f Dockerfile.remote ./
+	@printf "\n"
 
 
 # Builds core locally with docker Daemon for publish/local-usage
 #: Build core image in docker for publishing/develop
 build-docker: vars
-	@echo "Makefile: $(GREEN)build$(NC)"
-	@echo "  🔨 : Running image build."
-	@echo "  🌎 : Using daemon: $(LCYAN)docker$(NC)"
-	@echo ""
+	@printf "Makefile: $(GREEN)build$(NC)\n"
+	@printf "  🔨 : Running image build.\n"
+	@printf "  🌎 : Using daemon: $(LCYAN)docker$(NC)\n"
+	@printf "\n"
 	docker build -t tapis/pods-api:$$TAG ./
-	@echo ""
+	docker build -t tapis/pods-api-remote:$$TAG -f Dockerfile.remote ./
+	@printf "\n"
 
 
 #: Pull core image
 pull:
-	@echo "Makefile: $(GREEN)pull$(NC)"
-	@echo "Not yet implemented"
+	@printf "Makefile: $(GREEN)pull$(NC)\n"
+	@printf "Not yet implemented\n"
 
 
 # Ends all active k8 containers needed for pods
 #: Delete service
 down:
-	@echo "Makefile: $(GREEN)down$(NC)"
-	@echo "  🔍 : Looking to run ./burndown in deployment folder."
+	@printf "Makefile: $(GREEN)down$(NC)\n"
+	@printf "  🔍 : Looking to run ./burndown in deployment folder.\n"
 	if [ -d "deployment" ]; then
-		echo "  🎉 : Found deployment folder. Using burndown."
+		printf "  🎉 : Found deployment folder. Using burndown.\n"
 		cd deployment
-		echo "  🔥 : Running burndown."
-		echo ""
+		printf "  🔥 : Running burndown.\n"
+		printf "\n"
 		./burndown
 	else
-		echo "  ✔️  : No deployment folder, nothing to burndown."
+		printf "  ✔️  : No deployment folder, nothing to burndown.\n"
 	fi
-	@echo ""
+	@printf "\n"
 
 
 # Cleans directory. Notably deletes the deployment folder if it exists
 #: Delete service + folders
 clean: down
-	@echo "Makefile: $(GREEN)clean$(NC)"
-	echo "  🔍 : Looking to delete deployment folder."
+	@printf "Makefile: $(GREEN)clean$(NC)\n"
+	printf "  🔍 : Looking to delete deployment folder.\n"
 	if [ -d "deployment" ]; then
 		rm -rf deployment
-		echo "  🧹 : Deployment folder deleted."
+		printf "  🧹 : Deployment folder deleted.\n"
 	else
-		echo "  ✔️  : Deployment folder already deleted."
+		printf "  ✔️  : Deployment folder already deleted.\n"
 	fi
-	@echo ""
+	@printf "\n"
 
 
 # Test setting of environment variables
 #: Lists vars
 vars:
-	@echo "Makefile: $(GREEN)vars$(NC)"	
+	@printf "Makefile: $(GREEN)vars$(NC)\n"
 
-	echo "  ℹ️  tag:            $(LCYAN)$(TAG)$(NC)"
-	echo "  ℹ️  namespace:      $(LCYAN)$(NAMESPACE)$(NC)"
-	echo "  ℹ️  service_name:   $(LCYAN)$(SERVICE_NAME)$(NC)"
-	echo "  ℹ️  service_pass:   $(LCYAN)$(SERVICE_PASS)$(NC)"
+	printf "  ℹ️  tag:            $(LCYAN)$(TAG)$(NC)\n"
+	printf "  ℹ️  namespace:      $(LCYAN)$(NAMESPACE)$(NC)\n"
+	printf "  ℹ️  service_name:   $(LCYAN)$(SERVICE_NAME)$(NC)\n"
+	printf "  ℹ️  service_pass:   $(LCYAN)$(SERVICE_PASS)$(NC)\n"
 
 ifeq ($(filter $(DAEMON),minikube docker),)
-	echo "  ❌ daemon:         $(RED)DAEMON must be one of ['minikube', 'docker']$(NC)"
+	printf "  ❌ daemon:         $(RED)DAEMON must be one of ['minikube', 'docker']$(NC)\n"
 	exit 1
 else
-	echo "  ℹ️  daemon:         $(LCYAN)$(DAEMON)$(NC)"
+	printf "  ℹ️  daemon:         $(LCYAN)$(DAEMON)$(NC)\n"
 endif
 
 ifeq ($(filter $(IMG_SOURCE),local remote),)
-	echo "  ❌ img_source:      $(RED)IMG_SOURCE must be one of ['local', 'remote']$(NC)"
+	printf "  ❌ img_source:      $(RED)IMG_SOURCE must be one of ['local', 'remote']$(NC)\n"
 	exit 1
 else
-	echo "  ℹ️  img_source:     $(LCYAN)$(IMG_SOURCE)$(NC)"
+	printf "  ℹ️  img_source:     $(LCYAN)$(IMG_SOURCE)$(NC)\n"
 endif
 
 ifeq ($(filter $(DEV_TOOLS),true false),)
-	echo "  ❌ dev_tools:      $(RED)DEV_TOOLS must be one of ['true', 'false']$(NC)"
+	printf "  ❌ dev_tools:      $(RED)DEV_TOOLS must be one of ['true', 'false']$(NC)\n"
 	exit 1
 else
-	echo "  ℹ️  dev_tools:      $(LCYAN)$(DEV_TOOLS)$(NC)"
+	printf "  ℹ️  dev_tools:      $(LCYAN)$(DEV_TOOLS)$(NC)\n"
 endif
 
-	echo ""
+	printf "\n"
 
 ifeq ($(DEV_TOOLS),true)
-	@echo "  🔗 : Jupyter Lab URL: $(LCYAN)http://$$(minikube ip):$$(kubectl get service pods-api-jupyter | grep -o -P '(?<=8888:).*(?=/TCP)')$(NC)"
+	@printf "  🔗 : Jupyter Lab URL: $(LCYAN)http://$$(minikube ip):$$(kubectl get service pods-api-jupyter | grep -o -P '(?<=8888:).*(?=/TCP)')$(NC)\n"
 else
-	@echo "  🔗 : Jupyter Lab URL: dev_tools is set to 'false'"
+	@printf "  🔗 : Jupyter Lab URL: dev_tools is set to 'false'\n"
 endif
-	@echo "  🔗 : API URL: $(LCYAN)http://$$(minikube ip):$$(kubectl get service pods-traefik | grep -o -P '(?<= 80:)\d+(?=/TCP)')$(NC)/v3"
-	@echo "  🔗 : Docs URL: $(LCYAN)http://$$(minikube ip):$$(kubectl get service pods-api | grep -o -P '(?<=8000:)\d+(?=/TCP)')$(NC)/docs"
-	@echo "  🔗 : Spec URL: $(LCYAN)http://$$(minikube ip):$$(kubectl get service pods-api | grep -o -P '(?<=8000:)\d+(?=/TCP)')$(NC)/openapi.json"
-	@echo "  🔗 : Traefik Dash URL: $(LCYAN)http://$$(minikube ip):$$(kubectl get service pods-traefik | grep -o -P '(?<=8080:)\d+(?=/TCP)')$(NC)/dashboard"
-	@echo ""
+	@printf "  🔗 : API URL: $(LCYAN)http://$$(minikube ip):$$(kubectl get service pods-traefik | grep -o -P '(?<= 80:)\d+(?=/TCP)')$(NC)/v3\n"
+	@printf "  🔗 : Docs URL: $(LCYAN)http://$$(minikube ip):$$(kubectl get service pods-api | grep -o -P '(?<=8000:)\d+(?=/TCP)')$(NC)/docs\n"
+	@printf "  🔗 : Spec URL: $(LCYAN)http://$$(minikube ip):$$(kubectl get service pods-api | grep -o -P '(?<=8000:)\d+(?=/TCP)')$(NC)/openapi.json\n"
+	@printf "  🔗 : Traefik Dash URL: $(LCYAN)http://$$(minikube ip):$$(kubectl get service pods-traefik | grep -o -P '(?<=8080:)\d+(?=/TCP)')$(NC)/dashboard\n"
+	@printf "\n"
 
-	echo ""
+	printf "\n"

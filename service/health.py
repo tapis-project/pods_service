@@ -148,6 +148,14 @@ def check_k8_pods(k8_pods):
             rm_pod(k8_pod['k8_name'])
             continue
         
+        # if we get a validation error in general we should skip and not break health
+        try:
+            Pod(**pod.dict())  # Validate pod data
+        except Exception as e:
+            logger.error(f"Validation error for pod {pod.k8_name}: {e}", exc_info=True)
+            # We skip this pod, but continue checking others.
+            continue
+
         pre_health_pod = pod.copy()
 
         # Found pod in db.
