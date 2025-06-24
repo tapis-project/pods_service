@@ -1322,6 +1322,61 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /pods/jupyter/ensure:
+    get:
+      tags:
+      - Jupyter
+      summary: Ensure user has a running Jupyter pod, useful for starting up coding
+        environment
+      description: 'Ensure the current user has a running Jupyter pod.
+
+        If not, create a new one named ''{username}jupyter'' from the base Jupyter
+        template.
+
+        Returns pod name and URL.'
+      operationId: ensure_jupyter_pod
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Ensure Jupyter Pod
+  /pods/jupyter/{pod_id}/upload:
+    post:
+      tags:
+      - Jupyter
+      summary: Upload a document to the user's Jupyter pod
+      description: 'Upload a document to the user''s running Jupyter pod using the
+        Jupyter API.
+
+        Input: multipart form (file), and ''path'' (destination in Jupyter).'
+      operationId: upload_to_jupyter
+      parameters:
+      - required: true
+        schema:
+          type: string
+          title: Pod Id
+        name: pod_id
+        in: path
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Body_upload_to_jupyter'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /pods:
     get:
       tags:
@@ -1702,6 +1757,39 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /pods/{pod_id}/upload_to_pod:
+    post:
+      tags:
+      - Pods
+      summary: Upload a file directly into the pod's filesystem
+      description: Upload a file to a specific path inside the pod using Kubernetes
+        exec/copy (chunked streaming, no temp file).
+      operationId: upload_to_pod
+      parameters:
+      - required: true
+        schema:
+          type: string
+          title: Pod Id
+        name: pod_id
+        in: path
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Body_upload_to_pod'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /pods/{pod_id}/permissions/{user}:
     delete:
       tags:
@@ -1974,6 +2062,34 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
 components:
   schemas:
+    Body_upload_to_jupyter:
+      properties:
+        file:
+          type: string
+          format: binary
+          title: File
+        path:
+          type: string
+          title: Path
+      type: object
+      required:
+      - file
+      - path
+      title: Body_upload_to_jupyter
+    Body_upload_to_pod:
+      properties:
+        file:
+          type: string
+          format: binary
+          title: File
+        dest_path:
+          type: string
+          title: Dest Path
+      type: object
+      required:
+      - file
+      - dest_path
+      title: Body_upload_to_pod
     Body_upload_to_volume:
       properties:
         file:
@@ -2260,7 +2376,7 @@ components:
           format: date-time
           title: Creation Ts
           description: Time (UTC) that this image was created.
-          default: '2025-04-25T21:52:37.337179'
+          default: '2025-05-15T00:28:39.897690'
         added_by:
           type: string
           title: Added By

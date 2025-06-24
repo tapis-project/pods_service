@@ -484,18 +484,26 @@ class Pod(TapisPodBaseFull, table=True, validate=True):
                 vol_name_regex = re.fullmatch(r'[a-z][a-z0-9]+', vol_name)
                 if not vol_name_regex:
                     raise ValueError(f"volume_mounts key must be lowercase alphanumeric. First character must be alpha.")
-                
-                if vol_mounts.type == "tapisvolume":
-                    volume = Volume.db_get_with_pk(vol_name, tenant=g.request_tenant_id, site=g.site_id)
-                    if not volume:
-                        raise ValueError(f"volume_mounts key must be a valid volume_id when type == 'tapisvolume'. Could not find volume_id: {vol_name}.")
-                if vol_mounts.type == "tapissnapshot":
-                    snapshot = Snapshot.db_get_with_pk(vol_name, tenant=g.request_tenant_id, site=g.site_id)
-                    if not snapshot:
-                        raise ValueError(f"volume_mounts key must be a valid snapshot_id when type == 'tapissnapshot'. Could not find snapshot_id: {vol_name}.")
         return v
 
-
+    @model_validator(mode="after")
+    def check_volume_mounts_db(cls, values):
+        volume_mounts = getattr(values, 'volume_mounts', None)
+        tenant_id = getattr(values, 'tenant_id', None)
+        site_id = getattr(values, 'site_id', None)
+        if volume_mounts and tenant_id != None and tenant_id != "" and site_id != None and site_id != "":
+            for vol_name, vol_mounts in volume_mounts.items():
+                if hasattr(vol_mounts, 'type'):
+                    if vol_mounts.type == "tapisvolume":
+                        volume = Volume.db_get_with_pk(vol_name, tenant=tenant_id, site=site_id)
+                        if not volume:
+                            raise ValueError(f"volume_mounts key must be a valid volume_id when type == 'tapisvolume'. Could not find volume_id: {vol_name}.")
+                    if vol_mounts.type == "tapissnapshot":
+                        snapshot = Snapshot.db_get_with_pk(vol_name, tenant=tenant_id, site=site_id)
+                        if not snapshot:
+                            raise ValueError(f"volume_mounts key must be a valid snapshot_id when type == 'tapissnapshot'. Could not find snapshot_id: {vol_name}.")
+        return values
+    
     @validator('arguments')
     def check_arguments(cls, v):
         if v:
@@ -585,7 +593,7 @@ class Pod(TapisPodBaseFull, table=True, validate=True):
                 protocol = net_info.get('protocol')
 
                 # If cors are used.
-                if cors_allow_origins:
+                if cors_allow_origins and permissions:
                     # Ensure at least one user has APPROVEDADMIN permission
                     approved_admin = any(permission.endswith(":APPROVEDADMIN") for permission in permissions)
                     if not approved_admin:
