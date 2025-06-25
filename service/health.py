@@ -38,7 +38,7 @@ from datetime import datetime, timedelta
 from channels import CommandChannel
 from kubernetes import client, config
 from kubernetes_utils import get_current_k8_services, get_current_k8_pods, rm_container, rm_pvc, \
-     get_current_k8_pods, rm_service, KubernetesError, get_k8_logs, list_all_containers, run_k8_exec
+    rm_service, KubernetesError, get_k8_logs, list_all_containers, run_k8_exec
 from codes import AVAILABLE, DELETING, STOPPED, ERROR, REQUESTED, COMPLETE, RESTART, ON, OFF
 from stores import pg_store, SITE_TENANT_DICT
 from models_pods import Pod

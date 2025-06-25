@@ -117,6 +117,13 @@ def list_all_containers(filter_str: str = "pods"):
     pods = [pod for pod in pods if filter_str in pod.metadata.name]
     return pods
 
+def list_all_events(filter_str: str = "pods"):
+    """Returns a list of all events in a particular namespace """
+    events = k8.list_namespaced_event(NAMESPACE).items
+    # filter events by filter_str
+    events = [event for event in events if filter_str in event.metadata.name]
+    return events
+
 def list_all_services(filter_str: str = "pods"):
     """Returns a list of all containers in a particular namespace """
     services = k8.list_namespaced_service(NAMESPACE).items
@@ -138,6 +145,7 @@ def get_current_k8_pods(service_name: str = "pods", site_id: str = conf.site_id)
     """
     """Get all containers, filter for just db, and display."""
     filter_str = f"{service_name}-{site_id}"
+    #all_events = list_all_events(filter_str=filter_str)
     db_containers = []
     for k8_pod in list_all_containers(filter_str=filter_str):
         k8_name = k8_pod.metadata.name
@@ -148,11 +156,13 @@ def get_current_k8_pods(service_name: str = "pods", site_id: str = conf.site_id)
             site_id = parts[1]
             tenant_id = parts[2]
             pod_id = parts[3]
-            db_containers.append({'pod_info': k8_pod,
-                                    'site_id': site_id,
-                                    'tenant_id': tenant_id,
-                                    'pod_id': pod_id,
-                                    'k8_name': k8_name})
+            db_containers.append({
+                'pod_info': k8_pod,
+                'site_id': site_id,
+                'tenant_id': tenant_id,
+                'pod_id': pod_id,
+                'k8_name': k8_name
+            })
         except Exception as e:
             msg = f"Exception parsing k8 pods. e: {e}"
             print(msg)
@@ -507,6 +517,7 @@ def create_pod(name: str,
                environment: Dict = {},
                mounts: List = [],
                #probes: List = {},
+               tapis_permissions: List[str] = [],
                mem_request: str | None = None,
                cpu_request: str | None = None,
                mem_limit: str | None = None,
@@ -575,22 +586,28 @@ def create_pod(name: str,
             if not isinstance(image_pull_secret_user, str):
                 raise TypeError(f"environment_variables TAPIS_PODS_IMAGEPULLSECRET must be str. Got {type(image_pull_secret_user).__name__}.")
             # Ensure the username in TAPIS_PODS_IMAGEPULLSECRET has APPROVEDADMIN permission
-            for permission in permissions:
-                if permission.startswith(image_pull_secret_user+":"):
-                    _, user_current_permission = permission.split(":")
-                    break
-                else:
-                    user_current_permission = None
-                    msg = f"TAPIS_PODS_IMAGEPULLSECRET specifies user: '{image_pull_secret_user}'. User does not have any persmissions on this pod. User must have APPROVEDADMIN permission to pod which admin can approve. Contact admin for help."
-                    logger.error(msg)
-                    raise KubernetesStartContainerError(msg)
-            
+            if tapis_permissions:
+                for permission in tapis_permissions:
+                    if permission.startswith(image_pull_secret_user+":"):
+                        _, user_current_permission = permission.split(":")
+                        break
+                    else:
+                        user_current_permission = None
+                        msg = f"TAPIS_PODS_IMAGEPULLSECRET specifies user: '{image_pull_secret_user}'. User does not have any permissions on this pod. User must have APPROVEDADMIN permission to pod which admin can approve. Contact admin for help."
+                        logger.error(msg)
+                        raise KubernetesStartContainerError(msg)
+            else:
+                user_current_permission = None
+                msg = f"TAPIS_PODS_IMAGEPULLSECRET permission check missing passed permissions list."
+                logger.error(msg)
+                ## allow to pass later in cases that users want to try and run this via cli but not specify permissions.
+
             if user_current_permission != "APPROVEDADMIN":
                 msg = f"User '{image_pull_secret_user}' has {user_current_permission.upper()} permission and not APPROVEDADMIN permission needed to set TAPIS_PODS_IMAGEPULLSECRET. Contact admin for approval."
                 logger.error(msg)
                 raise KubernetesStartContainerError(msg)
 
-            # name the k8 scret object
+            # name the k8 secret object
             image_pull_secret = f'tapis-pods-imagepullsecret-{env_val.replace("@", "at").replace(".", "dot")}'
             logger.debug(f"TAPIS_PODS_IMAGEPULLSECRET. Kubernetes imagee pull secret name: {image_pull_secret}")
             # check kubernetes for image pull secret existence

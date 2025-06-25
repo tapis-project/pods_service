@@ -153,6 +153,7 @@ def start_generic_pod(input_pod, revision: int):
         "image": pod.image,
         "ports_dict": ports_dict,
         "environment": pod.environment_variables.copy(),
+        "tapis_permissions": pod.permissions,
         "mounts": [volumes, volume_mounts],
         "queue": pod.compute_queue,
         "mem_request": pod.resources.mem_request,
