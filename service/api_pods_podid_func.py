@@ -653,6 +653,8 @@ async def pod_auth(pod_id_net, request: Request):
     ## Session and headers can both be manually modified, this is where we must validate the token is valid via a call to get_userinfo.
     try:
         authorized, username, roles = validate_token(request)
+        # check if user is allowed to access pod
+        tapis_auth_allowed_users = net_info.get("tapis_auth_allowed_users", [])
         if authorized:
             logger.debug(f"User authenticated: {username}")
             tapis_auth_headers = get_pod_networking_objects(
@@ -661,6 +663,9 @@ async def pod_auth(pod_id_net, request: Request):
                 tenant_id=g.request_tenant_id,
                 site_id=g.site_id
             )
+            if tapis_auth_allowed_users:
+                if username.lower() not in tapis_auth_allowed_users and "*" not in tapis_auth_allowed_users:
+                    raise Exception(f"User {username} not in networking.tapis_auth_allowed_users for pod_id: {pod_id_net}.")
             return JSONResponse(content=ok("Already authenticated"), status_code=200, headers=tapis_auth_headers)
     except HTTPException as e:
         logger.debug(f"Authentication failed: {e.detail}")
@@ -823,7 +828,7 @@ def callback(pod_id_net, request: Request):
         tapis_auth_allowed_users = net_info.get("tapis_auth_allowed_users", [])
         if tapis_auth_allowed_users:
             if username.lower() not in tapis_auth_allowed_users and "*" not in tapis_auth_allowed_users:
-                raise Exception(f"User {username} not in allowed users list {tapis_auth_allowed_users} for pod_id: {pod_id_net}.")
+                raise Exception(f"User {username} not in networking.tapis_auth_allowed_users for pod_id: {pod_id_net}.")
 
         response = RedirectResponse(url=f"https://{net_info['url']}{net_info['tapis_auth_return_path']}", status_code=302)
 

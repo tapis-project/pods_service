@@ -160,10 +160,13 @@ class Networking(TapisModel):
     @validator('tapis_ui_uri')
     def check_tapis_ui_uri(cls, v):
         if v:
+            # must start with /
+            if not v.startswith('/'):
+                raise ValueError(f"networking.tapis_ui_uri must start with '/'. Got {v}")
             # Regex match to ensure url is safe with only [A-z0-9.-/] chars.
-            res = re.fullmatch(r'[a-z][a-z0-9.-/]+', v)
+            res = re.fullmatch(r'[\/]+[a-z][a-z0-9.\-\/]+', v)
             if not res:
-                raise ValueError(f"networking.tapis_ui_uri can only contain lowercase alphanumeric characters, periods, forward-slash, and hyphens. Got {v}")
+                raise ValueError(f"networking.tapis_ui_uri can only contain lowercase alphanumeric characters, periods, forward-slash, and hyphens. Must begin with /. Got {v}")
             # pod_id char limit = 64
             if len(v) > 128:
                 raise ValueError(f"networking.tapis_ui_uri length must be below 128 characters. Inputted length: {len(v)}")

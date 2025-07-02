@@ -58,7 +58,16 @@ def combine_pod_and_template_recursively(input_obj, template_name, seen_template
             logger.debug("Attempting to combine pod and template recursively22")
             for mod_key, mod_val in modified_fields.items():
                 logger.debug(f"mod_key: {mod_key}; mod_val: {mod_val}")
-                if mod_key.startswith("resources."):
+                if mod_key == "resources":
+                    # Merge template resources with pod resources, pod values take precedence
+                    pod_resources = getattr(input_obj, "resources", {})
+                    if hasattr(pod_resources, 'dict'):
+                        pod_resources = pod_resources.dict()
+                    template_resources = template_tag.pod_definition[mod_key]
+                    merged_resources = template_resources.copy() if template_resources else {}
+                    merged_resources.update(pod_resources or {})
+                    setattr(input_obj, mod_key, merged_resources)
+                elif mod_key.startswith("resources."):
                     logger.critical('hey')
                     outer_arg, inner_arg = resources.split('.') # resources.gpus
                     outer_obj = getattr(input_obj, outer_arg) # resources
