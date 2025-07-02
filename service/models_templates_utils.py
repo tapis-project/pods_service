@@ -68,9 +68,15 @@ def combine_pod_and_template_recursively(input_obj, template_name, seen_template
                 elif mod_key == "networking":
                     # must take template3, update with template2, template,1 and then pod, in that order
                     # Preserving order of objs, pod being the most important.
+                    # Merge template networking with pod networking, pod values take precedence
                     final_network_obj = getattr(input_obj, mod_key)
-                    for network_name, network_def in template_tag.pod_definition[mod_key].items():
-                        # after that we need to derive the correct networking object.url
+                    template_networks = template_tag.pod_definition[mod_key]
+                    for network_name, network_def in template_networks.items():
+                        # Start with template's network definition
+                        merged_network = network_def.copy()
+                        # If pod has this network, update with pod's values
+                        if network_name in final_network_obj:
+                            merged_network.update(final_network_obj[network_name])
                         # Get tenant_id from input_obj or use default from context
                         tenant_id = getattr(input_obj, 'tenant_id')
                         # Fetch base_url from tenant_cache
@@ -82,8 +88,8 @@ def combine_pod_and_template_recursively(input_obj, template_name, seen_template
                         else:
                             url = base_url.replace("https://", f"{input_obj.pod_id}-{network_name}.pods.")
                         # Set the URL in network definition
-                        network_def['url'] = url
-                        final_network_obj.update({network_name: network_def})                        
+                        merged_network['url'] = url
+                        final_network_obj[network_name] = merged_network
                     setattr(input_obj, mod_key, final_network_obj)
                 elif mod_key == "environment_variables":
                     logger.debug(f"environment_variables----")
