@@ -41,7 +41,7 @@
         tapisuiHelpMsg = builtins.replaceStrings ["\n"] ["\\n"] helpText;
 
         # Create a welcome script package with an optional version parameter
-        tapisWelcome = pkgs.writeScriptBin "welcome" ''
+        tapisWelcome = pkgs.writeScriptBin "menu" ''
           #!${pkgs.bash}/bin/bash
           echo -e "Entering Tapis Pods development environment..."
 
