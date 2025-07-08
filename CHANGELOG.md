@@ -8,6 +8,42 @@ https://tapis.readthedocs.io/en/latest/index.html
 You may also reference live-docs based on the OpenAPI v3 specification here:
 https://tapis-project.github.io/live-docs
 
+## 1.9.0 - 2025-07-07:
+
+### Breaking Changes:
+- No change.
+  
+### New features:
+- Added CORs options
+- Added ensure endpoints (only for jupyter so far)
+- Updated oidc/auth features
+- Added flake.nix for use with nix develop
+- Updated some images
+- Updated models
+- Added compatibility with timescaledb
+- Exec endpoints
+- Template `save_pod_as_template` endpoint
+- Added bulk image upload
+- Added materialized views for template/tag metrics
+- Now using pika for rabbit
+- Updated to SQLModel, FastAPI, SqlAlchemy, Alembic to latest
+
+### Bug fixes:
+- Lots.
+
+
+## 1.8.0 - 2024-12-04:
+
+### Breaking Changes:
+- No change.
+  
+### New features:
+- No change.
+
+### Bug fixes:
+- No change.
+
+
 ## 1.7.0 - 2024-09-13:
 
 ### Breaking Changes:

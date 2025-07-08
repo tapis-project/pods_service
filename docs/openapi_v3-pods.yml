@@ -20,7 +20,7 @@ info:
   license:
     name: BSD 3.0
     url: https://github.com/tapis-project/pods_service
-  version: 1.8.3
+  version: 1.9.0
 paths:
   /traefik-config:
     get:
