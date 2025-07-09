@@ -44,6 +44,10 @@ async def update_pod(pod_id, update_pod: UpdatePod):
     # Only update if there's a change
     if post_update_pod != pre_update_pod:
         updated_fields = {key: post_update_pod[key] for key in post_update_pod if key in pre_update_pod and post_update_pod[key] != pre_update_pod[key]}
+        # Add updated field names to pod's modified_fields list
+        current_modified_fields = set(pod.modified_fields or [])
+        new_modified_fields = set(updated_fields.keys())
+        pod.modified_fields = list(current_modified_fields.union(new_modified_fields))
         pod.db_update(f"'{g.username}' updated pod, updated_fields: {updated_fields}")
     else:
         return error(result=pod.display(), msg="Incoming data made no changes to pod. Is incoming data equal to current data?")

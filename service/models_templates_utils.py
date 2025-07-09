@@ -103,18 +103,32 @@ def combine_pod_and_template_recursively(input_obj, template_name, seen_template
                 elif mod_key == "environment_variables":
                     logger.debug(f"environment_variables----")
                     # Self-documenting method of either overwriting alls envs or appending to them
-                    if input_obj.environment_variables.get("_TAPIS_INTERNAL_USE_TEMPLATE_VARS", True):
+                    if input_obj.environment_variables.get("_TAPIS_INTERNAL_USE_TEMPLATE_ENVS", True):
                         # inputobj and templateobj envs are dicts. If using template vars we use those as base and write input over
                         input_envs = input_obj.environment_variables
                         final_envs = template_tag.pod_definition[mod_key]
                         final_envs.update(input_envs)
                         setattr(input_obj, mod_key, final_envs)
-                        logger.debug(f"_TAPIS_INTERNAL_USE_TEMPLATE_VARS is True - input_obj.environment_variables: {input_obj.environment_variables}")
+                        logger.debug(f"_TAPIS_INTERNAL_USE_TEMPLATE_ENVS is True - input_obj.environment_variables: {input_obj.environment_variables}")
                     else:
                         # We're not using templateobj envs, so we only use inputobj envs
-                        logger.debug(f"_TAPIS_INTERNAL_USE_TEMPLATE_VARS is False - input_obj.environment_variables: {input_obj.environment_variables}")
+                        logger.debug(f"_TAPIS_INTERNAL_USE_TEMPLATE_ENVS is False - input_obj.environment_variables: {input_obj.environment_variables}")
                 elif mod_key.startswith("volume_mount."):
                     print('dog')
+                elif mod_key == "volume_mounts":
+                    # Use only user's volume_mounts by default, or merge if _TAPIS_INTERNAL_USE_TEMPLATE_VOLUMES is True
+                    pod_volume_mounts = getattr(input_obj, "volume_mounts", {})
+                    if hasattr(pod_volume_mounts, 'dict'):
+                        pod_volume_mounts = pod_volume_mounts.dict()
+                    template_volume_mounts = template_tag.pod_definition[mod_key]
+                    env_vars = getattr(input_obj, "environment_variables", {})
+                    use_template_vols = env_vars.get('_TAPIS_INTERNAL_USE_TEMPLATE_VOLUMES', True)
+                    if use_template_vols:
+                        merged_volume_mounts = template_volume_mounts.copy() if template_volume_mounts else {}
+                        merged_volume_mounts.update(pod_volume_mounts or {})
+                        setattr(input_obj, mod_key, merged_volume_mounts)
+                    else:
+                        setattr(input_obj, mod_key, pod_volume_mounts or {})
                 elif mod_key.startswith("template"):
                     pass ## Don't need this one
                 elif mod_key in input_obj.modified_fields:
