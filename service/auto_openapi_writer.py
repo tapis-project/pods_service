@@ -8,7 +8,7 @@ from api import api
 ### There's a bug in app.openapi() that doesn't handle AnyUrl correctly.
 ### I changed the representer a bit so there weren't extra quotes in outputs.
 ### Answer 1, Option B here shows that kind of https://stackoverflow.com/questions/76385999/how-to-export-a-pydantic-model-instance-as-yaml-with-url-type-as-string
-from pydantic.networks import AnyUrl, url_regex
+from pydantic.networks import AnyUrl
 
 def _any_url_representer(dumper, data):
     print(data)

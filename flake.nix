@@ -98,13 +98,14 @@
               echo "Starting minikube features..."
               # Start minikube dashboard and mount as background processes if not already running
               if ! pgrep -f "minikube dashboard" >/dev/null; then
-                nohup minikube dashboard --profile="$MINIKUBE_PROFILE" --url > .minikube-dashboard.log 2>&1 &
+                setsid minikube dashboard --profile="$MINIKUBE_PROFILE" --url > .minikube-dashboard.log 2>&1 &
                 echo "Started minikube dashboard - see .minikube-dashboard.log"
               else
                 echo "minikube dashboard already running - see .minikube-dashboard.log"
               fi
+              ## this pgrep is not finding old after change to setsid. setsid required to decouple ctrl+c from minikube mount
               if ! pgrep -f "minikube mount --uid=4872 --gid=4872 --msize=2048576000 --port 22423 /home/cgarcia/Code/pods_service:/pods_service" >/dev/null; then
-               nohup minikube mount --profile="$MINIKUBE_PROFILE" --uid=4872 --gid=4872 --msize=2048576000 --port 22423 /home/cgarcia/Code/pods_service:/pods_service > .minikube-mount.log 2>&1 &
+               setsid minikube mount --profile="$MINIKUBE_PROFILE" --uid=4872 --gid=4872 --msize=2048576000 --port 22423 /home/cgarcia/Code/pods_service:/pods_service > .minikube-mount.log 2>&1 &
                echo "Started minikube mount - see .minikube-mount.log"
               else
                 echo "minikube mount already running: /home/cgarcia/Code/pods_service:/pods_service - see .minikube-mount.log"

@@ -17,7 +17,7 @@ metadata:
   name: MAKEFILE_SERVICE_NAME-role
 rules:
 - apiGroups: [""]
-  resources: ["pods", "services"]
+  resources: ["pods", "services", "events"]
   verbs: ["list", "create", "get", "watch", "delete"]
 - apiGroups: [""]
   resources: ["pods/log"]
