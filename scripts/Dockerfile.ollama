@@ -1,10 +1,32 @@
 # debian based - ghcr.io/open-webui/open-webui:ollama
 # from ghcr.io/open-webui/open-webui:ollama
+<<<<<<< Updated upstream
 FROM ollama/ollama:0.9.5
+||||||| Stash base
+FROM ollama/ollama:0.5.7
+=======
+FROM ollama/ollama:0.6.5
+>>>>>>> Stashed changes
 RUN apt update
+<<<<<<< Updated upstream
 RUN apt-get install -y wget nvtop htop nfs-common
 # RUN apt-get install -y nix
 # ENV NIXPKGS_ALLOW_UNFREE=1
+||||||| Stash base
+RUN apt-get install -y wget btop htop
+RUN apt-get install -y nix
+RUN nix-channel --add https://nixos.org/channels/nixpkgs-unstable nixpkgs
+RUN nix-channel --update
+ENV NIXPKGS_ALLOW_UNFREE=1
+RUN apt-get install nfs-common -y
+=======
+RUN apt-get install -y wget htop nvtop
+#RUN apt-get install -y nix
+#RUN nix-channel --add https://nixos.org/channels/nixpkgs-unstable nixpkgs
+#RUN nix-channel --update
+#ENV NIXPKGS_ALLOW_UNFREE=1
+RUN apt-get install nfs-common -y
+>>>>>>> Stashed changes
 ## allow_unfree required due to nvtop eula stuff
 #RUN NIXPKGS_ALLOW_UNFREE=1 nix-shell -p btop nvtop --run 'echo car'
 

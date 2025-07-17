@@ -22,6 +22,7 @@ from api_snapshots_snapid_func import router as router_snapshots_snapshotid_func
 from api_templates import router as router_templates
 from api_templates_templateid import router as router_templates_templateid
 from api_templates_templateid_tags import router as router_templates_templateid_tags
+from api_templates_templateid_tags_tagid import router as router_templates_templateid_tags_tagid
 from api_templates_templateid_func import router as router_templates_templateid_func
 from api_images import router as router_images
 from api_images_imageid import router as router_images_imageid
@@ -114,6 +115,7 @@ api.include_router(router_templates)
 api.include_router(router_templates_templateid)
 api.include_router(router_templates_templateid_tags)
 api.include_router(router_templates_templateid_func)
+api.include_router(router_templates_templateid_tags_tagid)
 # images
 api.include_router(router_images)
 api.include_router(router_images_imageid)

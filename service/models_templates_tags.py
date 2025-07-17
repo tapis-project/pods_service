@@ -123,7 +123,7 @@ class Networking(TapisModel):
                 raise ValueError(f"networking.url can only contain lowercase alphanumeric characters, periods, and hyphens.")
             # pod_id char limit = 64
             if len(v) > 128:
-                raise ValueError(f"networking.url length must be below 128 characters. Inputted length: {len(v)}")
+                raise ValueError(f"networking.*.url length must be below 128 characters. Inputted length: {len(v)}")
         return v
 
     @validator('tapis_auth_allowed_users')
@@ -139,10 +139,13 @@ class Networking(TapisModel):
     @validator('tapis_ui_uri')
     def check_tapis_ui_uri(cls, v):
         if v:
+            # must start with /
+            if not v.startswith('/'):
+                raise ValueError(f"networking.tapis_ui_uri must start with '/'. Got {v}")
             # Regex match to ensure url is safe with only [A-z0-9.-/] chars.
-            res = re.fullmatch(r'[a-z][a-z0-9.-/]+', v)
+            res = re.fullmatch(r'[\/]+[a-z][a-z0-9.\-\/]+', v)
             if not res:
-                raise ValueError(f"networking.tapis_ui_uri can only contain lowercase alphanumeric characters, periods, forward-slash, and hyphens.")
+                raise ValueError(f"networking.tapis_ui_uri can only contain lowercase alphanumeric characters, periods, forward-slash, and hyphens. Must begin with /. Got {v}")
             # pod_id char limit = 64
             if len(v) > 128:
                 raise ValueError(f"networking.tapis_ui_uri length must be below 128 characters. Inputted length: {len(v)}")
@@ -439,11 +442,23 @@ class TemplateTagPodDefinition(TapisModel):
         # We search the siteadmintable schema for the images that our tenant is allowed to use.
         all_images = Image.db_get_all(tenant="siteadmintable", site=g.site_id)
         custom_allow_list = []
-        for image in all_images:
-            if g.tenant_id in image.tenants or "*" in image.tenants:
-                custom_allow_list.append(image.image)
+        main_tenants = ["tacc", "icicleai", "icicle", "dev", "astria", "a2cps", "scoped"]
+        for allowed_image in all_images:
+            tenants = allowed_image.tenants
+            # If "-<tenant>" is present, restrict access for that tenant
+            if f"-{g.tenant_id}" in tenants:
+                continue
+            # "**" allows all tenants
+            if "**" in tenants:
+                custom_allow_list.append(allowed_image.image)
+            # "*" allows only main_tenants
+            elif "*" in tenants and g.tenant_id in main_tenants:
+                custom_allow_list.append(allowed_image.image)
+            # Explicit tenant allow
+            elif g.tenant_id in tenants:
+                custom_allow_list.append(allowed_image.image)
         # Then we add images from the conf.image_allow_list
-        custom_allow_list += conf.image_allow_list or []
+        custom_allow_list += conf.get('image_allow_list', [])
 
         if v.split(':')[0] not in custom_allow_list:
             raise ValueError(f"Custom template_tag.image images must be in allowlist. List available images with /pods/images; alternatively, speak to admin")

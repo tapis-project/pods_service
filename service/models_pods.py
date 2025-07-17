@@ -655,8 +655,21 @@ class Pod(TapisPodBaseFull, table=True, validate=True):
             # We search the siteadmintable schema for the images that our tenant is allowed to use.
             all_images = Image.db_get_all(tenant="siteadmintable", site=g.site_id)
             custom_allow_list = []
+            main_tenants = ["tacc", "icicleai", "icicle", "dev", "astria", "a2cps", "scoped"]
+            logger.debug(f"Top of adding images to custom_allow_list. main_tenants: {main_tenants}, tenant_id: {tenant_id}")
             for allowed_image in all_images:
-                if g.tenant_id in allowed_image.tenants or "*" in allowed_image.tenants:
+                tenants = allowed_image.tenants
+                # If "-<tenant>" is present, restrict access for that tenant
+                if f"-{tenant_id}" in tenants:
+                    continue
+                # "**" allows all tenants
+                if "**" in tenants:
+                    custom_allow_list.append(allowed_image.image)
+                # "*" allows only main_tenants
+                elif "*" in tenants and tenant_id in main_tenants:
+                    custom_allow_list.append(allowed_image.image)
+                # Explicit tenant allow
+                elif tenant_id in tenants:
                     custom_allow_list.append(allowed_image.image)
             # Then we add images from the conf.image_allow_list
             custom_allow_list += conf.get('image_allow_list', [])
