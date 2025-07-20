@@ -118,9 +118,14 @@ def check_permissions(user, level, object, object_type, roles=None):
     
     # Attempt to get permission level for particular user.
     user_level = permissions.get(user)
-    if not user_level:
+    wildcard_level = permissions.get("*")
+    if not user_level and not wildcard_level:
         logger.info(f"Found no permissions for user {user} on {object_type}: {eval(f'object.{object_type}_id')}. Permissions: {permissions}")
         return False
+    elif wildcard_level:
+        # If we have a wildcard permission, use that instead of user permission.
+        logger.info(f"Found wildcard permission for {object_type} for user {user}.")
+        user_level = wildcard_level
 
     tenant_wide_level = permissions.get("TENANT")
     # Get user pem and compare to level.

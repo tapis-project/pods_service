@@ -75,6 +75,22 @@ class Template(TapisTemplateBaseFull, table=True, validate=True):
         #By default add author permissions to template.
         if not v:
             v = [f"{g.username}:ADMIN"]
+        if v:
+            if not isinstance(v, list):
+                raise TypeError(f"permissions must be list. Got {type(v).__name__}.")
+            for arg in v:
+                if not isinstance(arg, str):
+                    raise TypeError(f"permissions must be list of permissions (str). Got {type(arg).__name__}.")
+                # Check that permission is in user:level format
+                if ":" not in arg or len(arg.split(":")) != 2:
+                    raise ValueError(f"permission '{arg}' is not in user:level format.")
+                user, level = arg.split(":")
+                if not user in "*" and ( not user.isascii() or not user.isalnum() ):
+                    raise ValueError(f"User part of permission '{arg}' must be alphanumeric.")
+                if user == "*":
+                    # permission level must be user or below
+                    if level not in ["READ"]:
+                        raise ValueError(f"Permission '{arg}' is not allowed. wildcard '*' user may only have READ level permissions.")
         return v
     
     @validator('metatags')
@@ -140,6 +156,7 @@ class Template(TapisTemplateBaseFull, table=True, validate=True):
         permission_list = []
         for authed_level in authorized_levels:
             permission_list.append(f"{user}:{authed_level}")
+            permission_list.append(f"*:{authed_level}")
 
         # Create statement
         stmt = select(Template).where(Template.permissions.overlap(permission_list))   
