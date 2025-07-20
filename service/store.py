@@ -73,7 +73,7 @@ class PostgresStore():
         logger.info(f"Using conninfo: {conninfo}, with kwargs: {kwargs}")
 
         # We create SQLAlchemy objects using future=True to get ready for SA:2.0 (we follow that style)
-        self.engine = create_engine(conninfo, future=True, json_serializer=custom_serializer, echo=conf.get("postgres_engine_echo_for_debug", False))
+        self.engine = create_engine(conninfo, pool_pre_ping=True, future=True, json_serializer=custom_serializer, echo=conf.get("postgres_engine_echo_for_debug", False))
         # expire_on_commit is more of a opinion than something bad according to docs.
         # I believe it's good to keep information. Session.begin flushes.
         self.session = sessionmaker(self.engine, future=True, expire_on_commit=False)
