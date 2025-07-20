@@ -131,7 +131,7 @@ def check_route_permissions(request):
         ["/error-handler/{status}", "GET", "NOT-API"],
         # IMAGES
         ["/pods/images/{image_id:path}", "GET", codes.NONE],
-        ["/pods/images/{image_id}", "DELETE", codes.NONE],#"ONLY-ADMIN"], # this should require admin, but can't use codes.ADMIN as permissions not defined on # just need to edit tests for this to work
+        ["/pods/images/{image_id:path}", "DELETE", codes.NONE],#"ONLY-ADMIN"], # this should require admin, but can't use codes.ADMIN as permissions not defined on # just need to edit tests for this to work
         ["/pods/images", "GET", codes.NONE],
         ["/pods/images", "POST", codes.NONE],
         ["/pods/images/bulk", "POST", codes.NONE],

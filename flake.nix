@@ -76,44 +76,44 @@
             packages = commonPackages ++ [ tapisWelcome ];
             shellHook = ''
               alias k=kubectl
-              welcome
+              menu
               export STORAGE_DRIVER=vfs
               export MINIKUBE_DRIVER=docker
               export MINIKUBE_ROOTLESS=false
               export MINIKUBE_WANTUPDATENOTIFICATION=false
-              export MINIKUBE_PROFILE=podsflake
-              kubectl config use-context podsflake
-              echo "Using minikube profile: $MINIKUBE_PROFILE"
-              # Ensure the podsflake profile exists and is started with podman
-              if ! minikube profile list | grep -q "$MINIKUBE_PROFILE"; then
-                echo "Creating minikube profile $MINIKUBE_PROFILE..."
-                minikube start --profile="$MINIKUBE_PROFILE"
-              else
-                # Start the profile if not running
-                if ! minikube status --profile="$MINIKUBE_PROFILE" | grep -q "host: Running"; then
-                  echo "Starting minikube profile $MINIKUBE_PROFILE..."
-                  minikube start --profile="$MINIKUBE_PROFILE"
-                fi
-              fi
-              echo "Starting minikube features..."
-              # Start minikube dashboard and mount as background processes if not already running
-              if ! pgrep -f "minikube dashboard" >/dev/null; then
-                setsid minikube dashboard --profile="$MINIKUBE_PROFILE" --url > .minikube-dashboard.log 2>&1 &
-                echo "Started minikube dashboard - see .minikube-dashboard.log"
-              else
-                echo "minikube dashboard already running - see .minikube-dashboard.log"
-              fi
-              ## this pgrep is not finding old after change to setsid. setsid required to decouple ctrl+c from minikube mount
-              if ! pgrep -f "minikube mount --uid=4872 --gid=4872 --msize=2048576000 --port 22423 /home/cgarcia/Code/pods_service:/pods_service" >/dev/null; then
-               setsid minikube mount --profile="$MINIKUBE_PROFILE" --uid=4872 --gid=4872 --msize=2048576000 --port 22423 /home/cgarcia/Code/pods_service:/pods_service > .minikube-mount.log 2>&1 &
-               echo "Started minikube mount - see .minikube-mount.log"
-              else
-                echo "minikube mount already running: /home/cgarcia/Code/pods_service:/pods_service - see .minikube-mount.log"
-              fi
-              echo ""
-              echo "minikube profile list:"
-              minikube profile list
-              echo ""
+              # export MINIKUBE_PROFILE=podsflake
+              # kubectl config use-context podsflake
+              # echo "Using minikube profile: $MINIKUBE_PROFILE"
+              # # Ensure the podsflake profile exists and is started with podman
+              # if ! minikube profile list | grep -q "$MINIKUBE_PROFILE"; then
+              #   echo "Creating minikube profile $MINIKUBE_PROFILE..."
+              #   minikube start --profile="$MINIKUBE_PROFILE"
+              # else
+              #   # Start the profile if not running
+              #   if ! minikube status --profile="$MINIKUBE_PROFILE" | grep -q "host: Running"; then
+              #     echo "Starting minikube profile $MINIKUBE_PROFILE..."
+              #     minikube start --profile="$MINIKUBE_PROFILE"
+              #   fi
+              # fi
+              # echo "Starting minikube features..."
+              # # Start minikube dashboard and mount as background processes if not already running
+              # if ! pgrep -f "minikube dashboard" >/dev/null; then
+              #   setsid minikube dashboard --profile="$MINIKUBE_PROFILE" --url > .minikube-dashboard.log 2>&1 &
+              #   echo "Started minikube dashboard - see .minikube-dashboard.log"
+              # else
+              #   echo "minikube dashboard already running - see .minikube-dashboard.log"
+              # fi
+              # ## this pgrep is not finding old after change to setsid. setsid required to decouple ctrl+c from minikube mount
+              # if ! pgrep -f "minikube mount --uid=4872 --gid=4872 --msize=2048576000 --port 22423 /home/cgarcia/Code/pods_service:/pods_service" >/dev/null; then
+              #  setsid minikube mount --profile="$MINIKUBE_PROFILE" --uid=4872 --gid=4872 --msize=2048576000 --port 22423 /home/cgarcia/Code/pods_service:/pods_service > .minikube-mount.log 2>&1 &
+              #  echo "Started minikube mount - see .minikube-mount.log"
+              # else
+              #   echo "minikube mount already running: /home/cgarcia/Code/pods_service:/pods_service - see .minikube-mount.log"
+              # fi
+              # echo ""
+              # echo "minikube profile list:"
+              # minikube profile list
+              # echo ""
             '';
           };
           python = pkgs.mkShell {

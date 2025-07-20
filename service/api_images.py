@@ -10,7 +10,6 @@ logger = get_logger(__name__)
 
 router = APIRouter()
 
-
 #### /pods/images
 
 @router.get(
@@ -31,9 +30,61 @@ async def get_images():
     images =  Image.db_get_all(tenant="siteadmintable", site=g.site_id)
 #    images =  Image.db_get_all_with_permission(user=g.username, level='READ', tenant=g.request_tenant_id, site=g.site_id)
 
+    # Build allow list from DB images based on tenant rules
+    main_tenants = ["tacc", "icicleai", "icicle", "dev", "astria", "a2cps", "scoped"]
+    custom_allow_list = []
+    for allowed_image in images:
+        tenants = allowed_image.tenants
+        # If "-<tenant>" is present, restrict access for that tenant
+        if g.username == allowed_image.added_by:
+            # If the image was added by the user, allow it regardless of tenant
+            custom_allow_list.append(allowed_image)
+            continue
+        if f"-{g.tenant_id}" in tenants:
+            continue
+        # "**" allows all tenants
+        if "**" in tenants:
+            custom_allow_list.append(allowed_image)
+        # "*" allows only main_tenants
+        elif "*" in tenants and g.tenant_id in main_tenants:
+            custom_allow_list.append(allowed_image)
+        # Explicit tenant allow
+        elif g.tenant_id in tenants:
+            custom_allow_list.append(allowed_image)
+
+    # Only main tenants get config images
+    if g.tenant_id in main_tenants:
+        conf_images = conf.get('image_allow_list', [])
+        for conf_img in conf_images:
+            # If conf_img is a string, convert to dict with dummy/default fields
+            if isinstance(conf_img, str):
+                img_obj = Image(
+                    image=conf_img,
+                    tenants=["*"],
+                    description="(from config)",
+                    creation_ts=None,
+                    added_by="system"
+                )
+            elif isinstance(conf_img, dict):
+                # Fill missing fields with defaults
+                img_obj = Image(
+                    image=conf_img.get("image", ""),
+                    tenants=conf_img.get("tenants", ["*"]),
+                    description=conf_img.get("description", "(from config)"),
+                    creation_ts=conf_img.get("creation_ts", None),
+                    added_by=conf_img.get("added_by", "system")
+                )
+            else:
+                continue
+            custom_allow_list.append(img_obj)
+
+    # Remove duplicates by image name (favor DB images)
+    seen = set()
     images_to_show = []
-    for image in images:
-        images_to_show.append(image.display())
+    for image in custom_allow_list:
+        if image.image not in seen:
+            images_to_show.append(image.display())
+            seen.add(image.image)
 
     logger.info("Images retrieved.")
     return ok(result=images_to_show, msg="Images retrieved successfully.")
@@ -97,7 +148,8 @@ async def add_images(new_images: list[NewImage], skip_duplicates: bool = Query(F
             logger.debug(f"New image saved in db. image: {image.display()}.")
             images.append(image.display())
         except Exception as e:
-            if 'duplicate key value violates unique constraint "image_pkey"' in e.args[0]:
+            msg = e.args[0] if e.args and len(e.args) > 0 else str(e)
+            if 'duplicate key value violates unique constraint "image_pkey"' in msg:
                 if skip_duplicates:
                     duplicate_images.append(new_image.image)
                     logger.debug(f"Skipping duplicate image: {new_image.image}.")
@@ -107,7 +159,7 @@ async def add_images(new_images: list[NewImage], skip_duplicates: bool = Query(F
                         metadata = {"notice": f"skipped {len(duplicate_images)} duplicate images: {', '.join(duplicate_images)}"}
                 else:
                     # add a notice to use skip_duplicates if they want to skip duplicates in the error.
-                    e.args = (f"{e.args[0]} Use skip_duplicates=True to skip duplicate errors and continue.".replace("\n", ""),)
+                    e.args = (f"{msg} Use skip_duplicates=True to skip duplicate errors and continue.".replace("\n", ""),)
                     raise e
             else:
                 raise e

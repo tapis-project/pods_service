@@ -56,7 +56,41 @@ class Image(TapisImageBaseFull, table=True, validate=True):
     @validator('added_by')
     def check_added_by(cls, v):
         # Add author user.
-        return g.username
+        if v == "":
+            v  = g.username
+        if v == "":
+            raise ValueError("added_by field must be set to a valid username.")
+        if not v.isascii() or not v.isalnum():
+            raise ValueError(f"added_by field must be alphanumeric. Inputted username: {v}")
+        # no spaces
+        if " " in v:
+            raise ValueError(f"added_by field may not contain spaces. Invalid username: '{v}'")
+        return v
+    
+    @validator('tenants')
+    def check_tenants(cls, v):
+        # ensure tenants is a list of strings
+        if not isinstance(v, list):
+            raise ValueError(f"tenants field must be a list. Inputted type: {type(v)}")
+        for tenant in v:
+            if not isinstance(tenant, str):
+                raise ValueError(f"tenants field must be a list of strings. Inputted type: {type(tenant)}")
+            # ensure tenant is all ascii
+            if not tenant.isascii():
+                raise ValueError(f"tenants field may only contain ASCII characters. Inputted tenant: {tenant}")
+            # ensure no spaces
+            if " " in tenant:
+                raise ValueError(f"tenants field may not contain spaces. Invalid tenant: '{tenant}'")
+            if tenant == "*":
+                continue
+            if tenant == "**":
+                continue
+            if tenant.startswith("-"):
+                if not tenant[1:].isalnum():
+                    raise ValueError(f"tenants field must be alphanumeric after '-'. Invalid tenant: '{tenant}'")
+            elif not tenant.isalnum():
+                raise ValueError(f"tenants field must be alphanumeric or '*'. Invalid tenant: '{tenant}'")
+        return v
 
     @validator('description')
     def check_description(cls, v):

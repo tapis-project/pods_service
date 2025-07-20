@@ -10,7 +10,7 @@ logger = get_logger(__name__)
 router = APIRouter()
 
 @router.delete(
-    "/pods/images/{image_id}",
+    "/pods/images/{image_id:path}",
     tags=["Images"],
     summary="delete_image",
     operation_id="delete_image",
@@ -25,9 +25,11 @@ async def delete_image(image_id):
 
     # Needs to delete image
     image = Image.db_get_with_pk(image_id, tenant="siteadmintable", site=g.site_id)
+    if not image:
+        return error(result=f"", msg=f"Image with id {image_id} not found - not deleted.")
     image.db_delete(tenant="siteadmintable", site=g.site_id)
 
-    return ok(result="", msg="Image successfully deleted.")
+    return ok(result=str(image_id), msg="Image successfully deleted.")
 
 
 @router.get(
@@ -35,7 +37,7 @@ async def delete_image(image_id):
     tags=["Images"],
     summary="get_image",
     operation_id="get_image",
-    response_model=ImageResponse)
+    response_model=ImageResponse | ImageDeleteResponse)
 async def get_image(image_id):
     """
     Get an image.
@@ -46,6 +48,8 @@ async def get_image(image_id):
 
     # TODO search
     image = Image.db_get_with_pk(image_id, tenant="siteadmintable", site=g.site_id)
+    if not image:
+        return error(result="", msg=f"Image with id {image_id} not found.")
 
     return ok(result=image.display(), msg="Image retrieved successfully.")
 
