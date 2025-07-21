@@ -85,8 +85,8 @@ class Template(TapisTemplateBaseFull, table=True, validate=True):
                 if ":" not in arg or len(arg.split(":")) != 2:
                     raise ValueError(f"permission '{arg}' is not in user:level format.")
                 user, level = arg.split(":")
-                if not user in "*" and ( not user.isascii() or not user.isalnum() ):
-                    raise ValueError(f"User part of permission '{arg}' must be alphanumeric.")
+                if user != "*" and (not user.isascii() or not re.fullmatch(r"[a-zA-Z0-9\-]+", user)):
+                    raise ValueError(f"User part of permission '{arg}' must be alphanumeric or use hyphen.")
                 if user == "*":
                     # permission level must be user or below
                     if level not in ["READ"]:
