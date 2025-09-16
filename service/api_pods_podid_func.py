@@ -819,12 +819,12 @@ def callback(pod_id_net, request: Request):
         
         logger.debug(f"GET /pods/{pod_id_net}/auth/callback - pod_auth_callback3, username: {username}, tapis_domain: {tapis_domain}")
 
-        tapis_auth_headers = get_pod_networking_objects(
-            net_info=net_info,
-            username=username,
-            tenant_id=g.request_tenant_id,
-            site_id=g.site_id
-        )
+        # tapis_auth_headers = get_pod_networking_objects(
+        #     net_info=net_info,
+        #     username=username,
+        #     tenant_id=g.request_tenant_id,
+        #     site_id=g.site_id
+        # )
         tapis_auth_allowed_users = net_info.get("tapis_auth_allowed_users", [])
         if tapis_auth_allowed_users:
             if username.lower() not in tapis_auth_allowed_users and "*" not in tapis_auth_allowed_users:

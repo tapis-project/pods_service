@@ -240,6 +240,13 @@ class Networking(TapisModel):
             for ip in v:
                 if not isinstance(ip, str):
                     raise TypeError(f"networking.ip_allow_list must be list of str. Got '{type(ip).__name__}'.")
+                ## ensure ip 123.232.323/xx. Return error if * is str as that's not allowed.
+                if ip == "*":
+                    raise ValueError(f"networking.ip_allow_list cannot contain '*'. All values must be valid IPs or CIDR ranges.")
+                # Regex match to ensure ip is safe with only [0-9./] chars.
+                res = re.fullmatch(r'(\d{1,3}\.){3}\d{1,3}(/\d{1,2})?', ip)
+                if not res:
+                    raise ValueError(f"networking.ip_allow_list can only contain valid IPs or CIDR ranges. Got {ip}")
         return v
 
     @model_validator(mode="after")
