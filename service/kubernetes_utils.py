@@ -19,7 +19,7 @@ from tapisservice.config import conf
 from codes import AVAILABLE, CREATING
 # from stores import SITE_TENANT_DICT
 # from stores import pg_store
-from sqlmodel import select
+# from sqlmodel import select
 
 # k8 client creation
 config.load_incluster_config()
@@ -81,12 +81,15 @@ def rm_container(k8_name):
         k8.delete_namespaced_pod(name=k8_name, namespace=NAMESPACE)
     except Exception as e:
         logger.info(f"Got exception trying to remove pod: {k8_name}. Exception: {e}")
+        ## look for "Not Found" error and ignore
+        if "Not Found" in str(e):
+            return
         raise KubernetesError(f"Error removing pod {k8_name}, exception: {str(e)}")
     logger.info(f"delete_namespaced_pod ran for pod {k8_name}.")
 
 def rm_service(service_name):
     """
-    Remove a container. Async
+    Remove a service. Async
     :param service_name:
     :return:
     """    
@@ -94,12 +97,15 @@ def rm_service(service_name):
         k8.delete_namespaced_service(name=service_name, namespace=NAMESPACE)
     except Exception as e:
         logger.info(f"Got exception trying to remove service: {service_name}. Exception: {e}")
+        ## look for "Not Found" error and ignore
+        if "Not Found" in str(e):
+            return
         raise KubernetesError(f"Error removing service {service_name}, exception: {str(e)}")
     logger.info(f"delete_namespaced_service ran for service {service_name}.")
 
 def rm_pvc(pvc_name):
     """
-    Remove a container. Async
+    Remove a pvc. Async
     :param service_id:
     :return:
     """    
@@ -107,6 +113,9 @@ def rm_pvc(pvc_name):
         k8.delete_namespaced_persistent_volume_claim(name=pvc_name, namespace=NAMESPACE)
     except Exception as e:
         logger.info(f"Got exception trying to remove pvc: {pvc_name}. Exception: {e}")
+        ## look for "Not Found" error and ignore
+        if "Not Found" in str(e):
+            return
         raise KubernetesError(f"Error removing pvc {pvc_name}, exception: {str(e)}")
     logger.info(f"delete_namespaced_persistent_volume_claim ran for pvc {pvc_name}.")
 
@@ -145,7 +154,7 @@ def get_current_k8_pods(service_name: str = "pods", site_id: str = conf.site_id)
     """
     """Get all containers, filter for just db, and display."""
     filter_str = f"{service_name}-{site_id}"
-    #all_events = list_all_events(filter_str=filter_str)
+    # all_events = list_all_events(filter_str=filter_str)
     db_containers = []
     for k8_pod in list_all_containers(filter_str=filter_str):
         k8_name = k8_pod.metadata.name
@@ -162,6 +171,7 @@ def get_current_k8_pods(service_name: str = "pods", site_id: str = conf.site_id)
                 'tenant_id': tenant_id,
                 'pod_id': pod_id,
                 'k8_name': k8_name
+                #'event_info': 
             })
         except Exception as e:
             msg = f"Exception parsing k8 pods. e: {e}"
@@ -846,3 +856,26 @@ def get_traefik_configmap():
     current_template = k8.read_namespaced_config_map(name='pods-traefik-conf', namespace=NAMESPACE)
     
     return current_template
+
+def check_k8s_access_and_roles():
+    """
+    Checks if the service has access to the Kubernetes API and basic permissions.
+    Returns True if access is OK, False otherwise.
+    """
+    try:
+        config.load_incluster_config()
+        v1 = client.CoreV1Api()
+        # Try listing pods as a basic permission check
+        v1.list_namespaced_pod(namespace=NAMESPACE)
+        logger.info("Kubernetes API access: OK")
+        # Optionally, check other resources for broader role coverage
+        v1.list_namespace()
+        v1.list_namespaced_service(namespace=NAMESPACE)
+        logger.info("Kubernetes roles: Sufficient for health worker")
+        return True
+    except client.ApiException as e:
+        logger.error(f"Kubernetes API exception: {e}")
+        return False
+    except Exception as e:
+        logger.error(f"Kubernetes access failed: {e}")
+        return False
