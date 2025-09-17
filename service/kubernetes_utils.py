@@ -82,7 +82,8 @@ def rm_container(k8_name):
     except Exception as e:
         logger.info(f"Got exception trying to remove pod: {k8_name}. Exception: {e}")
         ## look for "Not Found" error and ignore
-        if "Not Found" in str(e):
+        if "Not Found" in str(e) or "NotFound" in str(e):
+            logger.info("Not Found error, ignoring.")
             return
         raise KubernetesError(f"Error removing pod {k8_name}, exception: {str(e)}")
     logger.info(f"delete_namespaced_pod ran for pod {k8_name}.")
@@ -98,7 +99,8 @@ def rm_service(service_name):
     except Exception as e:
         logger.info(f"Got exception trying to remove service: {service_name}. Exception: {e}")
         ## look for "Not Found" error and ignore
-        if "Not Found" in str(e):
+        if "Not Found" in str(e) or "NotFound" in str(e):
+            logger.info("Not Found error, ignoring.")
             return
         raise KubernetesError(f"Error removing service {service_name}, exception: {str(e)}")
     logger.info(f"delete_namespaced_service ran for service {service_name}.")
@@ -114,7 +116,8 @@ def rm_pvc(pvc_name):
     except Exception as e:
         logger.info(f"Got exception trying to remove pvc: {pvc_name}. Exception: {e}")
         ## look for "Not Found" error and ignore
-        if "Not Found" in str(e):
+        if "Not Found" in str(e) or "NotFound" in str(e):
+            logger.info("Not Found error, ignoring.")
             return
         raise KubernetesError(f"Error removing pvc {pvc_name}, exception: {str(e)}")
     logger.info(f"delete_namespaced_persistent_volume_claim ran for pvc {pvc_name}.")
