@@ -10,8 +10,8 @@ if [ $PODS_COMPONENT = "api" ]; then
     python3 -u /home/tapis/service/auto_openapi_writer.py
     # Set up stores during init.
     python3 -u /home/tapis/service/stores.py
-    # Start API
-    cd /home/tapis/service; uvicorn api:api --reload --host 0.0.0.0 --port 8000
+    # Start API with 5 worker processes
+    cd /home/tapis/service; uvicorn api:api --workers ${PODS_UVICORN_WORKERS:-6} --host 0.0.0.0 --port 8000
     # prod - https://www.uvicorn.org/deployment/
     # gunicorn uvicorn.worker stuff
 elif [ $PODS_COMPONENT = "health" ]; then
@@ -21,6 +21,12 @@ elif [ $PODS_COMPONENT = "health" ]; then
 elif [ $PODS_COMPONENT = "health-central" ]; then
     # Start health
     python3 -u /home/tapis/service/health_central.py
+
+elif [ $PODS_COMPONENT = "remote" ]; then
+    python3 -u /home/tapis/service/health_remote.py
+
+elif [ $PODS_COMPONENT = "remotecentral" ]; then
+    python3 -u /home/tapis/service/health_remote_central.py
 
 elif [ $PODS_COMPONENT = "spawner" ]; then
     # Start spawner
