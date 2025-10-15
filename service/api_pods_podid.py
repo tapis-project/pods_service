@@ -1,4 +1,5 @@
 import re
+import json
 from fastapi import APIRouter
 from models_pods import Pod, UpdatePod, PodResponse, Password, PodDeleteResponse, PodsFinalResponse, PodBaseFull
 from channels import CommandChannel
@@ -48,7 +49,7 @@ async def update_pod(pod_id, update_pod: UpdatePod):
         current_modified_fields = set(pod.modified_fields or [])
         new_modified_fields = set(updated_fields.keys())
         pod.modified_fields = list(current_modified_fields.union(new_modified_fields))
-        pod.db_update(f"'{g.username}' updated pod, updated_fields: {updated_fields}")
+        pod.db_update(f"'{g.username}' updated pod, updated_fields: {json.dumps(updated_fields)}")
     else:
         return error(result=pod.display(), msg="Incoming data made no changes to pod. Is incoming data equal to current data?")
         

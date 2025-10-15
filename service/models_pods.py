@@ -860,8 +860,11 @@ class UpdatePod(TapisApiModel):
     Object with fields that users are allowed to specify for the Pod class.
     """
     # Optional
+    image: str = Field("", description = "Which docker image to use, must be on allowlist, check /pods/images for list.")
+    template: str = Field("", description = "Which pod template to use as base of pod fields. User set attributes will overwrite template fields.")
     description: Optional[str] = Field("", description = "Description of this pod.")
     command: Optional[List[str]] = Field(None, description = 'Command to run in pod. ex. ["sleep", "5000"] or ["/bin/bash", "-c", "(exec myscript.sh)"]', sa_column=Column(ARRAY(String)))
+    arguments: List[str] | None = Field(None, description = "Arguments for the Pod's command.", sa_column=Column(ARRAY(String)))
     environment_variables: Optional[Dict[str, Any]] = Field({}, description = "Environment variables to inject into k8 pod; Only for custom pods.", sa_column=Column(JSON))
     status_requested: Optional[str] = Field("ON", description = "Status requested by user, `ON`, `OFF`, or `RESTART`.")
     volume_mounts: Optional[Dict[str, VolumeMount]] = Field({}, description = "Key: Volume name. Value: List of strs specifying volume folders/files to mount in pod", sa_column=Column(JSON))
@@ -869,6 +872,7 @@ class UpdatePod(TapisApiModel):
     time_to_stop_instance: Optional[int] = Field(None, description = "Time (sec) for pod to run from instance start. Reset each time instance is started. -1 for unlimited. None uses default.")
     networking: Optional[Dict[str, Networking]] = Field({"default": {"protocol": "http", "port": 5000}}, description = 'Networking information. {"url_suffix": {"protocol": "http"  "tcp", "port": int}}', sa_column=Column(JSON))
     resources: Optional[Resources] = Field({}, description = 'Pod resource management {"cpu_limit": 3000, "mem_limit": 3000, "cpu_request": 500, "mem_limit": 500, "gpu": 0}', sa_column=Column(JSON))
+    compute_queue: str = Field("default", description = "Queue to run pod in. `default` is the default queue.")
 
     
 class ExecutePodCommands(BaseModel):
