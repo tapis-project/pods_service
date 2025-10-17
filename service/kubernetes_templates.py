@@ -122,7 +122,10 @@ def start_generic_pod(input_pod, revision: int):
                 case "tapisvolume":
                     nfs_volume = client.V1NFSVolumeSource(path = f"/", server = nfs_nfs_ip) # f"/podsnfs/{pod.tenant_id}/volumes/{vol_name}"
                     volumes.append(client.V1Volume(name = full_k8_name, nfs = nfs_volume))
-                    volume_mounts.append(client.V1VolumeMount(name = full_k8_name, mount_path = vol_info.get("mount_path"), sub_path = f"{pod.tenant_id}/volumes/{vol_name}")) # vol_info.get("sub_path")))
+                    if vol_info.get("sub_path").endswith(".yaml"):
+                        volume_mounts.append(client.V1VolumeMount(name = full_k8_name, mount_path = vol_info.get("mount_path"), sub_path = f"{pod.tenant_id}/volumes/{vol_name}/{vol_info.get('sub_path')}"))
+                    else:
+                        volume_mounts.append(client.V1VolumeMount(name = full_k8_name, mount_path = vol_info.get("mount_path"), sub_path = f"{pod.tenant_id}/volumes/{vol_name}")) # vol_info.get("sub_path")))
                 case "tapissnapshot":
                     nfs_volume = client.V1NFSVolumeSource(path = f"/", server = nfs_nfs_ip) # f"/podsnfs/{pod.tenant_id}/snapshots/{vol_name}"
                     volumes.append(client.V1Volume(name = full_k8_name, nfs = nfs_volume))
