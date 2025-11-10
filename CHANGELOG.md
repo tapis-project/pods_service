@@ -8,6 +8,15 @@ https://tapis.readthedocs.io/en/latest/index.html
 You may also reference live-docs based on the OpenAPI v3 specification here:
 https://tapis-project.github.io/live-docs
 
+## 25Q4.0 - 2025-10-20
+### Breaking Changes:
+- No change.
+  
+### Bug fixes:
+- Fixes for throughput maximization
+- Added additional updatable fields
+
+
 ## 1.9.0 - 2025-07-07:
 
 ### Breaking Changes:
