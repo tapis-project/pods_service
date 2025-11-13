@@ -15,7 +15,7 @@
 name: Build & Push - All Branches
 on:
   push:
-    tags: [ 'v*.*.*' ]
+    tags: [ 'v*' ]
     branches: [ dev, staging, prod]
   pull_request:
     branches: [ dev, staging, prod]
