@@ -31,6 +31,13 @@
         "type": "string",
         "description": "URI for rabbitMQ."
       },
+      "cors_allow_origins": {
+        "type": "array",
+        "description": "List of allowed origins for CORS.",
+        "items": {
+          "type": "string"
+        }
+      },
       "pvc_storage_class_name": {
         "type": "string",
         "description": "Which kubernetes storage class to use when creating default persistent volume claims."
@@ -57,23 +64,43 @@
       },
       "default_pod_mem_limit": {
         "type": "integer",
-        "description": "Default memory allocation pod is allowed to use. In megabytes (Mi).",
+        "description": "Default memory allocation pod is allowed to use. In mebibytes (Mi).",
         "default": 3072
       },
       "default_pod_mem_request": {
         "type": "integer",
-        "description": "Default memory allocation pod requests at startup. In megabytes (Mi)",
+        "description": "Default memory allocation pod requests at startup. In mebibytes (Mi)",
         "default": 256
       },
       "maximum_pod_mem_val":{
         "type": "integer",
-        "description": "Maximum memory allocation pod is allowed to have as limit or request. In megabytes (Mi)",
+        "description": "Maximum memory allocation pod is allowed to have as limit or request. In mebibytes (Mi)",
         "default": 12288
       },
       "minimum_pod_mem_val":{
         "type": "integer",
-        "description": "Minimum memory allocation pod is allowed to have as limit or request. In megabytes (Mi)",
+        "description": "Minimum memory allocation pod is allowed to have as limit or request. In mebibytes (Mi)",
         "default": 256
+      },
+      "default_pod_ephemeral_storage_limit": {
+        "type": "integer",
+        "description": "Default ephemeral storage pod is allowed to use. In mebibytes (Mi).",
+        "default": 0
+      },
+      "default_pod_ephemeral_storage_request": {
+        "type": "integer",
+        "description": "Default ephemeral storage pod requests at startup. In mebibytes (Mi)",
+        "default": 4096
+      },
+      "minimum_pod_ephemeral_storage_val":{
+        "type": "integer",
+        "description": "Minimum ephemeral storage allocation pod is allowed to have as limit or request. In mebibytes (Mi)",
+        "default": 0
+      },
+      "maximum_pod_ephemeral_storage_val":{
+        "type": "integer",
+        "description": "Maximum ephemeral storage allocation pod is allowed to have as limit or request. In mebibytes (Mi)",
+        "default": 18432
       },
       "maximum_pod_gpu_val":{
         "type": "integer",
@@ -119,26 +146,22 @@
               "description": "Architecture of the node. e.g. 'x86_64' or 'arm64'",
               "default": "Unknown - Not defined in config.yml"
             },
-            "max_memory": {
-              "type": "integer",
-              "description": "Maximum memory (RAM) allowed for this queue in GB."
-            },
             "default_memory_limit": {
               "type": "integer",
-              "description": "Default memory (RAM) limit for this queue in GB."
+              "description": "Default memory (RAM) limit for this queue in mebibytes (Mi)."
             },
             "default_memory_request": {
               "type": "integer",
-              "description": "Default memory (RAM) request for this queue in GB."
+              "description": "Default memory (RAM) request for this queue in mebibytes (Mi)."
             },
             "min_memory": {
               "type": "integer",
-              "description": "Minimum memory (RAM) allowed for this queue in GB.",
+              "description": "Minimum memory (RAM) allowed for this queue in mebibytes (Mi).",
               "default": 256
             },
-            "max_cpus": {
+            "max_memory": {
               "type": "integer",
-              "description": "Maximum CPU value allowed for this queue."
+              "description": "Maximum memory (RAM) allowed for this queue in mebibytes (Mi)."
             },
             "default_cpu_limit": {
               "type": "integer",
@@ -152,6 +175,26 @@
               "type": "integer",
               "description": "Minimum CPU value allowed for this queue.",
               "default": 250
+            },
+            "max_cpus": {
+              "type": "integer",
+              "description": "Maximum CPU value allowed for this queue."
+            },
+            "ephemeral_storage_limit": {
+              "type": "integer",
+              "description": "Default ephemeral storage limit for this queue in mebibytes (Mi)."
+            },
+            "ephemeral_storage_request": {
+              "type": "integer",
+              "description": "Default ephemeral storage request for this queue in mebibytes (Mi)."
+            },
+            "min_ephemeral_storage": {
+              "type": "integer",
+              "description": "Minimum ephemeral storage allowed for this queue in mebibytes (Mi)."
+            },
+            "max_ephemeral_storage": {
+              "type": "integer",
+              "description": "Maximum ephemeral storage allowed for this queue in mebibytes (Mi)."
             },
             "tolerations": {
               "type": "array",

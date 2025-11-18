@@ -1,6 +1,7 @@
 from utils import error_handler, HttpUrlRedirectMiddleware
 from tapisservice.tapisfastapi.utils import GlobalsMiddleware
 from tapisservice.tapisfastapi.auth import TapisMiddleware
+from tapisservice.config import conf
 
 from __init__ import Tenants
 from fastapi import FastAPI
@@ -94,7 +95,7 @@ api = FastAPI(
         Middleware(GlobalsMiddleware),
         Middleware(
             CORSMiddleware,
-            allow_origins=["http://localhost:3000"],#, "http://localhost:3001", "localhost:5000", "http://localhost:5000", "localhost"],
+            allow_origins=conf.get("cors_allow_origins", ["http://localhost:3000"]),# "*", "http://localhost:3001", "localhost:5000", "http://localhost:5000", "localhost"],
             allow_credentials=True,
             allow_methods=["*"],
             allow_headers=["X-Tapis-Token", "Origin", "Access-Control-Request-Methods", "*"],
