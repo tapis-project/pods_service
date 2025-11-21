@@ -13,13 +13,30 @@ spec:
     spec:
       containers:
       - name: MAKEFILE_SERVICE_NAME-postgres
-        image: postgres:14
+        image: timescale/timescaledb:latest-pg14
         imagePullPolicy: Always
-        command: ["docker-entrypoint.sh"]
+        command:
+          - /bin/bash
+          - -c
+          - |
+            apk add openssl
+            mkdir -p /tmp/ssl/certs /tmp/ssl/private
+            if [ ! -f /tmp/ssl/certs/ssl-cert-snakeoil.pem ] || [ ! -f /tmp/ssl/private/ssl-cert-snakeoil.key ]; then
+              openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+                -keyout /tmp/ssl/private/ssl-cert-snakeoil.key \
+                -out /tmp/ssl/certs/ssl-cert-snakeoil.pem \
+                -subj "/CN=localhost";
+              id
+              echo "bing"
+              chmod 600 /tmp/ssl/private/ssl-cert-snakeoil.key;
+              chown postgres:postgres /tmp/ssl/private/ssl-cert-snakeoil.key
+            fi
+            docker-entrypoint.sh "$@"
         args: [
+          "postgres",
           "-c", "ssl=on",
-          "-c", "ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem",
-          "-c", "ssl_key_file=/etc/ssl/private/ssl-cert-snakeoil.key",
+          "-c", "ssl_cert_file=/tmp/ssl/certs/ssl-cert-snakeoil.pem",
+          "-c", "ssl_key_file=/tmp/ssl/private/ssl-cert-snakeoil.key",
           "-c", "max_connections=500"
         ]
         resources:
@@ -40,7 +57,7 @@ spec:
               name: tapis-MAKEFILE_SERVICE_NAME-secrets
               key: postgres-password
         - name: PGSSLMODE
-          value: "require"
+          value: "disable"
         ports:
         - name: postgres
           containerPort: 5432
