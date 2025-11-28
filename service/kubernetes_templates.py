@@ -163,6 +163,8 @@ def start_generic_pod(input_pod, revision: int):
         "cpu_request": pod.resources.cpu_request,
         "mem_limit": pod.resources.mem_limit,
         "cpu_limit": pod.resources.cpu_limit,
+        "ephemeral_storage_request": pod.resources.ephemeral_storage_request,
+        "ephemeral_storage_limit": pod.resources.ephemeral_storage_limit,
         "gpus": pod.resources.gpus,
         "user": None
     }

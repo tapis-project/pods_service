@@ -60,8 +60,8 @@ class Image(TapisImageBaseFull, table=True, validate=True):
             v  = g.username
         if v == "":
             raise ValueError("added_by field must be set to a valid username.")
-        if not v.isascii() or not v.isalnum():
-            raise ValueError(f"added_by field must be alphanumeric. Inputted username: {v}")
+        if not v.isascii() or not re.match(r'^[a-zA-Z0-9_-]+$', v):
+            raise ValueError(f"added_by field must be alphanumeric and may include '_' or '-'. Inputted username: {v}")
         # no spaces
         if " " in v:
             raise ValueError(f"added_by field may not contain spaces. Invalid username: '{v}'")

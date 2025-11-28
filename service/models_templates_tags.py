@@ -256,8 +256,11 @@ class Resources(TapisModel):
     cpu_request: int | None = Field(None, description = "CPU allocation pod requests at startup. In millicpus (m). 1000 = 1 cpu.")
     cpu_limit: int | None = Field(None, description = "CPU allocation pod is allowed to use. In millicpus (m). 1000 = 1 cpu.")
     # Mem
-    mem_request: int | None = Field(None, description = "Memory allocation pod requests at startup. In megabytes (Mi)")
-    mem_limit: int | None = Field(None, description = "Memory allocation pod is allowed to use. In megabytes (Mi)")
+    mem_request: int | None = Field(None, description = "Memory allocation pod requests at startup. In mebibytes (Mi)")
+    mem_limit: int | None = Field(None, description = "Memory allocation pod is allowed to use. In mebibytes (Mi)")
+    # Ephemeral Storage
+    ephemeral_storage_request: int | None = Field(None, description = "Ephemeral storage pod requests at startup. In mebibytes (Mi)")
+    ephemeral_storage_limit: int | None = Field(None, description = "Ephemeral storage pod is allowed to use. In mebibytes (Mi)")
     # GPU
     gpus: int | None = Field(None, description = "GPU allocation pod is allowed to use. In integers of GPUs. (we only have 1 currently ;) )")
 
@@ -283,6 +286,17 @@ class Resources(TapisModel):
                 )
         return v
 
+    @validator('ephemeral_storage_request', 'ephemeral_storage_limit')
+    def check_ephemeral_storage_resources(cls, v):
+        if not v:
+            return v
+        if conf.minimum_pod_ephemeral_storage_val > v  or v > conf.maximum_pod_ephemeral_storage_val:
+            raise ValueError(
+                f"resources.ephemeral_storage_x out of bounds. Received: {v}. Maximum: {conf.maximum_pod_ephemeral_storage_val}. Minimum: {conf.minimum_pod_ephemeral_storage_val}.",
+                 " User requires extra role to break bounds. Contact admin."
+                )
+        return v
+
     @validator('gpus')
     def check_gpus(cls, v):
         if not v:
@@ -293,22 +307,28 @@ class Resources(TapisModel):
                  " User requires extra role to break bounds. Contact admin."
                 )
         return v
+
     @model_validator(mode="after")
     def ensure_request_lessthan_limit(cls, values):
         cpu_request = getattr(values, "cpu_request", None)
         cpu_limit = getattr(values, "cpu_limit", None)
         mem_request = getattr(values, "mem_request", None)
         mem_limit = getattr(values, "mem_limit", None)
+        ephemeral_storage_request = getattr(values, 'ephemeral_storage_request')
+        ephemeral_storage_limit = getattr(values, 'ephemeral_storage_limit')    
         gpus = getattr(values, "gpus", None) # There's no request/limit for gpus, just an int validated in check_gpus
 
         # Check cpu values
         if cpu_request and cpu_limit and cpu_request > cpu_limit:
             raise ValueError(f"resources.cpu_x found cpu_request({cpu_request}) > cpu_limit({cpu_limit}). Request must be less than or equal to limit.")
-        
+
         # Check mem values
         if mem_request and mem_limit and mem_request > mem_limit:
             raise ValueError(f"resources.mem_x found mem_request({mem_request}) > mem_limit({mem_limit}). Request must be less than or equal to limit.")
-        
+
+        if ephemeral_storage_request and ephemeral_storage_limit and ephemeral_storage_request > ephemeral_storage_limit:
+            raise ValueError(f"resources.ephemeral_storage_x found ephemeral_storage_request({ephemeral_storage_request}) > ephemeral_storage_limit({ephemeral_storage_limit}). Request must be less than or equal to limit.")
+
         return values
 
 

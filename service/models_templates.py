@@ -39,8 +39,8 @@ class TemplateBase(TapisApiModel):
 
 class TemplateBaseRead(TemplateBase):
     # Provided
-    creation_ts: datetime | None = Field(None, description = "Time (UTC) that this template was created.")
-    update_ts: datetime | None = Field(None, description = "Time (UTC) that this template was updated.")
+    creation_ts: Optional[datetime] | None = Field(None, description = "Time (UTC) that this template was created.")
+    update_ts: Optional[datetime] | None = Field(None, description = "Time (UTC) that this template was updated.")
 
 
 class TemplateBaseFull(TemplateBaseRead):
@@ -85,7 +85,7 @@ class Template(TapisTemplateBaseFull, table=True, validate=True):
                 if ":" not in arg or len(arg.split(":")) != 2:
                     raise ValueError(f"permission '{arg}' is not in user:level format.")
                 user, level = arg.split(":")
-                if user != "*" and (not user.isascii() or not re.fullmatch(r"[a-zA-Z0-9\-]+", user)):
+                if user != "*" and (not user.isascii() or not re.fullmatch(r"[a-zA-Z0-9_@\-]+", user)):
                     raise ValueError(f"User part of permission '{arg}' must be alphanumeric or use hyphen.")
                 if user == "*":
                     # permission level must be user or below

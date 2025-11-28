@@ -79,7 +79,7 @@ APPROVEDADMIN = PermissionLevel('APPROVEDADMIN')
 PERMISSION_LEVELS = (NONE.name, READ.name, USER.name, ADMIN.name, APPROVEDADMIN.name)
 
 # roles - only used when Tapis's JWT Auth is activated.
-# the admin role allows users full access to Abaco, including modifying workers assigned to actors.
+# the admin role allows users full access to Pods, additional "ADMIN": True header for all tenants. Or "ADMIN": tenant1,tenant2,... (csv)
 ADMIN_ROLE = 'pods_admin'
 
 # the privileged role allows users to create privileged actors.

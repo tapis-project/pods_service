@@ -383,8 +383,11 @@ def deduct_queue_settings(
     gpus_requested: int = 0,
     mem_request: str | None = None,
     cpu_request: str | None = None,
+    ephemeral_storage_request: str | None = None,
     mem_limit: str | None = None,
-    cpu_limit: str | None = None):
+    cpu_limit: str | None = None,
+    ephemeral_storage_limit: str | None = None
+    ):
     """
     Deducts K8 settings settings based on requested_queue_name and config.yml.
     
@@ -457,12 +460,16 @@ def deduct_queue_settings(
         resource_limits["memory"] = f"{mem_limit}Mi"
     if cpu_limit:
         resource_limits["cpu"] = f"{cpu_limit}m"
+    if ephemeral_storage_limit:
+        resource_limits["ephemeral-storage"] = f"{ephemeral_storage_limit}Mi"
     # Requests
     resource_requests = {}
     if mem_request:
         resource_requests["memory"] = f"{mem_request}Mi"
     if cpu_request:
         resource_requests["cpu"] = f"{cpu_request}m"
+    if ephemeral_storage_request:
+        resource_requests["ephemeral-storage"] = f"{ephemeral_storage_request}Mi"
 
     ### Resources - GPU part
     # if gpus are requested, look for queue gpu array
@@ -530,8 +537,10 @@ def create_pod(name: str,
                tapis_permissions: List[str] = [],
                mem_request: str | None = None,
                cpu_request: str | None = None,
+               ephemeral_storage_request: str | None = None,
                mem_limit: str | None = None,
                cpu_limit: str | None = None,
+               ephemeral_storage_limit: str | None = None,
                queue: str | None = None,
                gpus: int = 0,
                user: str | None = None,
@@ -645,7 +654,7 @@ def create_pod(name: str,
     logger.debug(f"Volume_mounts: {volume_mounts}; pod_id: {name}")
 
     ### Resources - CPU/MEM/GPU settings based off of queue
-    node_selector, tolerations, resources = deduct_queue_settings(queue, gpus, mem_request, cpu_request, mem_limit, cpu_limit)
+    node_selector, tolerations, resources = deduct_queue_settings(queue, gpus, mem_request, cpu_request, ephemeral_storage_request, mem_limit, cpu_limit, ephemeral_storage_limit)
 
     ## If GPU is requested.
     if gpus:

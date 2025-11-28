@@ -84,6 +84,57 @@ async def get_snapshot_contents(
 
 
 @router.get(
+    "/pods/snapshots/{snapshot_id}/download/{path:path}",
+    tags=["Snapshots"],
+    summary="download_snapshot_file",
+    operation_id="download_snapshot_file",
+    responses={
+        200: {
+            "description": "A streamed response of the file contents.",
+            "content": {"application/octet-stream": {}}
+        }
+    }
+)
+async def download_snapshot_file(
+        snapshot_id: str = Path(..., description="Unique identifier for the snapshot."),
+        path: str = Path(..., description="Path to the file relative to the snapshot's root directory. Cannot be empty or /.")):
+    """
+    Download a specific file from a Tapis Snapshot.
+    
+    Efficiently handles large files (100MB - 10GB) from NFS-backed storage by streaming in chunks.
+    
+    Note:
+    - This endpoint is for downloading individual files
+    - For directories, use get_snapshot_contents with zip=true
+    - Path cannot be empty or / to prevent downloading entire snapshot
+    """
+    logger.info(f"GET /pods/snapshots/{snapshot_id}/download/{path} - Downloading file.")
+
+    snapshot = Snapshot.db_get_with_pk(snapshot_id, tenant=g.request_tenant_id, site=g.site_id)
+
+    # Validate path to prevent accessing all files
+    if not path or path == "/":
+        raise KeyError("Requesting no path or / path is not allowed. Please specify a file path.")
+
+    # Call files_download from volume_utils (without zip for single file)
+    file_content, filename = files_download(
+        path=f"/snapshots/{snapshot.snapshot_id}/{path}",
+        zip=False)
+    
+    # Extract just the filename for cleaner download name
+    clean_filename = filename.split('/')[-1] if '/' in filename else filename
+    
+    return StreamingResponse(
+        file_content,
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f"attachment; filename={clean_filename}",
+            "X-Snapshot-Id": snapshot.snapshot_id,
+            "X-Source-Path": path
+        })
+
+
+@router.get(
     "/pods/snapshots/{snapshot_id}/permissions",
     tags=["Permissions"],
     summary="get_snapshot_permissions",

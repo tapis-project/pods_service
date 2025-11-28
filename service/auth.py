@@ -187,6 +187,8 @@ def check_route_permissions(request):
         ["/pods/{pod_id}/start", "GET", codes.ADMIN],
         ["/pods/{pod_id}/restart", "GET", codes.ADMIN],
         ["/pods/{pod_id}/derived", "GET", codes.READ],
+        ["/pods/{pod_id}/download_from_pod{path:path}", "GET", codes.ADMIN],
+        ["/pods/{pod_id}/list_files{path:path}", "GET", codes.ADMIN],
         ["/pods/{pod_id}/exec", "POST", codes.ADMIN],
         ["/pods/{pod_id_net}/auth", "GET", "NEED-BASEURL"], # oauth
         ["/pods/{pod_id_net}/auth/callback", "GET", "NEED-BASEURL"], # oauth

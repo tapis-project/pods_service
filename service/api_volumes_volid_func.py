@@ -90,7 +90,7 @@ async def get_volume_contents(
 
 
 @router.post(
-    "/pods/volumes/{volume_id}/upload/{path}",
+    "/pods/volumes/{volume_id}/upload/{path:path}",
     tags=["Volumes"],
     summary="upload_to_volume",
     operation_id="upload_to_volume",
@@ -111,6 +111,57 @@ async def upload_to_volume(
         path = f"/volumes/{volume.volume_id}/{path}")
 
     return ok(result=f"{insert_res}", msg = "Volume file upload successful.")
+
+
+@router.get(
+    "/pods/volumes/{volume_id}/download/{path:path}",
+    tags=["Volumes"],
+    summary="download_volume_file",
+    operation_id="download_volume_file",
+    responses={
+        200: {
+            "description": "A streamed response of the file contents.",
+            "content": {"application/octet-stream": {}}
+        }
+    }
+)
+async def download_volume_file(
+        volume_id: str = Path(..., description="Unique identifier for the volume."),
+        path: str = Path(..., description="Path to the file relative to the volume's root directory. Cannot be empty or /.")):
+    """
+    Download a specific file from a Tapis Volume.
+    
+    Efficiently handles large files (100MB - 10GB) from NFS-backed storage by streaming in chunks.
+    
+    Note:
+    - This endpoint is for downloading individual files
+    - For directories, use get_volume_contents with zip=true
+    - Path cannot be empty or / to prevent downloading entire volume
+    """
+    logger.info(f"GET /pods/volumes/{volume_id}/download/{path} - Downloading file.")
+
+    volume = Volume.db_get_with_pk(volume_id, tenant=g.request_tenant_id, site=g.site_id)
+
+    # Validate path to prevent accessing all files
+    if not path or path == "/":
+        raise KeyError("Requesting no path or / path is not allowed. Please specify a file path.")
+
+    # Call files_download from volume_utils (without zip for single file)
+    file_content, filename = files_download(
+        path=f"/volumes/{volume.volume_id}/{path}",
+        zip=False)
+    
+    # Extract just the filename for cleaner download name
+    clean_filename = filename.split('/')[-1] if '/' in filename else filename
+    
+    return StreamingResponse(
+        file_content,
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f"attachment; filename={clean_filename}",
+            "X-Volume-Id": volume.volume_id,
+            "X-Source-Path": path
+        })
 
 
 @router.get(

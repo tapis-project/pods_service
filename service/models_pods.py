@@ -277,6 +277,9 @@ class Resources(TapisModel):
     # Mem
     mem_request: int = Field(conf.default_pod_mem_request, description = "Memory allocation pod requests at startup. In megabytes (Mi)")
     mem_limit: int = Field(conf.default_pod_mem_limit, description = "Memory allocation pod is allowed to use. In megabytes (Mi)")
+    # Ephemeral Storage
+    ephemeral_storage_request: int = Field(conf.default_pod_ephemeral_storage_request, description = "Ephemeral storage pod requests at startup. In mebibytes (Mi)")
+    ephemeral_storage_limit: int = Field(conf.default_pod_ephemeral_storage_limit, description = "Ephemeral storage pod is allowed to use. In mebibytes (Mi)")
     # GPU
     gpus: int = Field(0, description = "GPU allocation pod is allowed to use. In integers of GPUs. (we only have 1 currently ;) )")
 
@@ -298,6 +301,15 @@ class Resources(TapisModel):
                 )
         return v
 
+    @validator('ephemeral_storage_request', 'ephemeral_storage_limit')
+    def check_ephemeral_storage_resources(cls, v):
+        if conf.minimum_pod_ephemeral_storage_val > v or v > conf.maximum_pod_ephemeral_storage_val:
+            raise ValueError(
+                f"resources.ephemeral_storage_x out of bounds. Received: {v}. Maximum: {conf.maximum_pod_ephemeral_storage_val}. Minimum: {conf.minimum_pod_ephemeral_storage_val}.",
+                 " User requires extra role to break bounds. Contact admin."
+                )
+        return v
+
     @validator('gpus')
     def check_gpus(cls, v):
         if 0 > v  or v > conf.maximum_pod_gpu_val:
@@ -312,6 +324,8 @@ class Resources(TapisModel):
         cpu_limit = getattr(values, 'cpu_limit')
         mem_request = getattr(values, 'mem_request')
         mem_limit = getattr(values, 'mem_limit')
+        ephemeral_storage_request = getattr(values, 'ephemeral_storage_request')
+        ephemeral_storage_limit = getattr(values, 'ephemeral_storage_limit')
         gpus = getattr(values, 'gpus') # There's no request/limit for gpus, just an int validated in check_gpus
         
         # Check cpu values
@@ -321,6 +335,10 @@ class Resources(TapisModel):
         # Check mem values
         if mem_request and mem_limit and mem_request > mem_limit:
             raise ValueError(f"resources.mem_x found mem_request({mem_request}) > mem_limit({mem_limit}). Request must be less than or equal to limit.")
+        
+        # Check ephemeral storage values
+        if ephemeral_storage_request and ephemeral_storage_limit and ephemeral_storage_request > ephemeral_storage_limit:
+            raise ValueError(f"resources.ephemeral_storage_x found ephemeral_storage_request({ephemeral_storage_request}) > ephemeral_storage_limit({ephemeral_storage_limit}). Request must be less than or equal to limit.")
         
         return values
 

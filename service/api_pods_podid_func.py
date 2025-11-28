@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Request, HTTPException, UploadFile, File, Form
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi import APIRouter, Request, HTTPException, UploadFile, File, Form, Body, Path, Query
+from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from models_pods import Pod, Password, PodResponse, PodPermissionsResponse, PodCredentialsResponse, PodLogsResponse, ExecutePodCommands
 from models_templates_tags import Template, TemplateTag, TemplateTagResponse, NewTemplateTagFromPod
 from models_templates_utils import combine_pod_and_template_recursively
@@ -7,7 +7,7 @@ from models_misc import SetPermission
 from channels import CommandChannel
 from codes import OFF, ON, RESTART, REQUESTED, STOPPED, USER
 import requests
-from tapisservice.tapisfastapi.utils import g, ok
+from tapisservice.tapisfastapi.utils import g, ok, error
 from tapisservice.config import conf
 from __init__ import t, BadRequestError
 from typing import List, Any
@@ -18,6 +18,7 @@ from datetime import datetime
 import time
 import re
 import asyncio
+import io
 
 CHUNK_TIMEOUT = 60  # seconds per chunk
 CHUNK_SIZE = 2 * 1024 * 1024  # 2MB chunkscv
@@ -282,7 +283,11 @@ async def upload_to_pod(
     dest_path: str = Form(...)
 ):
     """
-    Upload a file to a specific path inside the pod using Kubernetes exec/copy (chunked streaming, no temp file).
+    Upload a file to a specific path inside the pod using Kubernetes exec.
+    
+    Notes:
+    - Pod must have /bin/sh available (most standard images include this)
+    - Distroless or minimal images without a shell will not work with this endpoint.
     """
     logger.info(f"POST /pods/{pod_id}/upload_to_pod - Top of upload_to_pod.")
     pod = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
@@ -324,6 +329,389 @@ async def upload_to_pod(
         return JSONResponse(content=f"Failed to upload file to pod: {e}", status_code=500)
 
     return ok(result={"uploaded": dest_path, "pod_name": pod.pod_id}, msg="File uploaded to pod successfully.")
+
+@router.get(
+    "/pods/{pod_id}/list_files{url_path:path}",
+    tags=["Pods"],
+    summary="List files in the pod's filesystem",
+    operation_id="list_files_in_pod",
+)
+async def list_files_in_pod(
+    pod_id: str = Path(..., description="Unique identifier for the pod."),
+    url_path: str = Path(..., description="Path to list files from inside the pod."),
+    path: str = Query(None, description="Alternative query parameter for path.")
+):
+    """
+    List files and directories at a specific path inside the pod using Kubernetes exec.
+    
+    Path options (use one, not both):
+    - URL path: Relative paths only (e.g., /list_files/mydir -> "mydir")
+    - Query parameter: Absolute paths allowed (e.g., ?path=/tmp -> "/tmp")
+    
+    Notes:
+    - Pod must have /bin/sh and ls available (most standard images include these)
+    - Distroless or minimal images without a shell will return a 500 error.
+    """
+    logger.info(f"GET /pods/{pod_id}/list_files - Top of list_files_in_pod.")
+    pod = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
+
+    if not pod or getattr(pod, "status_requested", None) != "ON":
+        return JSONResponse(content="Can't find suitable running pod for listing files.", status_code=404)
+
+    # Check that exactly one of url_path or path is provided
+    if url_path and path:
+        return JSONResponse(
+            content="Error: Provide path either in URL path or as query parameter, not both.",
+            status_code=400
+        )
+    elif not url_path and not path:
+        return JSONResponse(
+            content=f"Error: Path is required. Provide path either in URL path or as query parameter. path {path} ",
+            status_code=400
+        )
+
+    # Set source_path from whichever was provided
+    source_path = url_path.lstrip('/') if url_path else path
+    
+    # Default to current directory if empty
+    if not source_path:
+        source_path = "."
+
+    try:
+        from kubernetes.stream import stream
+        from kubernetes import client as k8s_client
+        from dateutil import parser as date_parser
+        
+        api = k8s_client.CoreV1Api()
+        
+        # First check if path exists and is accessible
+        check_command = ['/bin/sh', '-c', f'test -e "{source_path}" && echo "EXISTS" || echo "NOT_FOUND"']
+        
+        check_resp = stream(
+            api.connect_get_namespaced_pod_exec,
+            pod.k8_name,
+            NAMESPACE,
+            command=check_command,
+            stderr=True,
+            stdin=False,
+            stdout=True,
+            tty=False,
+            container=None,
+            _preload_content=False
+        )
+        
+        check_output = ""
+        check_error = ""
+        while check_resp.is_open():
+            check_resp.update(timeout=1)
+            if check_resp.peek_stdout():
+                check_output += check_resp.read_stdout()
+            if check_resp.peek_stderr():
+                check_error += check_resp.read_stderr()
+        check_resp.close()
+        
+        # Check if /bin/sh is not available
+        if check_error and ("not found" in check_error.lower() or "no such file" in check_error.lower()):
+            return JSONResponse(
+                content={
+                    "error": "Shell (/bin/sh) is not available in this pod",
+                    "details": check_error,
+                    "suggestion": "This pod may be using a minimal or distroless base image without a shell. Consider using a pod with /bin/sh or /bin/bash available, use /exec endpoint rather than list_files_in_pod."
+                },
+                status_code=500
+            )
+        
+        if "NOT_FOUND" in check_output.strip():
+            return JSONResponse(
+                content=f"Path not found or not accessible: {source_path}", 
+                status_code=404
+            )
+        
+        # List files with full details using ls with specific format
+        # Using --full-time for ISO 8601 timestamps
+        list_command = ['/bin/sh', '-c', f'ls -lAh --full-time "{source_path}" 2>&1']
+        
+        list_resp = stream(
+            api.connect_get_namespaced_pod_exec,
+            pod.k8_name,
+            NAMESPACE,
+            command=list_command,
+            stderr=True,
+            stdin=False,
+            stdout=True,
+            tty=False,
+            container=None,
+            _preload_content=False
+        )
+        
+        listing_output = ""
+        error_output = ""
+        while list_resp.is_open():
+            list_resp.update(timeout=5)
+            if list_resp.peek_stdout():
+                listing_output += list_resp.read_stdout()
+            if list_resp.peek_stderr():
+                error_output += list_resp.read_stderr()
+        list_resp.close()
+        
+        if error_output or "cannot access" in listing_output.lower():
+            logger.error(f"Error listing files: {error_output or listing_output}")
+            return JSONResponse(
+                content=f"Error listing files: {error_output or listing_output}",
+                status_code=500
+            )
+        
+        # Parse the ls output into a structured format
+        files = []
+        lines = listing_output.strip().split('\n')
+        
+        # Skip the first line if it's "total X"
+        start_idx = 1 if lines and lines[0].startswith('total') else 0
+        
+        for line in lines[start_idx:]:
+            if not line.strip():
+                continue
+            
+            # Parse ls -lAh --full-time output
+            # Format: permissions links owner group size date time timezone name
+            parts = line.split(None, 8)
+            if len(parts) >= 9:
+                permissions = parts[0]
+                owner = parts[2]
+                group = parts[3]
+                size_str = parts[4]
+                
+                # Parse timestamp (parts[5] is date, parts[6] is time with timezone)
+                try:
+                    datetime_str = f"{parts[5]} {parts[6]}"
+                    dt = date_parser.parse(datetime_str)
+                    last_modified = dt.isoformat()
+                except:
+                    last_modified = f"{parts[5]}T{parts[6]}"
+                
+                name = parts[8]
+                
+                # Determine file type
+                if permissions.startswith('l'):
+                    file_type = "symbolic_link"
+                    # Extract actual name from "name -> target"
+                    if ' -> ' in name:
+                        name = name.split(' -> ')[0]
+                elif permissions.startswith('d'):
+                    file_type = "dir"
+                elif permissions.startswith('-'):
+                    file_type = "file"
+                else:
+                    file_type = "other"
+                
+                # Convert size to bytes if possible
+                try:
+                    size = int(size_str) if size_str.isdigit() else size_str
+                except:
+                    size = size_str
+                
+                # Construct proper path
+                if source_path == "/":
+                    file_path = f"/{name}"
+                elif source_path == ".":
+                    file_path = f"./{name}"
+                else:
+                    # Remove trailing slash from source_path to prevent double slashes
+                    clean_source_path = source_path.rstrip('/')
+                    if clean_source_path.startswith("/"):
+                        file_path = f"{clean_source_path}/{name}"
+                    else:
+                        file_path = f"{clean_source_path}/{name}"
+                
+                files.append({
+                    "name": name,
+                    "path": file_path,
+                    "type": file_type,
+                    "size": size,
+                    "owner": owner,
+                    "group": group,
+                    "nativePermissions": permissions,
+                    "lastModified": last_modified,
+                    "mimeType": None
+                })
+            
+        logger.info(f"Successfully listed {len(files)} items in {source_path} from pod {pod_id}")
+        
+        return ok(
+            result={
+                "path": source_path,
+                "files": files,
+                "count": len(files)
+            },
+            msg=f"Successfully listed files in {source_path}"
+        )
+        
+    except Exception as e:
+        logger.error(f"Error listing files in pod: {e}")
+        return JSONResponse(
+            content=f"Failed to list files in pod: {str(e)}", 
+            status_code=500
+        )
+
+@router.get(
+    "/pods/{pod_id}/download_from_pod{url_path:path}",
+    tags=["Pods"],
+    summary="Download a file from the pod's filesystem",
+    operation_id="download_from_pod",
+)
+async def download_from_pod(
+    pod_id: str = Path(..., description="Unique identifier for the pod."),
+    url_path: str = Path(..., description="Path to the file inside the pod to download."),
+    path: str = None
+):
+    """
+    Download a file from a specific path inside the pod using Kubernetes exec.
+    
+    Path options (use one, not both):
+    - URL path: Relative paths only (e.g., /download_from_pod/myfile.txt -> "myfile.txt")
+    - Query parameter: Absolute paths allowed (e.g., ?path=/tmp/myfile.txt -> "/tmp/myfile.txt")
+    
+    Notes:
+    - Pod must have /bin/sh and base64 available (most standard images include these)
+    - Distroless or minimal images without a shell or base64 will not work with this endpoint.
+    """
+    logger.info(f"GET /pods/{pod_id}/download_from_pod - Top of download_from_pod.")
+    pod = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
+
+    if not pod or getattr(pod, "status_requested", None) != "ON":
+        return JSONResponse(content="Can't find suitable running pod for download.", status_code=404)
+
+    # Check that exactly one of url_path or path is provided
+    if url_path and path:
+        return JSONResponse(
+            content=f"Error: Provide source_path either in URL path or as query parameter, not both, url path: {url_path}, query param path: {path}",
+            status_code=400
+        )
+    elif not url_path and not path:
+        return JSONResponse(
+            content="Error: Path is required. Provide source_path either in URL path or as query parameter.",
+            status_code=400
+        )
+
+    # Set source_path from whichever was provided
+    source_path = url_path.lstrip('/') if url_path else path
+
+    # Extract filename from path for Content-Disposition header
+    filename = source_path.split('/')[-1] if '/' in source_path else source_path
+
+    try:
+        from kubernetes.stream import stream
+        from kubernetes import client as k8s_client
+        
+        # First check if file exists and get its size
+        check_command = ['/bin/sh', '-c', f'test -f {source_path} && stat -c%s {source_path} || echo "FILE_NOT_FOUND"']
+        api = k8s_client.CoreV1Api()
+        
+        check_resp = stream(
+            api.connect_get_namespaced_pod_exec,
+            pod.k8_name,
+            NAMESPACE,
+            command=check_command,
+            stderr=True,
+            stdin=False,
+            stdout=True,
+            tty=False,
+            container=None,
+            _preload_content=False
+        )
+        
+        size_output = ""
+        while check_resp.is_open():
+            check_resp.update(timeout=1)
+            if check_resp.peek_stdout():
+                size_output += check_resp.read_stdout()
+            if check_resp.peek_stderr():
+                error = check_resp.read_stderr()
+                logger.error(f"Error checking file: {error}")
+        check_resp.close()
+        
+        size_output = size_output.strip()
+        if size_output == "FILE_NOT_FOUND" or not size_output.isdigit():
+            return JSONResponse(
+                content=f"File not found or not accessible: {source_path}", 
+                status_code=404
+            )
+        
+        file_size = int(size_output)
+        logger.info(f"Downloading file {source_path} of size {file_size} bytes from pod {pod_id}")
+        
+        # Stream the file content from pod using base64 to preserve binary data
+        # K8s exec stream decodes output as UTF-8 which corrupts binary; base64 ensures safe transfer
+        exec_command = ['/bin/sh', '-c', f'base64 {source_path}']
+        
+        async def file_stream_generator():
+            """Generator that streams file content from the pod in chunks"""
+            import base64
+            
+            resp = stream(
+                api.connect_get_namespaced_pod_exec,
+                pod.k8_name,
+                NAMESPACE,
+                command=exec_command,
+                stderr=True,
+                stdin=False,
+                stdout=True,
+                tty=False,
+                container=None,
+                _preload_content=False
+            )
+            
+            try:
+                start_time = time.time()
+                
+                # Collect all base64 data first (k8s stream may split at arbitrary points)
+                base64_chunks = []
+                while resp.is_open():
+                    resp.update(timeout=CHUNK_TIMEOUT)
+                    
+                    if resp.peek_stdout():
+                        chunk = resp.read_stdout()
+                        if chunk:
+                            # Remove any newlines that base64 command adds
+                            base64_chunks.append(chunk.replace('\n', '').replace('\r', ''))
+                    
+                    if resp.peek_stderr():
+                        error = resp.read_stderr()
+                        if error:
+                            logger.error(f"Error during download: {error}")
+                            raise Exception(f"Error reading file from pod: {error}")
+                    
+                    # Check for timeout
+                    if time.time() - start_time > CHUNK_TIMEOUT * 10:  # Overall timeout
+                        raise Exception("Download timeout exceeded")
+                
+                # Decode the complete base64 string
+                base64_data = ''.join(base64_chunks)
+                decoded_bytes = base64.b64decode(base64_data)
+                
+                logger.info(f"Successfully downloaded {len(decoded_bytes)} bytes from {source_path}")
+                yield decoded_bytes
+                
+            finally:
+                resp.close()
+        
+        return StreamingResponse(
+            file_stream_generator(),
+            media_type="application/octet-stream",
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}",
+                "Content-Length": str(file_size),
+                "X-Pod-Id": pod.pod_id,
+                "X-Source-Path": source_path
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"Error downloading file from pod: {e}")
+        return JSONResponse(
+            content=f"Failed to download file from pod: {str(e)}", 
+            status_code=500
+        )
 
 
 @router.delete(
