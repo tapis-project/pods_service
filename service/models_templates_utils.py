@@ -31,7 +31,7 @@ def get_modified_template_fields(original_template, modified_template_def):
                 del changed_fields['resources'][resource_key]
     return changed_fields
 
-def combine_pod_and_template_recursively(input_obj, template_name, seen_templates=None, tenant: str = None, site: str = None):
+def combine_pod_and_template_recursively(input_obj, template_name, seen_templates=None, tenant: str = None, site: str = None, original_pod_envs=None):
     """
     --- run with
     pod = Pod.db_get_with_pk(pk_id='testingfastapi', tenant='dev', site='tacc')
@@ -41,6 +41,10 @@ def combine_pod_and_template_recursively(input_obj, template_name, seen_template
     logger.debug(f"Top of combine_pod_and_template_recursively for template: {template_name}, tenant: {tenant}, site: {site}")
     if seen_templates is None:
         seen_templates = set()
+    
+    # Store original pod env vars on first call (before any template processing)
+    if original_pod_envs is None and 'environment_variables' in (input_obj.modified_fields or []):
+        original_pod_envs = input_obj.environment_variables.copy() if input_obj.environment_variables else {}
 
     if template_name:
         if template_name in seen_templates:
@@ -51,7 +55,7 @@ def combine_pod_and_template_recursively(input_obj, template_name, seen_template
         modified_fields = get_modified_template_fields(TemplateTagPodDefinition().dict(), template_tag.pod_definition)
 
         # First, recursively combine the input_obj with the next template in the chain
-        input_obj = combine_pod_and_template_recursively(input_obj, modified_fields.get('template'), seen_templates, tenant, site)
+        input_obj = combine_pod_and_template_recursively(input_obj, modified_fields.get('template'), seen_templates, tenant, site, original_pod_envs)
 
         # Then, apply the current template to the input_obj
         try:
@@ -60,14 +64,29 @@ def combine_pod_and_template_recursively(input_obj, template_name, seen_template
                 input_obj_modified_fields = input_obj.modified_fields or []
                 logger.debug(f"mod_key: {mod_key}; mod_val: {mod_val}")
                 if mod_key == "resources":
-                    # Merge template resources with pod resources, pod values take precedence
+                    # Merge template resources with pod resources
+                    # Priority: user-modified pod values > closer template > deeper template > pod defaults
                     pod_resources = getattr(input_obj, "resources", {})
                     if hasattr(pod_resources, 'dict'):
                         pod_resources = pod_resources.dict()
-                    template_resources = template_tag.pod_definition[mod_key]
-                    merged_resources = template_resources.copy() if template_resources else {}
-                    merged_resources.update(pod_resources or {})
+                    
+                    # mod_val contains only the resources explicitly set in this template
+                    template_resources = mod_val
+                    
+                    # Start with current pod_resources (which may have values from deeper templates)
+                    merged_resources = pod_resources.copy() if pod_resources else {}
+                    
+                    # Apply this template's resources on top (closer template wins over deeper)
+                    if template_resources:
+                        for resource_key, resource_val in template_resources.items():
+                            # Only apply if user didn't explicitly modify this field via modified_fields (resources.cpu_request)
+                            resource_field = f"resources.{resource_key}"
+                            if resource_field not in input_obj_modified_fields:
+                                # Template didn't set this - use pod default
+                                merged_resources[resource_key] = resource_val
+                    
                     setattr(input_obj, mod_key, merged_resources)
+                    logger.critical(f'DEBUG: end of resources merge {getattr(input_obj, mod_key, {})}')
                 elif mod_key.startswith("resources."):
                     logger.critical('hey')
                     outer_arg, inner_arg = resources.split('.') # resources.gpus
@@ -107,10 +126,21 @@ def combine_pod_and_template_recursively(input_obj, template_name, seen_template
                     # Self-documenting method of either overwriting alls envs or appending to them
                     use_template_envs_flag = input_obj.environment_variables.get("_TAPIS_INTERNAL_USE_TEMPLATE_ENVS", "True")
                     if use_template_envs_flag.lower() == "true":
-                        # inputobj and templateobj envs are dicts. If using template vars we use those as base and write input over
-                        input_envs = input_obj.environment_variables
-                        final_envs = template_tag.pod_definition[mod_key]
-                        final_envs.update(input_envs)
+                        # Priority order: pod modified > closer template > deeper template
+                        # 1. Start with current input_obj env vars (has deeper template values)
+                        # 2. Apply this template's env vars on top (closer template wins over deeper)
+                        # 3. Re-apply pod's original env vars if user modified them (pod wins over all templates)
+                        input_envs = input_obj.environment_variables.copy()
+                        template_envs = template_tag.pod_definition[mod_key]
+                        if template_envs:
+                            # Closer template overrides deeper template values
+                            final_envs = input_envs.copy()
+                            final_envs.update(template_envs)
+                            # But pod's original env vars should override all template values
+                            if original_pod_envs:
+                                final_envs.update(original_pod_envs)
+                        else:
+                            final_envs = input_envs
                         setattr(input_obj, mod_key, final_envs)
                         logger.debug(f"_TAPIS_INTERNAL_USE_TEMPLATE_ENVS is True - input_obj.environment_variables: {input_obj.environment_variables}")
                     else:

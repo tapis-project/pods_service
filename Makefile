@@ -121,13 +121,20 @@ init-data:
 
 
 # Runs pytest in the pods-api container
-#: Run tests in pods-api container
+#: Run tests in pods-api container (usage: make test or make test-<filename>)
 test:
-	@printf "Tests are a work in progress\n"
 	@printf "Makefile: $(GREEN)test$(NC)\n"
-	@printf "  📝  : Running Tests\n"
+	@printf "  📝  : Running all tests\n"
 	@printf "\n"
 	kubectl exec -it deploy/pods-api -- pytest tests/*.py --disable-pytest-warnings
+	@printf "\n"
+
+# Pattern rule for running specific test files
+test-%:
+	@printf "Makefile: $(GREEN)test-$*$(NC)\n"
+	@printf "  📝  : Running tests/$*\n"
+	@printf "\n"
+	kubectl exec -it deploy/pods-api -- pytest tests/$* --disable-pytest-warnings
 	@printf "\n"
 
 

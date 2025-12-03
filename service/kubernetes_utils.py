@@ -460,7 +460,8 @@ def deduct_queue_settings(
         resource_limits["memory"] = f"{mem_limit}Mi"
     if cpu_limit:
         resource_limits["cpu"] = f"{cpu_limit}m"
-    if ephemeral_storage_limit:
+    # Only set ephemeral storage limit if not -1
+    if ephemeral_storage_limit and ephemeral_storage_limit != -1:
         resource_limits["ephemeral-storage"] = f"{ephemeral_storage_limit}Mi"
     # Requests
     resource_requests = {}
@@ -468,8 +469,13 @@ def deduct_queue_settings(
         resource_requests["memory"] = f"{mem_request}Mi"
     if cpu_request:
         resource_requests["cpu"] = f"{cpu_request}m"
-    if ephemeral_storage_request:
+    # Only set ephemeral storage request if not -1
+    if ephemeral_storage_request and ephemeral_storage_request != -1:
         resource_requests["ephemeral-storage"] = f"{ephemeral_storage_request}Mi"
+    # Log when ephemeral storage limit is set but request is not (K8s will auto-fill request=limit)
+    if ephemeral_storage_limit and ephemeral_storage_limit != -1 and (not ephemeral_storage_request or ephemeral_storage_request == -1):
+        logger.info(f"Ephemeral storage limit set to {ephemeral_storage_limit}Mi but request is -1 (not set). "
+                    f"Kubernetes will automatically set request to match limit ({ephemeral_storage_limit}Mi).")
 
     ### Resources - GPU part
     # if gpus are requested, look for queue gpu array

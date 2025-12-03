@@ -290,10 +290,20 @@ class Resources(TapisModel):
     def check_ephemeral_storage_resources(cls, v):
         if not v:
             return v
+        # Allow -1 (unlimited) only if the default is also -1 (admin has enabled unlimited)
+        if v == -1:
+            if conf.default_pod_ephemeral_storage_request == -1 or conf.default_pod_ephemeral_storage_limit == -1:
+                return v
+            else:
+                raise ValueError(
+                    f"resources.ephemeral_storage_x: -1 (unlimited) is not allowed. "
+                    f"Admin has not enabled unlimited ephemeral storage (defaults are not -1). "
+                    f"Use values between {conf.minimum_pod_ephemeral_storage_val} and {conf.maximum_pod_ephemeral_storage_val}."
+                )
         if conf.minimum_pod_ephemeral_storage_val > v  or v > conf.maximum_pod_ephemeral_storage_val:
             raise ValueError(
-                f"resources.ephemeral_storage_x out of bounds. Received: {v}. Maximum: {conf.maximum_pod_ephemeral_storage_val}. Minimum: {conf.minimum_pod_ephemeral_storage_val}.",
-                 " User requires extra role to break bounds. Contact admin."
+                f"resources.ephemeral_storage_x out of bounds. Received: {v}. Maximum: {conf.maximum_pod_ephemeral_storage_val}. Minimum: {conf.minimum_pod_ephemeral_storage_val}. "
+                f"User requires extra role to break bounds. Contact admin."
                 )
         return v
 
@@ -326,8 +336,10 @@ class Resources(TapisModel):
         if mem_request and mem_limit and mem_request > mem_limit:
             raise ValueError(f"resources.mem_x found mem_request({mem_request}) > mem_limit({mem_limit}). Request must be less than or equal to limit.")
 
-        if ephemeral_storage_request and ephemeral_storage_limit and ephemeral_storage_request > ephemeral_storage_limit:
-            raise ValueError(f"resources.ephemeral_storage_x found ephemeral_storage_request({ephemeral_storage_request}) > ephemeral_storage_limit({ephemeral_storage_limit}). Request must be less than or equal to limit.")
+        # Check ephemeral storage values (skip if either is -1, which means unlimited/unset)
+        if ephemeral_storage_request and ephemeral_storage_limit and ephemeral_storage_request != -1 and ephemeral_storage_limit != -1:
+            if ephemeral_storage_request > ephemeral_storage_limit:
+                raise ValueError(f"resources.ephemeral_storage_x found ephemeral_storage_request({ephemeral_storage_request}) > ephemeral_storage_limit({ephemeral_storage_limit}). Request must be less than or equal to limit. Use -1 for unlimited.")
 
         return values
 

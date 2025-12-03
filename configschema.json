@@ -84,13 +84,13 @@
       },
       "default_pod_ephemeral_storage_limit": {
         "type": "integer",
-        "description": "Default ephemeral storage pod is allowed to use. In mebibytes (Mi).",
-        "default": 0
+        "description": "Default ephemeral storage limit for pods. In mebibytes (Mi). -1 means unlimited (Kubernetes default).",
+        "default": -1
       },
       "default_pod_ephemeral_storage_request": {
         "type": "integer",
-        "description": "Default ephemeral storage pod requests at startup. In mebibytes (Mi)",
-        "default": 4096
+        "description": "Default ephemeral storage request for pods. In mebibytes (Mi). -1 means no guaranteed minimum (Kubernetes default).",
+        "default": -1
       },
       "minimum_pod_ephemeral_storage_val":{
         "type": "integer",

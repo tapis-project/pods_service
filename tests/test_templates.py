@@ -45,7 +45,7 @@ def teardown(headers):
     yield None
 
     # Delete all objects after the tests are done.
-    pods = [test_pod_1, test_pod_2, test_pod_3, test_pod_4, test_pod_5]
+    pods = [test_pod_1, test_pod_2, test_pod_3, test_pod_4, test_pod_5, "testpodephemeraloverride"]
     templates = [test_template_1]
     for pod_id in pods:
         rsp = client.delete(f'/pods/{pod_id}', headers=headers)
@@ -511,9 +511,187 @@ def test_description_is_ascii_400(headers):
     assert rsp.status_code == 400
     assert any('description field may only contain ASCII characters' in msg for msg in data['message'])
 
+
+##### Ephemeral Storage Template Tests
+test_template_ephemeral = "testtemplateephemeral"
+test_template_tag_ephemeral = "ephemeral"
+test_template_tag_ephemeral_recursive = "ephemeral-recursive"
+test_pod_ephemeral_template = "testpodephemeraltemplate"
+test_pod_ephemeral_override = "testpodephemeraloverride"
+test_pod_ephemeral_recursive = "testpodephemeralrecursive"
+
+
+def test_create_template_with_ephemeral_storage(headers):
+    """Test creating a template with ephemeral storage in pod_definition."""
+    template_def = {
+        "template_id": test_template_ephemeral,
+        "description": "Template with ephemeral storage for testing",
+        "metatags": ["test", "ephemeral-storage"]
+    }
+    rsp = client.post("/pods/templates", data=json.dumps(template_def), headers=headers)
+    result = basic_response_checks(rsp)
+    assert result['template_id'] == test_template_ephemeral
+
+
+def test_add_template_tag_with_ephemeral_storage(headers):
+    """Test adding a template tag with ephemeral storage resources."""
+    tag_def = {
+        "pod_definition": {
+            "image": "notchristiangarcia/testserver:fastapi",
+            "description": "Template tag with ephemeral storage",
+            "resources": {
+                "ephemeral_storage_request": 2048,
+                "ephemeral_storage_limit": 4096
+            }
+        },
+        "tag": test_template_tag_ephemeral,
+        "commit_message": "Template tag with ephemeral storage resources"
+    }
+    rsp = client.post(f"/pods/templates/{test_template_ephemeral}/tags", data=json.dumps(tag_def), headers=headers)
+    result = basic_response_checks(rsp)
+    assert test_template_tag_ephemeral in result['tag_timestamp']
+
+
+def test_get_template_tag_with_ephemeral_storage(headers):
+    """Test that ephemeral storage values are returned when getting a template tag."""
+    rsp = client.get(f"/pods/templates/{test_template_ephemeral}/tags/{test_template_tag_ephemeral}", headers=headers)
+    result = basic_response_checks(rsp)
+    # API returns a list of matching tags
+    assert result[0]['pod_definition']['resources']['ephemeral_storage_request'] == 2048
+    assert result[0]['pod_definition']['resources']['ephemeral_storage_limit'] == 4096
+
+
+def test_create_pod_from_ephemeral_template(headers):
+    """Test creating a pod from a template with ephemeral storage."""
+    pod_def = {
+        "pod_id": test_pod_ephemeral_template,
+        "template": f"{test_template_ephemeral}:{test_template_tag_ephemeral}"
+    }
+    rsp = client.post("/pods", data=json.dumps(pod_def), headers=headers)
+    result = basic_response_checks(rsp)
+    assert result['pod_id'] == test_pod_ephemeral_template
+
+
+def test_pod_from_ephemeral_template_inherits_resources(headers):
+    """Test that pod created from template inherits ephemeral storage values."""
+    rsp = client.get(f"/pods/{test_pod_ephemeral_template}/derived", headers=headers)
+    result = basic_response_checks(rsp)
+    # Pod should inherit ephemeral storage from template
+    assert result['resources']['ephemeral_storage_request'] == 2048  # From template
+    assert result['resources']['ephemeral_storage_limit'] == 4096    # From template
+
+
+def test_pod_override_template_ephemeral_storage(headers):
+    """Test that pod can override template ephemeral storage values."""
+    pod_def = {
+        "pod_id": test_pod_ephemeral_override,
+        "template": f"{test_template_ephemeral}:{test_template_tag_ephemeral}",
+        "resources": {
+            "ephemeral_storage_request": 1024,
+            "ephemeral_storage_limit": 8192
+        }
+    }
+    rsp = client.post("/pods", data=json.dumps(pod_def), headers=headers)
+    result = basic_response_checks(rsp)
+    assert result['pod_id'] == test_pod_ephemeral_override
+    # Pod should use overridden values, not template values
+    assert result['resources']['ephemeral_storage_request'] == 1024
+    assert result['resources']['ephemeral_storage_limit'] == 8192
+
+
+def test_add_template_tag_with_all_resources(headers):
+    """Test adding a template tag with all resource fields including ephemeral storage."""
+    tag_def = {
+        "pod_definition": {
+            "image": "notchristiangarcia/testserver:fastapi",
+            "description": "Template tag with all resources",
+            "resources": {
+                "cpu_request": 500,
+                "cpu_limit": 1000,
+                "mem_request": 512,
+                "mem_limit": 1024,
+                "ephemeral_storage_request": 1024,
+                "ephemeral_storage_limit": 2048
+            }
+        },
+        "tag": "all-resources",
+        "commit_message": "Template tag with all resource fields"
+    }
+    rsp = client.post(f"/pods/templates/{test_template_ephemeral}/tags", data=json.dumps(tag_def), headers=headers)
+    result = basic_response_checks(rsp)
+    assert "all-resources" in result['tag_timestamp']
+
+
+def test_template_ephemeral_storage_validation_error(headers):
+    """Test that ephemeral storage above maximum returns error in template tag."""
+    tag_def = {
+        "pod_definition": {
+            "image": "notchristiangarcia/testserver:fastapi",
+            "resources": {
+                "ephemeral_storage_request": 20000  # Above max of 18432
+            }
+        },
+        "tag": "invalid-ephemeral",
+        "commit_message": "This should fail"
+    }
+    rsp = client.post(f"/pods/templates/{test_template_ephemeral}/tags", data=json.dumps(tag_def), headers=headers)
+    data = response_format(rsp)
+    assert rsp.status_code == 400
+    assert any('ephemeral_storage_x out of bounds' in msg for msg in data['message'])
+
+
+def test_add_recursive_template_with_ephemeral_storage(headers):
+    """Test adding a recursive template that modifies ephemeral storage from parent."""
+    tag_def = {
+        "pod_definition": {
+            "template": f"{test_template_ephemeral}:{test_template_tag_ephemeral}",
+            "description": "Recursive template with different ephemeral storage",
+            "resources": {
+                "ephemeral_storage_request": 3072,  # Different from parent's 2048
+                "ephemeral_storage_limit": 6144     # Different from parent's 4096
+            }
+        },
+        "tag": test_template_tag_ephemeral_recursive,
+        "commit_message": "Recursive template overriding ephemeral storage"
+    }
+    rsp = client.post(f"/pods/templates/{test_template_ephemeral}/tags", data=json.dumps(tag_def), headers=headers)
+    result = basic_response_checks(rsp)
+    assert test_template_tag_ephemeral_recursive in result['tag_timestamp']
+
+
+def test_create_pod_from_recursive_ephemeral_template(headers):
+    """Test creating a pod from recursive template with ephemeral storage."""
+    pod_def = {
+        "pod_id": test_pod_ephemeral_recursive,
+        "template": f"{test_template_ephemeral}:{test_template_tag_ephemeral_recursive}"
+    }
+    rsp = client.post("/pods", data=json.dumps(pod_def), headers=headers)
+    result = basic_response_checks(rsp)
+    assert result['pod_id'] == test_pod_ephemeral_recursive
+
+    # Get derived pod to check resources
+    rsp = client.get(f"/pods/{test_pod_ephemeral_recursive}/derived", headers=headers)
+    result = basic_response_checks(rsp)
+    # Pod should inherit ephemeral storage from recursive template (overrides parent template)
+    assert result['resources']['ephemeral_storage_request'] == 3072  # From recursive template
+    assert result['resources']['ephemeral_storage_limit'] == 6144    # From recursive template
+
+
+def test_delete_ephemeral_template(headers):
+    """Clean up: Delete the ephemeral storage template."""
+    # Delete pods first
+    client.delete(f"/pods/{test_pod_ephemeral_template}", headers=headers)
+    client.delete(f"/pods/{test_pod_ephemeral_override}", headers=headers)
+    client.delete(f"/pods/{test_pod_ephemeral_recursive}", headers=headers)
+    # Delete template
+    rsp = client.delete(f"/pods/templates/{test_template_ephemeral}", headers=headers)
+    result = basic_response_checks(rsp)
+    assert "Template and associated Template Tags successfully deleted." in rsp.json()['message']
+
+
 def test_stop_for_debug():
     if False:
-        time.sleep(150)
+        time.sleep(15000)
     
 def test_delete_template(headers):
     # Delete template
