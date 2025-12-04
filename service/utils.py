@@ -104,9 +104,14 @@ class HttpUrlRedirectMiddleware:
 
 import codes
 
-def check_permissions(user, level, object, object_type, roles=None):
+def check_permissions(user, level, object, object_type, roles=None, tenant=None):
     """Check the appropriate permissions store for user and level.
+    user: username
+    level: codes.PermissionLevel enum
     object: a pod, volume, or snapshot object. Also can be result of models_base.parse_permissions().
+    object_type: "pod", "volume", "snapshot", or "template"
+    roles: passthrough roles for checking admin
+    tenant: tenant_id of incoming request to check against tenant-scoped permissions (tenant.dev:READ)
     """
     # Running something like: Checking pod_id: {pod.pod_id} permissions for user {user}
     logger.debug(f"Checking {object_type}_id: {eval(f'object.{object_type}_id')} permissions for user {user}")
@@ -119,6 +124,25 @@ def check_permissions(user, level, object, object_type, roles=None):
     # Get all permissions for this object_type
     # Running something like: volumes.get_permissions()
     permissions = object.get_permissions()
+    
+    # Check for site(**:READ) perms, only for template
+    if object_type == "template":
+        site_wide_level = permissions.get("**")
+        if site_wide_level:
+            site_pem = codes.PermissionLevel(site_wide_level)
+            if site_pem >= level:
+                logger.info(f"Allowing request - site-wide '**' permission grants {site_wide_level} for {object_type}: {eval(f'object.{object_type}_id')}.")
+                return True
+        
+        # tenant-wide(tenant.*:READ) check requires incoming tenant arg to check against
+        if tenant:
+            tenant_key = f"tenant.{tenant}"
+            tenant_scoped_level = permissions.get(tenant_key)
+            if tenant_scoped_level:
+                tenant_pem = codes.PermissionLevel(tenant_scoped_level)
+                if tenant_pem >= level:
+                    logger.info(f"Allowing request - {tenant_key} permission grants {tenant_scoped_level} for {object_type}: {eval(f'object.{object_type}_id')}.")
+                    return True
     
     # Attempt to get permission level for particular user.
     user_level = permissions.get(user)

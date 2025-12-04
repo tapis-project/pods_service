@@ -920,7 +920,7 @@ async def save_pod_as_template_tag(pod_id_net, new_template_tag_from_pod: NewTem
     pod = Pod.db_get_with_pk(pod_id_net, tenant=g.request_tenant_id, site=g.site_id)
 
     # Auth already checks permissions for pod_id. We must also check permissions for template.
-    template = Template.db_get_with_pk(new_template_tag_from_pod.template_id, tenant=g.request_tenant_id, site=g.site_id)
+    template = Template.db_get_with_pk(new_template_tag_from_pod.template_id, tenant="siteadmintable", site=g.site_id)
     if not template:
         raise PermissionsException(f"Template with id '{new_template_tag_from_pod.template_id}' not found. Please ensure template exists.")
 
@@ -939,7 +939,7 @@ async def save_pod_as_template_tag(pod_id_net, new_template_tag_from_pod: NewTem
     template_tag = TemplateTag(**new_template_tag_from_pod.dict(), pod_definition=modified_pod_def)
 
     # Create template database entry
-    template_tag.db_create(tenant=g.request_tenant_id, site=g.site_id)
+    template_tag.db_create(tenant="siteadmintable", site=g.site_id)
     logger.debug(f"New template_tag saved in db. template_id: {template_tag.template_id}; tenant: {g.request_tenant_id}.")
 
     return ok(result=template_tag.display(), msg="Template tag added successfully.")

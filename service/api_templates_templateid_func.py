@@ -30,7 +30,7 @@ async def get_template_permissions(template_id):
     """
     logger.info(f"GET /pods/templates/{template_id}/permissions - Top of get_template_permissions.")
 
-    template = Template.db_get_with_pk(template_id, tenant=g.request_tenant_id, site=g.site_id)
+    template = Template.db_get_with_pk(template_id, tenant="siteadmintable", site=g.site_id)
 
     return ok(result={"permissions": template.permissions}, msg = "Template permissions retrieved successfully.")
 
@@ -44,6 +44,17 @@ async def get_template_permissions(template_id):
 async def set_template_permission(template_id, set_permission: SetPermission):
     """
     Set a permission for a template.
+    
+    Permission formats:
+    - username:LEVEL - Standard user permission (e.g., 'jsmith:READ')
+    - **:READ - Site-wide public access (all users across all tenants can READ) [ADMIN ONLY]
+    - tenant.<tenant_id>:READ - Tenant-wide public access (all users in specified tenant can READ) [ADMIN ONLY]
+    
+    Notes:
+    - Both '**' and 'tenant.*' only allow READ level for security
+    - '**' and 'tenant.*' permissions require admin privileges
+    - There are 3 levels of permissions, READ, USER, and ADMIN.
+    - Permissions are granted to an individual usernames and are active across tenants.
 
     Returns updated template permissions.
     """
@@ -51,8 +62,17 @@ async def set_template_permission(template_id, set_permission: SetPermission):
 
     inp_user = set_permission.user
     inp_level = set_permission.level
+    
+    #TODO FOR FUTURE ROLE CHANGE
+    g.admin = True if g.username in ["cgarcia", "_pods_testuser_admin"] else False
 
-    template = Template.db_get_with_pk(template_id, tenant=g.request_tenant_id, site=g.site_id)
+    # Admin-only check for site-wide '**' and tenant-wide 'tenant.*' permissions
+    if inp_user == "**" and not g.admin:
+        raise KeyError("Only admins can set site-wide '**' permissions on templates.")
+    if inp_user.startswith("tenant.") and not g.admin:
+        raise KeyError("Only admins can set tenant-wide 'tenant.*' permissions on templates.")
+
+    template = Template.db_get_with_pk(template_id, tenant="siteadmintable", site=g.site_id)
 
     # Get formatted perms
     curr_perms = template.get_permissions()
@@ -71,7 +91,7 @@ async def set_template_permission(template_id, set_permission: SetPermission):
 
     # Update pod object and commit
     template.permissions = perm_list
-    template.db_update(f"'{g.username}' set permission for '{inp_user}' to {inp_level}")
+    template.db_update(f"'{g.username}' set permission for '{inp_user}' to {inp_level}", tenant='siteadmintable', site=g.site_id)
 
     return ok(result={"permissions": template.permissions}, msg = "Template permissions updated successfully.")
 
@@ -90,7 +110,7 @@ async def delete_template_permission(template_id, user):
     """
     logger.info(f"DELETE /pods/{template_id}/permissions/{user} - Top of delete_template_permission.")
 
-    template = Template.db_get_with_pk(template_id, tenant=g.request_tenant_id, site=g.site_id)
+    template = Template.db_get_with_pk(template_id, tenant="siteadmintable", site=g.site_id)
 
     # Get formatted perms
     curr_perms = template.get_permissions()
@@ -112,6 +132,6 @@ async def delete_template_permission(template_id, user):
     
     # Update template object and commit
     template.permissions = perm_list
-    template.db_update(f"'{g.username}' deleted permission for '{user}'")
+    template.db_update(f"'{g.username}' deleted permission for '{user}'", tenant='siteadmintable', site=g.site_id)
 
     return ok(result={"permissions": template.permissions}, msg = "Template permission deleted successfully.")

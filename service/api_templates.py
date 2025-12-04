@@ -58,7 +58,7 @@ async def list_templates_and_tags(full: bool = Query(True, description="Returns 
     for template in templates:
         list_of_templates.append(template.template_id)
 
-    template_tags = TemplateTag.db_get_where(where_params=[['template_id', '.in', list_of_templates]], sort_column='creation_ts', tenant=g.request_tenant_id, site=g.site_id)
+    template_tags = TemplateTag.db_get_where(where_params=[['template_id', '.in', list_of_templates]], sort_column='creation_ts', tenant="siteadmintable", site=g.site_id)
 
     templates_and_tags = {}
     for template in templates:
@@ -93,7 +93,7 @@ async def add_template(new_template: NewTemplate):
     template = Template(**new_template.dict())
 
     # Create template database entry
-    template.db_create()
+    template.db_create(tenant="siteadmintable", site=g.site_id)
     logger.debug(f"New template saved in db. template_id: {template.template_id}; tenant: {g.request_tenant_id}.")
 
     return ok(result=template.display(), msg="Template added successfully.")

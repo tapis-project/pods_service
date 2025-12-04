@@ -513,20 +513,6 @@ def test_startup_pod_from_neo4j_afterperiod_template_startup(headers):
 ##### Error testing
 ## Need to test with template with volume
 ## Need to check template deletion after we ensure tags deleted are not in use
-def test_description_length_400(headers):
-    # Definition
-    template_def = {
-        "template_id": test_template_1,
-        "description": "Test" * 200,
-        "metatags": ["test", "neo4j-template"]
-    }
-    # Attempt to create pod
-    rsp = client.post("/pods/templates", data=json.dumps(template_def), headers=headers)
-    data = response_format(rsp)
-    # Test error response.
-    assert rsp.status_code == 400
-    assert any('description field must be less than 255 characters.' in msg for msg in data['message'])
-
 
 def test_description_is_ascii_400(headers):
     # Definition

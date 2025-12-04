@@ -33,7 +33,7 @@ async def get_template_tag(
         where_params.append(['tag_timestamp', '.eq', tag_id])
     else:
         where_params.append(['tag', '.eq', tag_id])
-    template_tags = TemplateTag.db_get_where(where_params=where_params, sort_column="creation_ts", tenant=g.request_tenant_id, site=g.site_id)
+    template_tags = TemplateTag.db_get_where(where_params=where_params, sort_column="creation_ts", tenant="siteadmintable", site=g.site_id)
 
     display_template_tags = []
     for template_tag in template_tags:

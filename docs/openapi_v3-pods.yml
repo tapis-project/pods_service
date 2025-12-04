@@ -274,10 +274,18 @@ paths:
         schema:
           type: boolean
           title: Full
-          description: Return pod_definition in tag when full=true
-          default: true
-        name: full
+        description: Return pod_definition in tag when full=true
+      - name: include_configs
         in: query
+        required: false
+        schema:
+          type: boolean
+          description: 'Include full config_content for volume mounts using field.
+            Default: false (shows placeholder with size)'
+          default: false
+          title: Include Configs
+        description: 'Include full config_content for volume mounts using field. Default:
+          false (shows placeholder with size)'
       responses:
         '200':
           description: Successful Response
@@ -413,6 +421,29 @@ paths:
       description: 'Set a permission for a template.
 
 
+        Permission formats:
+
+        - username:LEVEL - Standard user permission (e.g., ''jsmith:READ'')
+
+        - **:READ - Site-wide public access (all users across all tenants can READ)
+        [ADMIN ONLY]
+
+        - tenant.<tenant_id>:READ - Tenant-wide public access (all users in specified
+        tenant can READ) [ADMIN ONLY]
+
+
+        Notes:
+
+        - Both ''**'' and ''tenant.*'' only allow READ level for security
+
+        - ''**'' and ''tenant.*'' permissions require admin privileges
+
+        - There are 3 levels of permissions, READ, USER, and ADMIN.
+
+        - Permissions are granted to an individual usernames and are active across
+        tenants.
+
+
         Returns updated template permissions.'
       operationId: set_template_permission
       parameters:
@@ -468,6 +499,84 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TemplatePermissionsResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /pods/templates/{template_id}/tags/{tag_id}:
+    get:
+      tags:
+      - Templates
+      summary: get_template_tag
+      description: 'Get a specific tag entry the template has
+
+
+        Returns the tag entry'
+      operationId: get_template_tag
+      parameters:
+      - name: template_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Template Id
+      - name: tag_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Tag Id
+      - name: include_configs
+        in: query
+        required: false
+        schema:
+          type: boolean
+          description: 'Include full config_content for volume mounts using field.
+            Default: false (shows placeholder with size)'
+          default: false
+          title: Include Configs
+        description: 'Include full config_content for volume mounts using field. Default:
+          false (shows placeholder with size)'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TemplateTagsResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+      - Templates
+      summary: delete_template_tag
+      operationId: delete_template_tag
+      parameters:
+      - name: template_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Template Id
+      - name: tag_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Tag Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TemplateTagResponse'
         '422':
           description: Validation Error
           content:
@@ -1799,6 +1908,46 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+    get:
+      tags:
+      - Pods
+      summary: get_pod
+      description: 'Get a pod.
+
+
+        Returns retrieved pod object.'
+      operationId: get_pod
+      parameters:
+      - name: pod_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Pod Id
+      - name: include_configs
+        in: query
+        required: false
+        schema:
+          type: boolean
+          description: 'Include full config_content for volume mounts using field.
+            Default: false (shows placeholder with size)'
+          default: false
+          title: Include Configs
+        description: 'Include full config_content for volume mounts using field. Default:
+          false (shows placeholder with size)'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PodResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /pods/{pod_id}/derived:
     get:
       tags:
@@ -1812,9 +1961,19 @@ paths:
       parameters:
       - required: true
         schema:
+          type: string
           title: Pod Id
-        name: pod_id
-        in: path
+      - name: include_configs
+        in: query
+        required: false
+        schema:
+          type: boolean
+          description: 'Include full config_content for volume mounts using field.
+            Default: false (shows placeholder with size)'
+          default: false
+          title: Include Configs
+        description: 'Include full config_content for volume mounts using field. Default:
+          false (shows placeholder with size)'
       responses:
         '200':
           description: Successful Response
@@ -2788,12 +2947,12 @@ components:
           description: Status requested by user, `ON`, `OFF`, or `RESTART`.
           default: 'ON'
         volume_mounts:
-          additionalProperties:
-            $ref: '#/components/schemas/models_pods__VolumeMount'
+          additionalProperties: true
           type: object
           title: Volume Mounts
-          description: 'Key: Volume name. Value: List of strs specifying volume folders/files
-            to mount in pod'
+          description: 'Volume mounts keyed by mount_path. Ex: {"/data": {"type":
+            "tapisvolume", "source_id": "myvolume"}, "/etc/config.ini": {"type": "ephemeral",
+            "config_content": "key=value"}}'
           default: {}
         time_to_stop_default:
           type: integer
@@ -2829,6 +2988,15 @@ components:
           title: Compute Queue
           description: Queue to run pod in. `default` is the default queue.
           default: default
+        template_overrides:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Template Overrides
+          description: 'Partial overrides for template values. Override volume_mounts
+            or secret_map values without rewriting full template field. Ex: {"volume_mounts":
+            {"/data": {"source_id": "my-vol"}}, "secret_map": {"DB_PASS": "${secret:mypass}"}}'
       additionalProperties: false
       type: object
       required:
@@ -3226,12 +3394,12 @@ components:
           description: Status requested by user, `ON`, `OFF`, or `RESTART`.
           default: 'ON'
         volume_mounts:
-          additionalProperties:
-            $ref: '#/components/schemas/models_pods__VolumeMount'
+          additionalProperties: true
           type: object
           title: Volume Mounts
-          description: 'Key: Volume name. Value: List of strs specifying volume folders/files
-            to mount in pod'
+          description: 'Volume mounts keyed by mount_path. Ex: {"/data": {"type":
+            "tapisvolume", "source_id": "myvolume"}, "/etc/config.ini": {"type": "ephemeral",
+            "config_content": "key=value"}}'
           default: {}
         time_to_stop_default:
           type: integer
@@ -3267,9 +3435,20 @@ components:
           title: Compute Queue
           description: Queue to run pod in. `default` is the default queue.
           default: default
+        template_overrides:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Template Overrides
+          description: 'Partial overrides for template values. Override volume_mounts
+            or secret_map values without rewriting full template field. Ex: {"volume_mounts":
+            {"/data": {"source_id": "my-vol"}}, "secret_map": {"DB_PASS": "${secret:mypass}"}}'
         time_to_stop_ts:
-          type: string
-          format: date-time
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
           title: Time To Stop Ts
           description: Time (UTC) that this pod is scheduled to be stopped. Change
             with time_to_stop_instance.
@@ -3802,6 +3981,16 @@ components:
           title: Tag
           description: Tag for this template. Default is 'latest'.
           default: latest
+        description:
+          type: string
+          title: Description
+          description: Description of template tag.
+          default: ''
+        archive_message:
+          type: string
+          title: Archive Message
+          description: If set, metadata message to give users of this template tag.
+          default: ''
         tag_timestamp:
           type: string
           title: Tag Timestamp
@@ -3817,6 +4006,16 @@ components:
           format: date-time
           title: Creation Ts
           description: Time (UTC) that this template tag was created.
+        tenant_id:
+          type: string
+          title: Tenant Id
+          description: Tapis tenant used during creation of this template tag.
+          default: ''
+        site_id:
+          type: string
+          title: Site Id
+          description: Tapis site used during creation of this template tag.
+          default: ''
       additionalProperties: false
       type: object
       required:
@@ -3857,12 +4056,12 @@ components:
             pods.
           default: {}
         volume_mounts:
-          additionalProperties:
-            $ref: '#/components/schemas/models_templates_tags__VolumeMount'
+          additionalProperties: true
           type: object
           title: Volume Mounts
-          description: 'Key: Volume name. Value: List of strs specifying volume folders/files
-            to mount in pod'
+          description: 'Volume mounts keyed by mount_path. Ex: {"/data": {"type":
+            "tapisvolume", "source_id": "myvolume"}, "/etc/config.ini": {"type": "ephemeral",
+            "config_content": "key=value"}}'
           default: {}
         time_to_stop_default:
           type: integer
@@ -4004,13 +4203,15 @@ components:
           description: Status requested by user, `ON`, `OFF`, or `RESTART`.
           default: 'ON'
         volume_mounts:
-          additionalProperties:
-            $ref: '#/components/schemas/models_pods__VolumeMount'
-          type: object
+          anyOf:
+          - items:
+              $ref: '#/components/schemas/VolumeMount'
+            type: array
+          - type: 'null'
           title: Volume Mounts
-          description: 'Key: Volume name. Value: List of strs specifying volume folders/files
-            to mount in pod'
-          default: {}
+          description: List of volume mounts. Each mount specifies type, source_id,
+            mount_path, and optionally sub_path and read_only.
+          default: []
         time_to_stop_default:
           type: integer
           title: Time To Stop Default
@@ -4137,6 +4338,82 @@ components:
       - msg
       - type
       title: ValidationError
+    VolumeMount:
+      properties:
+        type:
+          type: string
+          title: Type
+          description: 'Type of mount: ''tapisvolume'', ''tapissnapshot'', ''ephemeral'',
+            or ''pvc''.'
+        source_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Source Id
+          description: ID of the volume, snapshot, or PVC to mount. Required for tapisvolume/tapissnapshot/pvc.
+        sub_path:
+          type: string
+          title: Sub Path
+          description: Sub-path within the source volume/snapshot to mount. Not used
+            for ephemeral.
+          default: ''
+        read_only:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Read Only
+          description: 'If true, mount will be read-only. Default: False for volumes/pvc,
+            True for snapshots/ephemeral.'
+        config_content:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Config Content
+          description: 'Config file content. For ephemeral: mounted as ConfigMap.
+            For tapisvolume: written to NFS. Supports ${pods:secrets:KEY} interpolation.
+            Max 1MB.'
+        config_permissions:
+          type: string
+          title: Config Permissions
+          description: Unix file permissions for config file (e.g., '0644', '0600').
+          default: '0644'
+        config_filename:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Config Filename
+          description: Filename for config file when using tapisvolume with config_content.
+            Defaults to basename of mount_path.
+        config_update_mode:
+          type: string
+          title: Config Update Mode
+          description: 'Config update behavior: ''always'' recreates config on each
+            pod start, ''once'' only creates if file/ConfigMap doesn''t exist.'
+          default: always
+      additionalProperties: false
+      type: object
+      required:
+      - type
+      title: VolumeMount
+      description: 'Volume mount configuration for attaching volumes, snapshots, or
+        inline configs to pods.
+
+
+        Object-keyed structure (v3) - mount_path is the key in volume_mounts dict:
+
+        - type: One of ''tapisvolume'', ''tapissnapshot'', ''ephemeral'', ''pvc''
+
+        - source_id: Required for tapisvolume, tapissnapshot, pvc. Not used for ephemeral.
+
+        - sub_path: Optional sub-path within the source to mount (not applicable for
+        ephemeral)
+
+        - read_only: Whether mount is read-only (default varies by type)
+
+        - config_content: For ephemeral type, the inline config file content (max
+        1MB)
+
+        - config_permissions: For ephemeral type, Unix file permissions (default 0644)'
     VolumePermissionsResponse:
       properties:
         message:

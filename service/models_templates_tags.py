@@ -62,7 +62,7 @@ def derive_template_info(input_template_name, update_template_tag: bool = False,
 
     logger.debug(f"Top of derive_template_info for input template: {input_template_name}, template_id: {template_id}, template_tag: {template_tag}, tenant: {tenant}, site: {site}")
     ## template_id check
-    template = Template.db_get_with_pk(template_id, tenant=tenant, site=site)
+    template = Template.db_get_with_pk(template_id, tenant="siteadmintable", site=site)
     if not template:
         raise ValueError(f"Template not found: '{template_id}'. Verify template_id exists.")
     if not template_tag:
@@ -72,7 +72,7 @@ def derive_template_info(input_template_name, update_template_tag: bool = False,
     ## template_tag check
     if template_tag and tag_timestamp:
         full_tag = f"{template_tag}@{tag_timestamp}"
-        template_tags = TemplateTag.db_get_where(where_params=[['tag_timestamp', '.eq', str(full_tag)]], sort_column='creation_ts', tenant=tenant, site=site)
+        template_tags = TemplateTag.db_get_where(where_params=[['tag_timestamp', '.eq', str(full_tag)]], sort_column='creation_ts', tenant="siteadmintable", site=site)
         if not template_tags:
             raise ValueError(f"Template tag not found: '{input_template_name}'. Verify template_id, tag, and timestamp all exist.")
         if len(template_tags) > 1:
@@ -80,7 +80,7 @@ def derive_template_info(input_template_name, update_template_tag: bool = False,
         derived_template_tag = template_tags[0]
     elif not tag_timestamp:
         # timestamp not provided, we'll look for matching tags and set tag_timestamp to the most recent.
-        template_tags = TemplateTag.db_get_where(where_params=[['tag', '.eq', template_tag]], sort_column='creation_ts', tenant=tenant, site=site)
+        template_tags = TemplateTag.db_get_where(where_params=[['tag', '.eq', template_tag]], sort_column='creation_ts', tenant="siteadmintable", site=site)
         if not template_tags:
             raise ValueError(f"Template tag not found: '{template_id}:{template_tag}'. Verify template_id and tag both exist.")
         # found matching tags, get the most recent one.
@@ -567,20 +567,33 @@ class TemplateTagPodDefinition(TapisModel):
                 raise ValueError(f"compute_queue must be lowercase alphanumeric.")
         return v
 
-
-#### TemplateTag models
-class TemplateTag(TapisModel, table=True, validate=True):
+class TemplateTagBase(TapisApiModel):
     # Required
     template_id: str = Field(..., description="template_id this tag is linked to")#, foreign_key="template.template_id")
     # User Input
     pod_definition: TemplateTagPodDefinition = Field({}, description = "Pod definition for this template.", sa_column=Column(JSON))
     commit_message: str = Field("", description = "Commit message for this template tag.")
     tag: str = Field("latest", description = "Tag for this template. Default is 'latest'.")
+    # Optional
+    description: str = Field("", description = "Description of template tag.")
+    archive_message: str = Field("", description = "If set, metadata message to give users of this template tag.")
+
+class TemplateTagBaseRead(TemplateTagBase):
     # Provided
     tag_timestamp: str = Field("", description = "tag@timestamp for this template tag.", primary_key=True, nullable=False)
     added_by: str = Field("", description = "User who added this template tag.")
     creation_ts: datetime | None = Field(None, description = "Time (UTC) that this template tag was created.")
-    
+
+class TemplateTagBaseFull(TemplateTagBaseRead):
+    # Provided
+    tenant_id: str = Field("", description = "Tapis tenant used during creation of this template tag.")
+    site_id: str = Field("", description = "Tapis site used during creation of this template tag.")
+
+TapisTemplateTagBaseFull = create_model("TapisTemplateTagBaseFull", __base__= type("_ComboModel", (TemplateTagBaseFull, TapisModel), {}))
+
+
+#### TemplateTag models
+class TemplateTag(TapisTemplateTagBaseFull, table=True, validate=True):
     @validator('pod_definition')
     def check_pod_definition(cls, v):
         return v
@@ -588,7 +601,7 @@ class TemplateTag(TapisModel, table=True, validate=True):
     @validator('template_id')
     def check_template_id(cls, v):
         # existence check - can be done by foreign key, but it doesn't resolve template.template_id
-        template = Template.db_get_with_pk(v, tenant=g.request_tenant_id, site=g.site_id)
+        template = Template.db_get_with_pk(v, tenant="siteadmintable", site=g.site_id)
         if not template:
             raise ValueError(f"template_id must exist in the database.")
         return v
@@ -603,6 +616,29 @@ class TemplateTag(TapisModel, table=True, validate=True):
             raise ValueError(f"commit_message field must be less than 255 characters. Inputted length: {len(v)}")
         return v
     
+    @validator('description')
+    def check_description(cls, v):
+        # ensure description is all ascii
+        if not v.isascii():
+            raise ValueError(f"description field may only contain ASCII characters.")            
+        # make sure description < 400 characters
+        if len(v) > 400:
+            raise ValueError(f"description field must be less than 400 characters. Inputted length: {len(v)}")
+        # I kind of want this to be markdown compatible, for that we should clean to ensure no bad stuff?
+        # from bleach import clean
+        # v = clean(v, tags=[], attributes={}, protocols=[], strip=True)
+        return v
+
+    @validator('archive_message')
+    def check_archive_message(cls, v):
+        # ensure archive_message is all ascii
+        if not v.isascii():
+            raise ValueError(f"archive_message field may only contain ASCII characters.")            
+        # make sure archive_message < 60 characters
+        if len(v) > 60:
+            raise ValueError(f"archive_message field must be less than 60 characters. Inputted length: {len(v)}")
+        return v
+
     @validator('tag')
     def check_tag(cls, v):
         # ensure description is lowercase alphanumeric and hyphen
@@ -624,7 +660,15 @@ class TemplateTag(TapisModel, table=True, validate=True):
         if v:
             return v
         return datetime.utcnow()
-    
+
+    @validator('tenant_id')
+    def check_tenant_id(cls, v):
+        return g.request_tenant_id
+
+    @validator('site_id')
+    def check_site_id(cls, v):
+        return g.site_id
+
     @model_validator(mode="after")
     def set_tag_timestamp(cls, values):
         creation_ts = getattr(values, 'creation_ts', None)

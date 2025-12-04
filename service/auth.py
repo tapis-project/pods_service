@@ -78,7 +78,7 @@ def check_object_id(request, object_type, idx):
         object_id = path_split[idx]
     except IndexError:
         raise ResourceError(f"Unable to parse {object_type}_id: is it missing from the URL?", 404)
-    if object_type in ['image', 'secret']:
+    if object_type in ['image', 'secret', 'template']:
         logger.debug(f"Attempting to grab {object_type}_id: {object_id}; tenant: siteadmintable")
         obj = globals()[object_type.capitalize()].db_get_with_pk(object_id, tenant="siteadmintable", site=g.site_id)
     else:
@@ -285,7 +285,7 @@ def check_route_permissions(request):
         has_pem = check_permissions(user=g.username, object=snapshot, object_type="snapshot", level=matched_route[2] , roles=g.roles)
     elif "{template_id}" in matched_route[0]:
         template = check_object_id(request, 'template', 3)
-        has_pem = check_permissions(user=g.username, object=template, object_type="template", level=matched_route[2] , roles=g.roles)
+        has_pem = check_permissions(user=g.username, object=template, object_type="template", level=matched_route[2], roles=g.roles, tenant=g.request_tenant_id)
     elif "{secret_id}" in matched_route[0]:
         secret = check_object_id(request, 'secret', 3)
         has_pem = check_permissions(user=g.username, object=secret, object_type="secret", level=matched_route[2] , roles=g.roles)

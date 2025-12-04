@@ -72,6 +72,18 @@ class Template(TapisTemplateBaseFull, table=True, validate=True):
 
     @validator('permissions')
     def check_permissions(cls, v):
+        """Validate template permissions.
+        
+        Permission formats:
+        - username:LEVEL - Standard user permission (e.g., 'jsmith:READ')
+        - **:READ - Site-wide public access (all users across all tenants can READ)
+        - tenant.<tenant_id>:READ - Tenant-wide public access (all users in specified tenant can READ)
+        
+        Notes:
+        - '**' (site-wide) and 'tenant.*' permissions are admin-only (enforced at API layer)
+        - Both '**' and 'tenant.*' only allow READ level for security
+        - tenant.<tenant_id> allows admins to make templates public to specific tenants
+        """
         #By default add author permissions to template.
         if not v:
             v = [f"{g.username}:ADMIN"]
@@ -85,12 +97,26 @@ class Template(TapisTemplateBaseFull, table=True, validate=True):
                 if ":" not in arg or len(arg.split(":")) != 2:
                     raise ValueError(f"permission '{arg}' is not in user:level format.")
                 user, level = arg.split(":")
-                if user != "*" and (not user.isascii() or not re.fullmatch(r"[a-zA-Z0-9_@\-]+", user)):
-                    raise ValueError(f"User part of permission '{arg}' must be alphanumeric or use hyphen.")
-                if user == "*":
-                    # permission level must be user or below
+                
+                # Handle site-wide wildcard '**'
+                if user == "**":
+                    # Site-wide permission level must be READ only
                     if level not in ["READ"]:
-                        raise ValueError(f"Permission '{arg}' is not allowed. wildcard '*' user may only have READ level permissions.")
+                        raise ValueError(f"Permission '{arg}' is not allowed. Site-wide wildcard '**' may only have READ level permissions.")
+                # Handle tenant-wide 'tenant.<tenant_id>' format
+                elif user.startswith("tenant."):
+                    tenant_id = user[7:]  # Extract tenant_id after 'tenant.'
+                    if not tenant_id:
+                        raise ValueError(f"Permission '{arg}' is invalid. 'tenant.' must be followed by a tenant_id (e.g., 'tenant.dev:READ').")
+                    # Validate tenant_id format (alphanumeric with hyphens/underscores)
+                    if not re.fullmatch(r"[a-zA-Z0-9_\-]+", tenant_id):
+                        raise ValueError(f"Permission '{arg}' has invalid tenant_id. tenant_id must be alphanumeric (hyphens/underscores allowed).")
+                    # Tenant-wide permission level must be READ only
+                    if level not in ["READ"]:
+                        raise ValueError(f"Permission '{arg}' is not allowed. Tenant-wide 'tenant.*' may only have READ level permissions.")
+                # Handle standard username permissions
+                elif not user.isascii() or not re.fullmatch(r"[a-zA-Z0-9_@\-]+", user):
+                    raise ValueError(f"User part of permission '{arg}' must be alphanumeric or use hyphen.")
         return v
     
     @validator('metatags')
@@ -108,9 +134,9 @@ class Template(TapisTemplateBaseFull, table=True, validate=True):
         # ensure description is all ascii
         if not v.isascii():
             raise ValueError(f"description field may only contain ASCII characters.")            
-        # make sure description < 255 characters
-        if len(v) > 255:
-            raise ValueError(f"description field must be less than 255 characters. Inputted length: {len(v)}")
+        # make sure description < 1600 characters
+        if len(v) > 1600:
+            raise ValueError(f"description field must be less than 1600 characters. Inputted length: {len(v)}")
         return v
 
     @validator('tenant_id')
@@ -144,7 +170,9 @@ class Template(TapisTemplateBaseFull, table=True, validate=True):
         """
         Get all and ensure permission exists.
         """
-        site, tenant, store = cls.get_site_tenant_session(tenant=tenant, site=site)
+        # we use incoming tenant to check if user in correct tenant to access * templates.
+        incoming_tenant = tenant
+        site, tenant, store = cls.get_site_tenant_session(tenant="siteadmintable", site=site)
         table_name = cls.table_name()
         logger.info(f'Top of {table_name}.db_get_all_with_permissions() for tenant.site: {tenant}.{site}')
 
@@ -156,7 +184,8 @@ class Template(TapisTemplateBaseFull, table=True, validate=True):
         permission_list = []
         for authed_level in authorized_levels:
             permission_list.append(f"{user}:{authed_level}")
-            permission_list.append(f"*:{authed_level}")
+            permission_list.append(f"tenant.{incoming_tenant}:{authed_level}")
+            permission_list.append(f"**:{authed_level}")
 
         # Create statement
         stmt = select(Template).where(Template.permissions.overlap(permission_list))   

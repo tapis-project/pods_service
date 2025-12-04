@@ -30,7 +30,7 @@ async def list_template_tags(
     Returns the ledger of template tags
     """
     logger.info(f"GET /pods/templates/{template_id}/tags - Top of list_template_tags with full={full}.")
-    template_tags = TemplateTag.db_get_where(where_params=[['template_id', '.eq', template_id]], sort_column='creation_ts', tenant=g.request_tenant_id, site=g.site_id)
+    template_tags = TemplateTag.db_get_where(where_params=[['template_id', '.eq', template_id]], sort_column='creation_ts', tenant="siteadmintable", site=g.site_id)
 
     display_template_tags = []
     for template_tag in template_tags:
@@ -111,7 +111,7 @@ async def add_template_tag(template_id: str, new_template_tag: NewTemplateTag):
     template_tag = TemplateTag(template_id=template_id, **new_template_tag.dict())
 
     # Create template database entry
-    template_tag.db_create(tenant=g.request_tenant_id, site=g.site_id)
+    template_tag.db_create(tenant="siteadmintable", site=g.site_id)
     logger.debug(f"New template_tag saved in db. template_id: {template_tag.template_id}; tenant: {g.request_tenant_id}.")
 
     return ok(result=template_tag.display(), msg="Template tag added successfully.", metadata=metadata)

@@ -207,6 +207,92 @@ View [live-docs](https://tapis-project.github.io/live-docs/?service=Pods) for cu
 
 ---
 
+## Template Permissions Reference
+
+Templates support flexible permission sharing through the `permissions` field. Permissions control who can view and use templates.
+
+### Permission Formats
+
+| Format | Scope | Example | Description |
+|--------|-------|---------|-------------|
+| `username:LEVEL` | User | `jsmith:READ` | Standard user permission |
+| `**:READ` | Site-wide | `**:READ` | All users across all tenants (public to entire site) |
+| `tenant.<tenant_id>:READ` | Tenant-wide | `tenant.dev:READ` | All users in specified tenant |
+
+### Public Template Restrictions
+
+**Site-wide (`**`) and tenant-wide (`tenant.*`) permissions:**
+- Only `READ` level is allowed (for security)
+- Only **admins** can set these permissions
+- Non-admin users will receive an error when attempting to set public permissions
+
+```python
+# Admin sets site-wide public access
+POST /pods/templates/{template_id}/permissions
+{
+    "user": "**",
+    "level": "READ"
+}
+
+# Admin sets tenant-wide public access for 'dev' tenant
+POST /pods/templates/{template_id}/permissions
+{
+    "user": "tenant.dev",
+    "level": "READ"
+}
+```
+
+### Template Visibility Rules
+
+|  | `**:READ` permission | `tenant.dev:READ` permission | Private Template |
+|---------------|-------------------|---------------------------|------------------|
+| User in `dev` tenant | ✅ Visible | ✅ Visible | ❌ Not visible |
+| User in `tacc` tenant | ✅ Visible | ❌ Not visible | ❌ Not visible |
+| User in any tenant | ✅ Visible | Only if in matching tenant | Only if explicitly granted |
+
+
+### Example: Creating a Public Template
+
+```python
+# 1. Admin creates template
+POST /pods/templates
+{
+    "template_id": "postgrestemplate",
+    "description": "PostgreSQL database template for all users"
+}
+
+# 2. Admin adds template tag with pod definition
+POST /pods/templates/postgrestemplate/tags
+{
+    "tag": "v1",
+    "pod_definition": {
+        "image": "postgres:15",
+        "secret_map": {
+            "POSTGRES_PASSWORD": "${:?Database password - required}"
+        }
+    }
+}
+
+# 3. Admin makes template public site-wide
+POST /pods/templates/postgrestemplate/permissions
+{
+    "user": "**",
+    "level": "READ"
+}
+
+# 4. Any user can now create pods from this template
+POST /pods
+{
+    "pod_id": "my-postgres",
+    "template": "postgrestemplate:v1",
+    "secret_map": {
+        "POSTGRES_PASSWORD": "my-secure-password"
+    }
+}
+```
+
+---
+
 ## Volume Mounts Reference
 
 The `volume_mounts` field is an **object keyed by mount path**, enabling template inheritance and partial overrides.
