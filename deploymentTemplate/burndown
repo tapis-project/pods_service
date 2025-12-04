@@ -16,7 +16,10 @@ kubectl delete configmap MAKEFILE_SERVICE_NAME-traefik-conf
 # App
 kubectl delete -f api.yml
 kubectl delete -f health-central.yml
+kubectl delete -f remote.yml
+kubectl delete -f remote-central.yml
 kubectl delete -f traefik-proxy.yml
+kubectl delete -f vector.yml
 
 # App - when deployed in single namespace
 kubectl delete -f spawner.yml

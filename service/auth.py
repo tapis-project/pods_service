@@ -188,6 +188,21 @@ def check_route_permissions(request):
         ["/pods/secrets/{secret_id}", "GET", codes.READ],
         ["/pods/secrets/{secret_id}", "PUT", codes.USER],
         ["/pods/secrets/{secret_id}", "DELETE", codes.ADMIN],
+        # CLUSTERS
+        ["/pods/clusters", "GET", codes.NONE],
+        ["/pods/clusters", "POST", codes.NONE],
+        ["/pods/clusters/{cluster_id}", "GET", codes.READ],
+        ["/pods/clusters/{cluster_id}", "DELETE", codes.ADMIN],
+        ["/pods/clusters/{cluster_id}/bootstrap", "POST", codes.ADMIN],
+        ["/pods/clusters/{cluster_id}/permissions", "GET", codes.USER],
+        ["/pods/clusters/{cluster_id}/permissions/{user}", "DELETE", codes.ADMIN],
+        ["/pods/clusters/{cluster_id}/permissions", "POST", codes.ADMIN],
+        ["/pods/clusters/{cluster_id}/stats", "GET", codes.USER],
+        ["/pods/clusters/{cluster_id}/pods", "GET", codes.USER],
+         #["/pods/clusters/{cluster_id}/add_pod/{pod_id}", "POST", codes.ADMIN],
+         #["/pods/clusters/{cluster_id}/remove_pod/{pod_id}", "POST", codes.ADMIN],
+         # GRAPHQL
+         ["/pods/graphql", "POST", codes.NONE],  # GraphQL endpoint, no auth needed yet
         # PODS
         ["/pods/{pod_id}/permissions", "GET", codes.USER],
         ["/pods/{pod_id}/permissions/{user}", "DELETE", codes.ADMIN],
@@ -306,6 +321,10 @@ def check_route_permissions(request):
         # moves field to 3rd position
         pod = check_object_id(request, 'pod', 3)
         has_pem = check_permissions(user=g.username, object=pod, object_type="pod", level=matched_route[2] , roles=g.roles)
+    elif "clusters/{cluster_id}" in matched_route[0]:
+        logger.debug(f"Matched clusters/--cluster_id-- route. request.url.path: {request.url.path}")
+        cluster = check_object_id(request, 'cluster', 2)
+        has_pem = check_permissions(user=g.username, object=cluster, object_type="cluster", level=matched_route[2] , roles=g.roles)
     elif "{pod_id}" in matched_route[0]:
         logger.debug(f"Matched /--pod_id-- route. request.url.path: {request.url.path}")
         pod = check_object_id(request, 'pod', 2)

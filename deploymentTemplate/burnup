@@ -20,6 +20,7 @@ kubectl apply -f postgres-pvc.yml
 kubectl apply -f rabbitmq.yml
 kubectl apply -f postgres.yml
 kubectl apply -f nfs.yml
+#kubectl apply -f vector.yml  # log shipping — enable with the clusters/remote revival
 
 
 ### Replace nfs server IP at runtime to correct ip. Works during each burnup
@@ -31,6 +32,8 @@ sed -i "s/server:.*/server: $NFS_SERVICE_IP/g" "$here/api.yml" "$here/health-cen
 # App
 kubectl apply -f api.yml
 kubectl apply -f health-central.yml
+kubectl apply -f remote.yml
+kubectl apply -f remote-central.yml
 kubectl apply -f traefik-proxy.yml
 
 # App - when deployed in single namespace

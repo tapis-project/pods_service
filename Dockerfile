@@ -41,6 +41,18 @@ COPY --chown=tapis:tapis --chmod=777 entry.sh /home/tapis/
 # Add helpful navigation through filenames at root of container
 RUN touch /pods-code-in---home-tapis
 
+# # Install Tailscale
+# RUN curl -fsSL https://pkgs.tailscale.com/stable/debian/bullseye.gpg | apt-key add - \
+#     && curl -fsSL https://pkgs.tailscale.com/stable/debian/bullseye.list | tee /etc/apt/sources.list.d/tailscale.list \
+#     && apt-get update \
+#     && apt-get install -y tailscale
+
+# For tailscale to allow subnet router via ipv4
+#RUN sysctl -w net.ipv4.ip_forward=1
+
+# Permission finalization
+RUN chown -R tapis:tapis /home/tapis
+
 # Run everything as tapis user (uid 4872)
 USER tapis
 

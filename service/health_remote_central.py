@@ -1,4 +1,19 @@
 """
+Central remote health service for Tapis Pods
+We could eventually have it so this startups the initial headscale, but for now we assume one running.
+Remote Central exposes central services + creates needed stuff.
+
+Does the following:
+  * We use remote container to ensure api/other aren't overloaded.
+  1. Uses kubectl to connect to cluster and derive postgres/rabbitmq/traefik info. 
+    - If there's an interuption the logic runs again.
+  2. Sets up tailscale with subnet routing to cluster.
+    - sets tags: pods-tun-central and pods-site-<site_name>
+  3. Creates proper rabbitmq/postgres site retricted users and stores creds to pass out for bootstrapping remote.
+
+
+"""
+"""
 Does the following:
 1. Go through running k8 pods
   a. Remove pods that are not in the database (dangling)
@@ -34,7 +49,7 @@ Running mode, either:
 
 import time
 import os
-from scale_utils import setup_tailscale, add_k8_pods_to_tailscale
+from scale_utils import setup_tailscale, add_k8_pods_to_tailscale, compute_k8_subnet_args
 from kubernetes_utils import check_k8s_access_and_roles
 from tapisservice.logs import get_logger
 from tapisservice.config import conf
@@ -48,11 +63,28 @@ ENV_NAME = conf.get('envname', os.environ.get('ENV_NAME', 'default_env'))
 RABBITMQ_URL = os.environ.get('RABBITMQ_URL', conf.get('rabbitmq_url', 'amqp://guest:guest@localhost:5672/'))
 POSTGRES_URL = os.environ.get('POSTGRES_URL', conf.get('postgres_url', 'postgresql://user:pass@localhost:5432/db'))
 
-def main():
-    logger.info(f"Starting remote health service for env: {ENV_NAME}")
+def poll_tailscale_status():
+    """Poll Tailscale status and log any anomalies."""
+    # import subprocess
+    # try:
+    #     result = subprocess.run(['tailscale', 'status'], capture_output=True, text=True, timeout=10)
+    #     if result.returncode != 0:
+    #         logger.error(f"Tailscale status command failed: {result.stderr}")
+    #     else:
+    #         status_output = result.stdout
+    #         if 'offline' in status_output.lower() or 'no connection' in status_output.lower():
+    #             logger.critical(f"Tailscale appears offline! Status: {status_output}")
+    #         else:
+    #             logger.info(f"Tailscale status: {status_output.strip()}")
+    # except Exception as e:
+    #     logger.error(f"Exception polling Tailscale status: {e}")
 
-    # Connect to Tailscale
-    result = setup_tailscale()
+def main():
+    logger.info(f"Starting central remote health service for env: {ENV_NAME}")
+
+    # Setup central Tailscale (subnet routing handled externally)
+    result = setup_tailscale(extra_tun_args = compute_k8_subnet_args())
+    logger.info("Central Tailscale setup complete. Subnet routing should be handled externally.")
 
     # Connect to RabbitMQ
     try:
@@ -60,7 +92,7 @@ def main():
         logger.info("Connected to RabbitMQ.")
     except Exception as e:
         logger.critical(f"Failed to connect to RabbitMQ: {e}")
-        return
+        pass
 
     # Connect to Postgres
     try:
@@ -68,16 +100,17 @@ def main():
         logger.info("Connected to Postgres.")
     except Exception as e:
         logger.critical(f"Failed to connect to Postgres: {e}")
-        return
+        pass
 
     # Check Kubernetes access and roles
     if not check_k8s_access_and_roles():
         logger.critical("Kubernetes access/roles insufficient. Exiting.")
-        return
+        pass
 
-    # Main loop for health and spawning logic
+    # Main loop for health and Tailscale monitoring
     while True:
-        # TODO: Add health checks and spawner logic here
+        poll_tailscale_status()
+        # TODO: Add cluster connection checks here
         logger.info("Health/spawner loop running...")
         time.sleep(45)
     # Add Kubernetes pods to Tailscale

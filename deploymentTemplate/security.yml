@@ -11,6 +11,47 @@ metadata:
     #automountServiceAccountToken: false
 
 ---
+# CLUSTER-WIDE ROLE — COMMENTED OUT, DELIBERATELY.
+#
+# This was added for the multi-cluster remote deployment work, whose Python is
+# dormant (the clusters router is not included in api.py). The RBAC, however,
+# was NOT dormant: burnup applies security.yml, so uncommenting this grants the
+# service account list/create/get/watch/delete/patch on pods, namespaces, nodes,
+# services, configmaps and PVCs across the ENTIRE cluster, plus pods/exec —
+# i.e. a shell into any pod in the cluster, including other Tapis services.
+#
+# The namespaced Role below is what the service actually runs on. Restore this
+# only alongside a real multi-namespace deployment, and scope it down first:
+# pods/exec almost certainly does not need to be cluster-wide.
+#
+# ---
+# kind: ClusterRole
+# apiVersion: rbac.authorization.k8s.io/v1
+# metadata:
+#   name: MAKEFILE_SERVICE_NAME-clusterrole
+# rules:
+# - apiGroups: [""]
+#   resources: ["pods", "pods/log", "namespaces", "nodes", "services", "events", "configmaps", "persistentvolumeclaims"]
+#   verbs: ["list", "create", "get", "watch", "delete", "patch"]
+# - apiGroups: [""]
+#   resources: ["pods/exec"]
+#   verbs: ["get", "create"]
+#
+# ---
+# kind: ClusterRoleBinding
+# apiVersion: rbac.authorization.k8s.io/v1
+# metadata:
+#   name: MAKEFILE_SERVICE_NAME-clusterrolebinding
+# subjects:
+# - kind: ServiceAccount
+#   name: MAKEFILE_SERVICE_NAME-serviceaccount
+#   namespace: default
+# roleRef:
+#   kind: ClusterRole
+#   name: MAKEFILE_SERVICE_NAME-clusterrole
+#   apiGroup: rbac.authorization.k8s.io
+
+---
 kind: Role
 apiVersion: rbac.authorization.k8s.io/v1
 metadata:
@@ -20,7 +61,7 @@ rules:
   resources: ["pods", "services", "events", "configmaps"]
   verbs: ["list", "create", "get", "watch", "delete", "update", "patch"]
 - apiGroups: [""]
-  resources: ["pods/log"]
+  resources: ["pods/log", "namespaces", "nodes"]
   verbs: ["list", "get", "watch"]
 - apiGroups: [""]
   resources: ["persistentvolumeclaims"]
