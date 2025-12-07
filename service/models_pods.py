@@ -408,7 +408,8 @@ class PodBase(TapisApiModel):
     description: str = Field("", description = "Description of this pod.")
     command: List[str] | None = Field(None, description = 'Command to run in pod. ex. `["sleep", "5000"]` or `["/bin/bash", "-c", "(exec myscript.sh)"]`', sa_column=Column(ARRAY(String)))
     arguments: List[str] | None = Field(None, description = "Arguments for the Pod's command.", sa_column=Column(ARRAY(String)))
-    environment_variables: Dict[str, Any] = Field({}, description = "Environment variables to inject into k8 pod; Only for custom pods.", sa_column=Column(JSON))
+    environment_variables: Dict[str, Any] = Field({}, description = "Environment variables to inject into k8 pod. Use `${pods:secrets:KEY}` to reference secret_map entries.", sa_column=Column(JSON))
+    secret_map: Dict[str, str] = Field({}, description = "Map of keys to secret values. Syntax: ${secret:name} (user secret), ${secret:user:name} (explicit owner). Reference in environment_variables via ${pods:secrets:KEY}. Resolved at pod start.", sa_column=Column(JSON))
     #probes: Dict[str, Any] = Field({}, description = "Probes to run on pod. ex. `{\"livenessProbe\": {\"httpGet\": {\"path\": \"/\", \"port\": 5000}}}`", sa_column=Column(JSON))
     status_requested: str = Field("ON", description = "Status requested by user, `ON`, `OFF`, or `RESTART`.")
     volume_mounts: Dict[str, VolumeMount] = Field({}, description = "Key: Volume name. Value: List of strs specifying volume folders/files to mount in pod", sa_column=Column(JSON))
@@ -508,6 +509,30 @@ class Pod(TapisPodBaseFull, table=True, validate=True):
                     raise TypeError(f"environment_variable key must be str. Got {type(env_key).__name__}.")
                 if not isinstance(env_val, str):
                     raise TypeError(f"environment_variable val must be str. Got {type(env_val).__name__}.")
+        return v
+
+    @validator('secret_map')
+    def check_secret_map(cls, v):
+        """Validate secret_map format for pods.
+        
+        Pod secret_map can contain:
+        - User secrets: ${secret:name} or ${secret:user:name}
+        - Literal strings for direct values
+        
+        Full validation (ownership, existence) happens at pod start time.
+        """
+        if not v:
+            return v
+        if not isinstance(v, dict):
+            raise TypeError(f"secret_map must be dict. Got {type(v).__name__}.")
+        for key, value in v.items():
+            if not isinstance(key, str):
+                raise TypeError(f"secret_map key must be str. Got {type(key).__name__}.")
+            if not isinstance(value, str):
+                raise TypeError(f"secret_map value must be str. Got {type(value).__name__}.")
+            # Basic format check - key should be alphanumeric with underscores/hyphens
+            if not key.replace('_', '').replace('-', '').isalnum():
+                raise ValueError(f"secret_map key must be alphanumeric and may include '_' or '-'. Got: {key}")
         return v
 
     @validator('volume_mounts')
@@ -894,7 +919,7 @@ class UpdatePod(TapisApiModel):
     description: Optional[str] = Field("", description = "Description of this pod.")
     command: Optional[List[str]] = Field(None, description = 'Command to run in pod. ex. ["sleep", "5000"] or ["/bin/bash", "-c", "(exec myscript.sh)"]', sa_column=Column(ARRAY(String)))
     arguments: List[str] | None = Field(None, description = "Arguments for the Pod's command.", sa_column=Column(ARRAY(String)))
-    environment_variables: Optional[Dict[str, Any]] = Field({}, description = "Environment variables to inject into k8 pod; Only for custom pods.", sa_column=Column(JSON))
+    environment_variables: Optional[Dict[str, Any]] = Field({}, description = "Environment variables to inject into k8 pod.", sa_column=Column(JSON))
     status_requested: Optional[str] = Field("ON", description = "Status requested by user, `ON`, `OFF`, or `RESTART`.")
     volume_mounts: Optional[Dict[str, VolumeMount]] = Field({}, description = "Key: Volume name. Value: List of strs specifying volume folders/files to mount in pod", sa_column=Column(JSON))
     time_to_stop_default: Optional[int] = Field(43200, description = "Default time (sec) for pod to run from instance start. -1 for unlimited. 12 hour default.")

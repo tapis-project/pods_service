@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Request, HTTPException, UploadFile, File, Form, Body, Path, Query
+from fastapi import APIRouter, Request, UploadFile, File, Form, Body, Path, Query
 from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from models_pods import Pod, Password, PodResponse, PodPermissionsResponse, PodCredentialsResponse, PodLogsResponse, ExecutePodCommands
 from models_templates_tags import Template, TemplateTag, TemplateTagResponse, NewTemplateTagFromPod
@@ -6,6 +6,7 @@ from models_templates_utils import combine_pod_and_template_recursively
 from models_misc import SetPermission
 from channels import CommandChannel
 from codes import OFF, ON, RESTART, REQUESTED, STOPPED, USER
+from secret_utils import resolve_secret_map
 import requests
 from tapisservice.tapisfastapi.utils import g, ok, error
 from tapisservice.config import conf
@@ -802,15 +803,33 @@ async def start_pod(pod_id):
     if not pod.status in [STOPPED]:
         raise RuntimeError(f"Pod must be in 'STOPPED' status to run 'start_pod'. Please run 'stop_pod' or 'restart_pod' instead.")
     else:
+        # Resolve secrets before starting the pod
+        resolved_secrets = {}
+        if pod.secret_map:
+            resolved_secrets, secret_errors = resolve_secret_map(
+                pod.secret_map,
+                site_id=g.site_id,
+                tenant_id=g.request_tenant_id,
+                actor=g.username,
+                pod_id=pod.pod_id
+            )
+            if secret_errors:
+                # Required secrets missing - fail the start
+                return error(
+                    result=pod.display(),
+                    msg=f"Failed to start pod: {'; '.join(secret_errors)}"
+                )
+
         pod.status_requested = ON
         pod.status = REQUESTED
 
-        # Send command to start new pod
+        # Send command to start new pod with resolved secrets
         ch = CommandChannel(name=pod.site_id)
         ch.put_cmd(object_id=pod.pod_id,
                    object_type="pod",
                    tenant_id=pod.tenant_id,
-                   site_id=pod.site_id)
+                   site_id=pod.site_id,
+                   resolved_secrets=resolved_secrets)
         ch.close()
         logger.debug(f"Command Channel - Added msg for pod_id: {pod.pod_id}.")
 
@@ -1055,7 +1074,7 @@ async def pod_auth(pod_id_net, request: Request):
                 if username.lower() not in tapis_auth_allowed_users and "*" not in tapis_auth_allowed_users:
                     raise Exception(f"User {username} not in networking.tapis_auth_allowed_users for pod_id: {pod_id_net}.")
             return JSONResponse(content=ok("Already authenticated"), status_code=200, headers=tapis_auth_headers)
-    except HTTPException as e:
+    except Exception as e:
         logger.debug(f"Authentication failed: {e.detail}")
 
     ## if request headers has X-Tapis-Token, we assume they're not browser based and want to use the token

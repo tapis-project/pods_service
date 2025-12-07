@@ -72,6 +72,8 @@ from models_snapshots import Snapshot
 from models_templates import Template
 from models_images import Image
 from models_templates_tags import TemplateTag
+from models_logs import Log
+from models_secrets import Secret
 
 target_metadata = SQLModel.metadata
 

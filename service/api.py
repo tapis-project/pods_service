@@ -27,6 +27,8 @@ from api_templates_templateid_tags_tagid import router as router_templates_templ
 from api_templates_templateid_func import router as router_templates_templateid_func
 from api_images import router as router_images
 from api_images_imageid import router as router_images_imageid
+from api_secrets import router as router_secrets
+from api_secrets_secretid import router as router_secrets_secretid
 from api_misc import router as router_misc
 
 
@@ -130,6 +132,9 @@ api.include_router(router_volumes_volumeid)
 api.include_router(router_volumes_volumeid_func)
 # jupyter
 api.include_router(router_pods_podsid_jupyter)
+# secrets
+api.include_router(router_secrets)
+api.include_router(router_secrets_secretid)
 # pods
 api.include_router(router_pods)
 api.include_router(router_pods_podsid)

@@ -61,8 +61,12 @@ async def error_handler(request: Request, exc):
                 response = error(msg=f'Unexpected. {repr(exc)}')
             response = error(msg=error_list)
             status_code = 400
+        elif isinstance(exc, ValueError):
+            # ValueError is used for validation errors raised from code
+            response = error(msg=str(exc))
+            status_code = 400
         else:
-            response = error(msg=f'Unexpected. {repr(exc)}')
+            response = error(msg=f'Unexpected. {repr(exc)} debug: {exc.errors() if hasattr(exc, "errors") else "no errors() method"}')
             status_code = 500
 
     return JSONResponse(

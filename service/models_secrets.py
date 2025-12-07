@@ -1,8 +1,8 @@
 from datetime import datetime
 from typing import List, Dict, Optional, Literal
-from pydantic import validator, Field, create_model
+from pydantic import validator, create_model
 from sqlalchemy.dialects.postgresql import ARRAY
-from sqlmodel import Column, String
+from sqlmodel import Column, String, Field
 
 from tapisservice.tapisfastapi.utils import g
 from tapisservice.config import conf
@@ -17,11 +17,12 @@ PODS_SERVICE_TENANT = "admin"  # All secrets stored in admin tenant under pods s
 
 
 class SecretBase(TapisApiModel):
-    secret_name: str = Field(..., description="Name of the secret.")
+    secret_id: str = Field(..., description="Name of the secret.", primary_key=True)
     scope: str = Field("user", description="Scope of secret: 'user' or 'pod'")
     pod_id: Optional[str] = Field(None, description="Pod ID if scope is 'pod'")
     description: str = Field("", description="Description of this secret.")
-    read_write: str = Field("read_write", description="Access mode: 'read' (read-only) or 'read_write' (can be updated).")
+    readable: bool = Field(True, description="If True, secret value can be retrieved via GET /secrets/{id}/value. Pod injection always works regardless of this setting.")
+    writable: bool = Field(True, description="If True, secret value can be updated via PUT or POST recreation. If False, secret is write-once.")
 
 class SecretBaseRead(SecretBase):
     # Provided
@@ -47,23 +48,17 @@ class Secret(TapisSecretBaseFull, table=True, validate=True):
             raise ValueError(f"scope must be 'user' or 'pod'. Got: {v}")
         return v
 
-    @validator('read_write')
-    def check_read_write(cls, v):
-        if v not in ('read', 'read_write'):
-            raise ValueError(f"read_write must be 'read' or 'read_write'. Got: {v}")
-        return v
-
-    @validator('secret_name')
-    def check_secret_name(cls, v):
+    @validator('secret_id')
+    def check_secret_id(cls, v):
         # Ensure secret name is alphanumeric with underscores/dashes
         if not v.replace('_', '').replace('-', '').isalnum():
-            raise ValueError(f"secret_name must be alphanumeric and may include '_' or '-'. Got: {v}")
+            raise ValueError(f"secret_id must be alphanumeric and may include '_' or '-'. Got: {v}")
         # Ensure no spaces
         if " " in v:
-            raise ValueError(f"secret_name may not contain spaces. Invalid name: '{v}'")
+            raise ValueError(f"secret_id may not contain spaces. Invalid name: '{v}'")
         # Length check
-        if len(v) > 100:
-            raise ValueError(f"secret_name must be less than 100 characters. Got: {len(v)}")
+        if len(v) > 110:
+            raise ValueError(f"secret_id must be less than 110 characters. Got: {len(v)}")
         return v
 
     @validator('pod_id')
@@ -98,21 +93,22 @@ class Secret(TapisSecretBaseFull, table=True, validate=True):
     @validator('sk_secret_name', always=True)
     def generate_sk_secret_name(cls, v, values):
         # Generate prefixed secret name for SK
-        # Format: pods_{site}_{tenant}_{scope}_{identifier}_{secret_name}
+        # Format: pods_{site}_{tenant}_{scope}+{identifier}+{secret_id}
+        # We use this format as SK has folder heirarchy based on +. Allowing us full secret_name length.
         # All secrets stored under Pods service account, partitioned by site/tenant/user
         site = values.get('site_id') or g.site_id
         tenant = values.get('tenant_id') or g.request_tenant_id
         scope = values.get('scope', 'user')
-        secret_name = values.get('secret_name', '')
+        secret_id = values.get('secret_id', '')
         
         if scope == "user":
             user = values.get('added_by') or g.username
-            return f"pods_{tenant}_user_{user}_{secret_name}"
+            return f"pods_{tenant}_user+{user}+{secret_id}"
         elif scope == "pod":
             pod_id = values.get('pod_id')
             if not pod_id:
                 raise ValueError("pod_id is required when scope is 'pod'")
-            return f"pods_{tenant}_pod_{pod_id}_{secret_name}"
+            return f"pods_{tenant}_pod+{pod_id}+{secret_id}"
         
         return v
 
@@ -148,6 +144,7 @@ class Secret(TapisSecretBaseFull, table=True, validate=True):
     def display(self):
         display = self.dict()
         display.pop('tenant_id', None)
+        display.pop('permissions')
         display.pop('site_id', None)
         return display
 

@@ -40,14 +40,20 @@ def derive_template_info(input_template_name, update_template_tag: bool = False,
     derived_template_tag = None
     if "@" in input_template_name:
         # we expect template_id:template_tag if @ is present
-        template_id_n_tag, tag_timestamp = input_template_name.split("@")
+        template_id_n_tag, tag_timestamp = input_template_name.split("@", 1)
         if ":" in template_id_n_tag:
-            template_id, template_tag = template_id_n_tag.split(":")
+            parts = template_id_n_tag.split(":")
+            if len(parts) != 2:
+                raise ValueError(f"Invalid template format: '{input_template_name}'. Expected 'template_id:tag@timestamp'. Got {len(parts)} parts separated by ':'.")
+            template_id, template_tag = parts
         else:
-            raise ValueError(f"Error finding template. User specified '@' with no ':'. Template should be formated as 'template_name:template_tag@tag_timestamp'.")
+            raise ValueError(f"Invalid template format: '{input_template_name}'. When using '@' for timestamp, format must be 'template_id:tag@timestamp'.")
     elif ":" in input_template_name:
         # If no @, we expect template_id:template_tag if : is present
-        template_id, template_tag = input_template_name.split(":")
+        parts = input_template_name.split(":")
+        if len(parts) != 2:
+            raise ValueError(f"Invalid template format: '{input_template_name}'. Expected 'template_id:tag'. Got {len(parts)} parts separated by ':'.")
+        template_id, template_tag = parts
     else:
         template_id = input_template_name
 
@@ -55,7 +61,7 @@ def derive_template_info(input_template_name, update_template_tag: bool = False,
     ## template_id check
     template = Template.db_get_with_pk(template_id, tenant=tenant, site=site)
     if not template:
-        raise ValueError(f"Error finding template. Could not find template with template_id: {template_id}")
+        raise ValueError(f"Template not found: '{template_id}'. Verify template_id exists.")
     if not template_tag:
         # If no template_tag, we'll use the latest tag.
         template_tag = "latest"
@@ -65,15 +71,15 @@ def derive_template_info(input_template_name, update_template_tag: bool = False,
         full_tag = f"{template_tag}@{tag_timestamp}"
         template_tags = TemplateTag.db_get_where(where_params=[['tag_timestamp', '.eq', str(full_tag)]], sort_column='creation_ts', tenant=tenant, site=site)
         if not template_tags:
-            raise ValueError(f"Error finding template tag. Could not find tag_timestamp matching: {input_template_name}. tenant: {tenant}, site: {site}.")
+            raise ValueError(f"Template tag not found: '{input_template_name}'. Verify template_id, tag, and timestamp all exist.")
         if len(template_tags) > 1:
-            raise ValueError(f"Error finding template tag. Found multiple tags when expecting only one: {input_template_name}. Big error. Message someone.")
+            raise ValueError(f"Multiple template tags found for '{input_template_name}'. This should not happen - contact admin.")
         derived_template_tag = template_tags[0]
     elif not tag_timestamp:
         # timestamp not provided, we'll look for matching tags and set tag_timestamp to the most recent.
         template_tags = TemplateTag.db_get_where(where_params=[['tag', '.eq', template_tag]], sort_column='creation_ts', tenant=tenant, site=site)
         if not template_tags:
-            raise ValueError(f"Could not find template matching: {template_id}:{template_tag}.")
+            raise ValueError(f"Template tag not found: '{template_id}:{template_tag}'. Verify template_id and tag both exist.")
         # found matching tags, get the most recent one.
         derived_template_tag = template_tags[0]
         _, tag_timestamp = derived_template_tag.tag_timestamp.split("@")
@@ -374,7 +380,8 @@ class TemplateTagPodDefinition(TapisModel):
     description: str | None= Field(None, description = "Description of this pod.")
     command: List[str] | None = Field(None, description = 'Command to run in pod. ex. `["sleep", "5000"]` or `["/bin/bash", "-c", "(exec myscript.sh)"]`', sa_column=Column(ARRAY(String)))
     arguments: List[str] | None = Field(None, description = "Arguments for the Pod's command.", sa_column=Column(ARRAY(String)))
-    environment_variables: Dict[str, Any] = Field({}, description = "Environment variables to inject into k8 pod; Only for custom pods.", sa_column=Column(JSON))
+    environment_variables: Dict[str, Any] = Field({}, description = "Environment variables to inject into pod. Use `${pods:secrets:KEY}` to reference secret_map entries.", sa_column=Column(JSON))
+    secret_map: Dict[str, str] = Field({}, description = "Map of keys to secret references or placeholders. Use ${secret:name} for user secrets, ${default:val:?desc} for placeholders with defaults, ${:?desc} for required placeholders. Secrets resolved at pod start.", sa_column=Column(JSON))
     volume_mounts: Dict[str, VolumeMount] = Field({}, description = "Key: Volume name. Value: List of strs specifying volume folders/files to mount in pod", sa_column=Column(JSON))
     time_to_stop_default: int | None = Field(None, description = "Default time (sec) for pod to run from instance start. -1 for unlimited. 12 hour default.")
     time_to_stop_instance: int | None = Field(None, description = "Time (sec) for pod to run from instance start. Reset each time instance is started. -1 for unlimited. None uses default.")
@@ -412,6 +419,31 @@ class TemplateTagPodDefinition(TapisModel):
                     raise TypeError(f"environment_variable key must be str. Got {type(env_key).__name__}.")
                 if not isinstance(env_val, str):
                     raise TypeError(f"environment_variable val must be str. Got {type(env_val).__name__}.")
+        return v
+
+    @validator('secret_map')
+    def check_secret_map(cls, v):
+        """Validate secret_map format at template level.
+        
+        Template secret_map can contain (NO direct secret references):
+        - Placeholders with defaults: ${default:value:?description}
+        - Required placeholders: ${:?description}
+        - Literal strings for non-secret configuration values
+        
+        Pod creators override placeholders with their own ${secret:name} references.
+        """
+        if not v:
+            return v
+        if not isinstance(v, dict):
+            raise TypeError(f"secret_map must be dict. Got {type(v).__name__}.")
+        for key, value in v.items():
+            if not isinstance(key, str):
+                raise TypeError(f"secret_map key must be str. Got {type(key).__name__}.")
+            if not isinstance(value, str):
+                raise TypeError(f"secret_map value must be str. Got {type(value).__name__}.")
+            # Basic format check - key should be alphanumeric with underscores/hyphens
+            if not key.replace('_', '').replace('-', '').isalnum():
+                raise ValueError(f"secret_map key must be alphanumeric and may include '_' or '-'. Got: {key}")
         return v
 
     @validator('volume_mounts')

@@ -5,6 +5,8 @@ from kubernetes_utils import create_pod, create_service, create_pvc, KubernetesE
 from kubernetes import client, config
 
 import re
+from typing import Dict, List, Tuple, Any
+from dataclasses import dataclass
 
 from tapisservice.tapisfastapi.utils import g
 from tapisservice.config import conf
@@ -12,6 +14,241 @@ from tapisservice.logs import get_logger
 from tapisservice.errors import BaseTapisError
 from __init__ import t
 logger = get_logger(__name__)
+
+
+@dataclass
+class SecretMapValidationResult:
+    """Result object for secret_map validation operations."""
+    is_valid: bool
+    errors: List[Dict[str, str]]  # List of {key, value, description} error dicts
+    metadata: Dict[str, Any]  # Metadata to return to user (placeholder info, etc.)
+    error_message: str = ""  # Pre-formatted error message for API response
+
+
+def validate_template_tag_secret_map(secret_map: Dict[str, str], actor: str = None) -> SecretMapValidationResult:
+    """
+    Validate that a template tag's secret_map contains only placeholders, not direct secret references.
+    
+    Template tags should define placeholders that users override with actual secrets when creating pods.
+    Direct secret references like ${secret:name} are not allowed in template tags because:
+    1. Template tags are shared - they shouldn't embed user-specific secrets
+    2. Template tags define structure - pods provide the actual secret bindings
+    
+    Valid template secret_map values:
+        - ${default:value:?description} - Placeholder with default value
+        - ${:?description} - Required placeholder (no default)
+        - Literal strings (no ${} at root)
+    
+    Invalid for templates:
+        - ${secret:name} - Direct secret reference
+        - ${secret:user:name} - Explicit user secret reference
+    
+    Args:
+        secret_map: Dict mapping keys to values (placeholders or literals)
+        actor: Current user for parsing context
+        
+    Returns:
+        SecretMapValidationResult with is_valid, errors, metadata, and error_message
+    """
+    from secret_utils import validate_template_secret_map, get_placeholder_warnings
+    
+    if not secret_map:
+        return SecretMapValidationResult(is_valid=True, errors=[], metadata={})
+    
+    # First validate that no direct secret references exist
+    is_valid, errors = validate_template_secret_map(secret_map, actor=actor)
+    
+    if not is_valid:
+        error_messages = [f"Key '{err['key']}': {err['description']}" for err in errors]
+        return SecretMapValidationResult(
+            is_valid=False,
+            errors=errors,
+            metadata={},
+            error_message=f"Template secret_map validation failed. Templates cannot contain direct secret references "
+                          f"(${{secret:name}}) - they must use placeholders that pod creators override. "
+                          f"Details: {'; '.join(error_messages)}"
+        )
+    
+    # Get placeholder information for metadata
+    placeholder_warnings, parse_errors = get_placeholder_warnings(secret_map, actor=actor)
+    
+    if parse_errors:
+        error_dicts = [{"key": "secret_map", "value": "", "description": err} for err in parse_errors]
+        return SecretMapValidationResult(
+            is_valid=False,
+            errors=error_dicts,
+            metadata={},
+            error_message=f"Invalid secret_map format in pod_definition: {'; '.join(parse_errors)}"
+        )
+    
+    # Build metadata with placeholder info
+    metadata = {}
+    if placeholder_warnings:
+        metadata["secret_placeholders"] = placeholder_warnings
+    
+    return SecretMapValidationResult(is_valid=True, errors=[], metadata=metadata)
+
+
+def validate_template_tag_env_vars(environment_variables: Dict[str, Any], 
+                                    secret_map: Dict[str, str]) -> SecretMapValidationResult:
+    """
+    Validate that environment_variables only reference keys that exist in secret_map.
+    
+    Args:
+        environment_variables: Dict of env vars (may contain ${pods:secrets:KEY} refs)
+        secret_map: Dict of secret_map entries
+        
+    Returns:
+        SecretMapValidationResult with validation status
+    """
+    from secret_utils import validate_environment_placeholders
+    
+    if not environment_variables:
+        return SecretMapValidationResult(is_valid=True, errors=[], metadata={})
+    
+    is_valid, env_errors = validate_environment_placeholders(
+        environment_variables,
+        secret_map or {}
+    )
+    
+    if not is_valid:
+        error_dicts = [{"key": "environment_variables", "value": "", "description": err} for err in env_errors]
+        return SecretMapValidationResult(
+            is_valid=False,
+            errors=error_dicts,
+            metadata={},
+            error_message=f"Environment variable validation failed: {'; '.join(env_errors)}"
+        )
+    
+    return SecretMapValidationResult(is_valid=True, errors=[], metadata={})
+
+
+def validate_pod_secret_map_against_template(pod_secret_map: Dict[str, str], 
+                                              template_secret_map: Dict[str, str],
+                                              actor: str = None) -> SecretMapValidationResult:
+    """
+    Validate that a pod's secret_map properly overrides all required placeholders from template.
+    
+    When a pod uses a template with placeholders:
+    - Required placeholders (${:?description}) MUST be overridden by pod
+    - Optional placeholders (${default:value:?description}) can use default or be overridden
+    - Pod can provide actual secret references (${secret:name})
+    
+    Args:
+        pod_secret_map: The pod's secret_map (may be empty)
+        template_secret_map: The merged template secret_map with all placeholders
+        actor: Current user for parsing context
+        
+    Returns:
+        SecretMapValidationResult with is_valid, errors, metadata, and error_message
+    """
+    from secret_utils import parse_secret_reference
+    
+    errors = []
+    required_placeholders = []
+    optional_placeholders = []
+    
+    if not template_secret_map:
+        return SecretMapValidationResult(is_valid=True, errors=[], metadata={})
+    
+    # Merge pod and template secret maps (pod overrides template)
+    merged_map = dict(template_secret_map)
+    merged_map.update(pod_secret_map or {})
+    
+    # Check each entry in the merged map
+    for key, value in merged_map.items():
+        ref, parse_error = parse_secret_reference(value, actor=actor)
+        
+        if parse_error:
+            errors.append({
+                "key": key,
+                "value": value,
+                "description": f"Invalid secret_map value: {parse_error}"
+            })
+            continue
+        
+        # Check if this is still an unresolved required placeholder
+        if ref.is_placeholder and ref.is_required:
+            # Required placeholder was not overridden by pod
+            errors.append({
+                "key": key,
+                "value": value,
+                "description": f"REQUIRED: '{key}' - {ref.description or 'No description'}. Add to pod's secret_map."
+            })
+            required_placeholders.append(
+                f"REQUIRED: '{key}' - {ref.description or 'No description'}. Override in secret_map."
+            )
+        elif ref.is_placeholder and not ref.is_required:
+            # Optional placeholder with default - add to metadata
+            optional_placeholders.append(
+                f"OPTIONAL: '{key}' - {ref.description or 'No description'}. Default: '{ref.default_value}'."
+            )
+    
+    # Build metadata as simple string lists
+    metadata = {}
+    if required_placeholders or optional_placeholders:
+        metadata["template_placeholders"] = {
+            "required": required_placeholders,
+            "optional": optional_placeholders
+        }
+    
+    if errors:
+        # Build simple, human-readable error messages
+        error_lines = [err['description'] for err in errors]
+        return SecretMapValidationResult(
+            is_valid=False,
+            errors=errors,
+            metadata=metadata,
+            error_message=f"Missing required placeholders in secret_map: {'; '.join(error_lines)}"
+        )
+    
+    return SecretMapValidationResult(is_valid=True, errors=[], metadata=metadata)
+
+
+def get_template_merged_secret_map(template_name: str, tenant: str = None, site: str = None) -> Dict[str, str]:
+    """
+    Get the merged secret_map from a template and all its chained templates.
+    
+    Priority for chained templates: closer template > deeper template
+    
+    Args:
+        template_name: Template reference string (e.g., "template_id:tag_name")
+        tenant: Tenant ID for template lookup
+        site: Site ID for template lookup
+        
+    Returns:
+        Dict of merged secret_map entries from template chain
+    """
+    seen_templates = set()
+    merged_secret_map = {}
+    
+    def process_template_chain(tpl_name: str):
+        nonlocal merged_secret_map
+        
+        if not tpl_name:
+            return
+        
+        if tpl_name in seen_templates:
+            raise ValueError(f"Infinite loop detected: template {tpl_name} is referenced more than once in template waterfall.")
+        seen_templates.add(tpl_name)
+        
+        _, _, template_tag = derive_template_info(tpl_name, tenant=tenant, site=site)
+        pod_def = template_tag.pod_definition or {}
+        
+        # First process deeper template (if this template references another)
+        modified_fields = get_modified_template_fields(TemplateTagPodDefinition().dict(), pod_def)
+        if modified_fields.get('template'):
+            process_template_chain(modified_fields['template'])
+        
+        # Then apply this template's secret_map (closer template wins over deeper)
+        template_secret_map = pod_def.get('secret_map', {}) or {}
+        if hasattr(template_secret_map, 'dict'):
+            template_secret_map = template_secret_map.dict()
+        
+        merged_secret_map.update(template_secret_map)
+    
+    process_template_chain(template_name)
+    return merged_secret_map
 
 
 def get_modified_template_fields(original_template, modified_template_def):
@@ -31,7 +268,7 @@ def get_modified_template_fields(original_template, modified_template_def):
                 del changed_fields['resources'][resource_key]
     return changed_fields
 
-def combine_pod_and_template_recursively(input_obj, template_name, seen_templates=None, tenant: str = None, site: str = None, original_pod_envs=None):
+def combine_pod_and_template_recursively(input_obj, template_name, seen_templates=None, tenant: str = None, site: str = None, original_pod_envs=None, original_pod_secret_map=None):
     """
     --- run with
     pod = Pod.db_get_with_pk(pk_id='testingfastapi', tenant='dev', site='tacc')
@@ -45,6 +282,13 @@ def combine_pod_and_template_recursively(input_obj, template_name, seen_template
     # Store original pod env vars on first call (before any template processing)
     if original_pod_envs is None and 'environment_variables' in (input_obj.modified_fields or []):
         original_pod_envs = input_obj.environment_variables.copy() if input_obj.environment_variables else {}
+    
+    # Store original pod secret_map on first call (before any template processing)
+    if original_pod_secret_map is None and 'secret_map' in (input_obj.modified_fields or []):
+        pod_sm = getattr(input_obj, 'secret_map', {}) or {}
+        if hasattr(pod_sm, 'dict'):
+            pod_sm = pod_sm.dict()
+        original_pod_secret_map = dict(pod_sm)
 
     if template_name:
         if template_name in seen_templates:
@@ -55,7 +299,7 @@ def combine_pod_and_template_recursively(input_obj, template_name, seen_template
         modified_fields = get_modified_template_fields(TemplateTagPodDefinition().dict(), template_tag.pod_definition)
 
         # First, recursively combine the input_obj with the next template in the chain
-        input_obj = combine_pod_and_template_recursively(input_obj, modified_fields.get('template'), seen_templates, tenant, site, original_pod_envs)
+        input_obj = combine_pod_and_template_recursively(input_obj, modified_fields.get('template'), seen_templates, tenant, site, original_pod_envs, original_pod_secret_map)
 
         # Then, apply the current template to the input_obj
         try:
@@ -146,6 +390,37 @@ def combine_pod_and_template_recursively(input_obj, template_name, seen_template
                     else:
                         # We're not using templateobj envs, so we only use inputobj envs
                         logger.debug(f"_TAPIS_INTERNAL_USE_TEMPLATE_ENVS is False - input_obj.environment_variables: {input_obj.environment_variables}")
+                elif mod_key == "secret_map":
+                    # Merge secret_maps with proper priority: pod > closer template > deeper template
+                    # Template defines placeholders (${default:...} or ${:?...}) that users can override
+                    # with actual secret references (${secret:...}) at pod creation
+                    # 
+                    # At this point:
+                    # - input_obj.secret_map contains merged values from deeper templates + original pod values
+                    # - template_secret_map is the current (closer) template's values
+                    # 
+                    # Order: Pod was already applied first. We recursively went deep, now coming back up.
+                    # So we need: start with deeper values (input_obj), apply current template on top,
+                    # but pod's original values must override all templates.
+                    template_secret_map = template_tag.pod_definition.get(mod_key, {}) or {}
+                    current_secret_map = getattr(input_obj, "secret_map", {}) or {}
+                    
+                    if hasattr(template_secret_map, 'dict'):
+                        template_secret_map = template_secret_map.dict() if hasattr(template_secret_map, 'dict') else dict(template_secret_map)
+                    if hasattr(current_secret_map, 'dict'):
+                        current_secret_map = current_secret_map.dict() if hasattr(current_secret_map, 'dict') else dict(current_secret_map)
+                    
+                    # Priority: closer template > deeper template (current input_obj has deeper values)
+                    # Then pod's original secret_map (from modified_fields) wins over all
+                    final_secret_map = dict(current_secret_map)  # Start with deeper template values
+                    final_secret_map.update(template_secret_map)  # Closer template wins over deeper
+                    
+                    # Re-apply pod's original secret_map if user modified it (pod wins over all templates)
+                    if original_pod_secret_map:
+                        final_secret_map.update(original_pod_secret_map)
+                    
+                    setattr(input_obj, mod_key, final_secret_map)
+                    logger.debug(f"Merged secret_map: template had {len(template_secret_map)} entries, current has {len(current_secret_map)}, final has {len(final_secret_map)}")
                 elif mod_key.startswith("volume_mount."):
                     print('dog') # i have no idea what this was meant to debug
                 elif mod_key == "volume_mounts":

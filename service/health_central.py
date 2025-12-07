@@ -206,7 +206,8 @@ def set_traefik_proxy():
         try: 
             pod = combine_pod_and_template_recursively(input_pod, input_pod.template, tenant=input_pod.tenant_id, site=input_pod.site_id)
         except Exception as e:
-            logger.critical(f"Error combining pod and template. Skipping. e: {e}")
+            logger.critical(f"Error combining pod and template. Skipping pod {input_pod.pod_id}. e: {e}")
+            continue
         # Each pod can have up to 3 networking objects with custom filled port/protocol/name
         for net_name, net_info in pod.networking.items():
             if not isinstance(net_info, dict):
@@ -305,13 +306,13 @@ def main():
         try:
             set_traefik_proxy()
         except Exception as e:
-            logger.error(f"Error setting traefik proxy. e: {e}")
-            raise
+            logger.error(f"Error setting traefik proxy. e: {e}", exc_info=True)
+            # Don't raise - continue the health loop to avoid crashing the pod
 
         try:
             check_nfs_files()
         except Exception as e:
-            logger.error(f"Error running check_nfs_files. e: {e}")
+            logger.error(f"Error running check_nfs_files. e: {e}", exc_info=True)
             #raise # this seems like it's just breaking
 
         # Have a short wait

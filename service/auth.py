@@ -21,6 +21,7 @@ from models_volumes import Volume
 from models_snapshots import Snapshot
 from models_templates import Template
 from models_images import Image
+from models_secrets import Secret
 from utils import check_permissions
 
 TOKEN_RE = re.compile('Bearer (.+)')
@@ -77,7 +78,7 @@ def check_object_id(request, object_type, idx):
         object_id = path_split[idx]
     except IndexError:
         raise ResourceError(f"Unable to parse {object_type}_id: is it missing from the URL?", 404)
-    if object_type in ['image']:
+    if object_type in ['image', 'secret']:
         logger.debug(f"Attempting to grab {object_type}_id: {object_id}; tenant: siteadmintable")
         obj = globals()[object_type.capitalize()].db_get_with_pk(object_id, tenant="siteadmintable", site=g.site_id)
     else:
@@ -175,6 +176,16 @@ def check_route_permissions(request):
         # JUPYTER
         ["/pods/jupyter/{pod_id}/upload", "POST", codes.USER],
         ["/pods/jupyter/ensure", "GET", codes.USER],
+        # SECRETS
+        ["/pods/secrets", "GET", codes.NONE],
+        ["/pods/secrets", "POST", codes.NONE],
+        ["/pods/secrets/{secret_id}/permissions", "GET", codes.USER],
+        ["/pods/secrets/{secret_id}/permissions/{user}", "DELETE", codes.ADMIN],
+        ["/pods/secrets/{secret_id}/permissions", "POST", codes.ADMIN],
+        ["/pods/secrets/{secret_id}/value", "GET", codes.USER],
+        ["/pods/secrets/{secret_id}", "GET", codes.READ],
+        ["/pods/secrets/{secret_id}", "PUT", codes.USER],
+        ["/pods/secrets/{secret_id}", "DELETE", codes.ADMIN],
         # PODS
         ["/pods/{pod_id}/permissions", "GET", codes.USER],
         ["/pods/{pod_id}/permissions/{user}", "DELETE", codes.ADMIN],
@@ -275,6 +286,9 @@ def check_route_permissions(request):
     elif "{template_id}" in matched_route[0]:
         template = check_object_id(request, 'template', 3)
         has_pem = check_permissions(user=g.username, object=template, object_type="template", level=matched_route[2] , roles=g.roles)
+    elif "{secret_id}" in matched_route[0]:
+        secret = check_object_id(request, 'secret', 3)
+        has_pem = check_permissions(user=g.username, object=secret, object_type="secret", level=matched_route[2] , roles=g.roles)
     elif "{image_id}" in matched_route[0]:
         image = check_object_id(request, 'image', 3)
         # images don't have permissions
