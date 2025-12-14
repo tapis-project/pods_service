@@ -4,6 +4,8 @@ from codes import REQUESTED, ON
 from pydantic import ValidationError
 
 from models_pods import Pod, NewPod, Password, PodsResponse, PodResponse, PodBase, PodBaseRead
+from models_templates_utils import validate_pod_secret_map_against_template, get_template_merged_secret_map
+from secret_utils import get_placeholder_warnings
 from tapisservice.tapisfastapi.utils import g, ok
 from tapisservice.logs import get_logger
 logger = get_logger(__name__)
@@ -84,6 +86,52 @@ async def create_pod(new_pod: NewPod):
         else:
             pod.modified_fields.append(arg)
 
+    # Validate secret_map placeholders if pod uses a template
+    placeholder_metadata = {}
+    if pod.template:
+        try:
+            # Get merged secret_map from all chained templates
+            template_secret_map = get_template_merged_secret_map(
+                pod.template, 
+                tenant=g.request_tenant_id, 
+                site=g.site_id
+            )
+            
+            # Validate that pod's secret_map overrides all required placeholders
+            pod_secret_map = pod.secret_map or {}
+            if hasattr(pod_secret_map, 'dict'):
+                pod_secret_map = pod_secret_map.dict()
+            
+            validation_result = validate_pod_secret_map_against_template(
+                pod_secret_map,
+                template_secret_map,
+                actor=getattr(g, 'username', None)
+            )
+            
+            if not validation_result.is_valid:
+                raise ValueError(validation_result.error_message)
+            
+            # Capture placeholder metadata from validation (already computed)
+            placeholder_metadata = validation_result.metadata
+                
+        except Exception as e:
+            logger.error(f"Error validating template placeholders for pod {pod.pod_id}: {e}")
+            raise ValueError(f"{str(e)}")
+    elif pod.secret_map:
+        # No template - check pod's own secret_map for any unresolved placeholders
+        warnings, _ = get_placeholder_warnings(pod.secret_map, actor=g.username)
+        if warnings:
+            # Build simple string list format
+            required = [f"REQUIRED: '{w['env_var']}' - {w.get('description', 'No description')}. Override in secret_map."
+                       for w in warnings if not w.get("has_default")]
+            optional = [f"OPTIONAL: '{w['env_var']}' - {w.get('description', 'No description')}. Default: '{w.get('default_value')}'."
+                       for w in warnings if w.get("has_default")]
+            if required or optional:
+                placeholder_metadata["available_placeholders"] = {
+                    "required": required,
+                    "optional": optional
+                }
+
     # Create pod password db entry. If it's successful, we continue.
     password = Password(pod_id=pod.pod_id)
     password.db_create()
@@ -103,4 +151,5 @@ async def create_pod(new_pod: NewPod):
                    site_id=pod.site_id)
         ch.close()
         logger.debug(f"Command Channel - Added msg for pod_id: {pod.pod_id}.")
-    return ok(result=pod.display(), msg="Pod created successfully.")
+    
+    return ok(result=pod.display(), metadata=placeholder_metadata, msg="Pod created successfully.")

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Request, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Request, UploadFile, File, Form
 from fastapi.responses import JSONResponse, RedirectResponse
 from models_pods import Pod, Password, PodResponse, PodPermissionsResponse, PodCredentialsResponse, PodLogsResponse, ExecutePodCommands, NewPod
 from models_templates_tags import Template, TemplateTag, TemplateTagResponse, NewTemplateTagFromPod
@@ -77,7 +77,7 @@ async def ensure_jupyter_pod(request: Request):
             increment += 1
         else:
             logger.error("Exceeded maximum number of Jupyter pods (999) for user.")
-            raise HTTPException(status_code=400, detail="Exceeded maximum number of Jupyter pods (999) for user.")
+            raise ResourceError("Exceeded maximum number of Jupyter pods (999) for user.", 400)
 
         try:
             logger.debug(f"Creating new Jupyter pod with ID: {pod_id}")
@@ -95,7 +95,7 @@ async def ensure_jupyter_pod(request: Request):
                 pod_res = await create_pod_api(new_pod_obj)
             except Exception as e:
                 logger.error(f"Error creating Jupyter pod: {e}")
-                raise HTTPException(status_code=500, detail=f"Could not create Jupyter pod: {e}")
+                raise ResourceError(f"Could not create Jupyter pod: {e}", 500)
 
             logger.debug(f"Response from create_pod: {pod_res}")
             pod = pod_res['result']
@@ -110,7 +110,7 @@ async def ensure_jupyter_pod(request: Request):
             return ok(result=jupyter_bits, msg="Created new Jupyter pod successfully.")
         except Exception as e:
             logger.error(f"Error creating Jupyter pod: {e}")
-            raise HTTPException(status_code=500, detail=f"Could not create Jupyter pod: {e}")
+            raise ResourceError(f"Could not create Jupyter pod: {e}", 500)
 
 @router.post(
     "/pods/jupyter/{pod_id}/upload",
@@ -136,18 +136,18 @@ async def upload_to_jupyter(
 
     # Check permissions and status
     if not pod or getattr(pod, "status_requested", None) != "ON":
-        raise HTTPException(status_code=404, detail="Can't find suitable running Jupyter pod for user.")
+        raise ResourceError("Can't find suitable running Jupyter pod for user.", 404)
     logger.debug(f"jupyter upload input path: {path}")
 
     # Get networking.url for upload
     networking = getattr(pod, "networking", {})
     default_network = networking.get('default', None)
     if not default_network:
-        raise HTTPException(status_code=500, detail="No default networking information found for the pod.")
+        raise ResourceError("No default networking information found for the pod.", 500)
     logger.debug(f"default_network: {default_network}")
     jupyter_url = default_network.get("url") if isinstance(default_network, dict) else getattr(default_network, "url", None)
     if not jupyter_url:
-        raise HTTPException(status_code=500, detail="Could not determine Jupyter pod URL.")
+        raise ResourceError("No URL found in pod networking information.", 500)
 
     logger.debug(f"jupyter upload input path: {path}")
     upload_url = f"https://{jupyter_url}/api/contents/{path}"
@@ -169,6 +169,6 @@ async def upload_to_jupyter(
         resp.raise_for_status()
     except Exception as e:
         logger.error(f"Error uploading file to Jupyter: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to upload file to Jupyter: {e}")
+        raise ResourceError(f"Failed to upload file to Jupyter: {e}", 500)
 
     return ok(result={"upload_path": path, "pod_name": pod.pod_id, "url": "https://"+jupyter_url})

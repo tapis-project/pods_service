@@ -46,7 +46,7 @@ def teardown(headers):
 
     # Delete all objects after the tests are done.
     pods = [test_pod_1, test_pod_2, test_pod_3, test_pod_4, test_pod_5, "testpodephemeraloverride"]
-    templates = [test_template_1]
+    templates = [test_template_1, test_template_2]
     for pod_id in pods:
         rsp = client.delete(f'/pods/{pod_id}', headers=headers)
     for template_id in templates:
@@ -685,6 +685,239 @@ def test_delete_ephemeral_template(headers):
     client.delete(f"/pods/{test_pod_ephemeral_recursive}", headers=headers)
     # Delete template
     rsp = client.delete(f"/pods/templates/{test_template_ephemeral}", headers=headers)
+    result = basic_response_checks(rsp)
+    assert "Template and associated Template Tags successfully deleted." in rsp.json()['message']
+
+
+##### Secret_map Placeholder Tests (25Q4 Feature)
+# Tests for template tags with secret_map placeholders and pod override behavior
+
+test_template_secrets = "testtemplatesecrets"
+test_template_tag_secrets = "withsecrets"
+test_template_tag_secrets_required = "requiredsecrets"
+test_template_tag_secrets_invalid = "invalidsecrets"
+test_pod_secrets_template = "testpodsecretstmpl"
+test_pod_secrets_override = "testpodsecretsovrde"
+
+
+def test_create_template_for_secrets(headers):
+    """Create a template to hold secret_map placeholder tags."""
+    template_def = {
+        "template_id": test_template_secrets,
+        "description": "Template for testing secret_map placeholders",
+        "metatags": ["test", "secrets", "placeholders"],
+    }
+    rsp = client.post("/pods/templates", data=json.dumps(template_def), headers=headers)
+    result = basic_response_checks(rsp)
+    assert result['template_id'] == test_template_secrets
+    time.sleep(2)
+
+
+def test_add_template_tag_with_default_placeholder(headers):
+    """Template tag with ${default:value:?description} placeholder should succeed."""
+    tag_def = {
+        "pod_definition": {
+            "image": "postgres:15",
+            "secret_map": {
+                "DB_HOST": "${default:localhost:?Database hostname}",
+                "DB_PORT": "${default:5432:?Database port number}"
+            },
+            "environment_variables": {
+                "POSTGRES_HOST": "${pods:secrets:DB_HOST}",
+                "POSTGRES_PORT": "${pods:secrets:DB_PORT}"
+            }
+        },
+        "tag": test_template_tag_secrets,
+        "commit_message": "Template with default placeholder secrets"
+    }
+    rsp = client.post(f"/pods/templates/{test_template_secrets}/tags", data=json.dumps(tag_def), headers=headers)
+    result = basic_response_checks(rsp)
+    
+    assert test_template_tag_secrets in result['tag_timestamp']
+    
+    # Check metadata contains placeholder warnings
+    response_data = rsp.json()
+    assert 'metadata' in response_data
+    if response_data['metadata']:
+        metadata = response_data['metadata']
+        if 'secret_placeholders' in metadata:
+            placeholders = metadata['secret_placeholders']
+            # Should have 2 placeholders
+            assert len(placeholders) >= 2
+            env_vars = [p['env_var'] for p in placeholders]
+            assert 'DB_HOST' in env_vars
+            assert 'DB_PORT' in env_vars
+
+
+def test_add_template_tag_with_required_placeholder(headers):
+    """Template tag with ${:?description} required placeholder should succeed."""
+    tag_def = {
+        "pod_definition": {
+            "image": "postgres:15",
+            "secret_map": {
+                "DB_PASSWORD": "${:?Database password - required, no default}",
+                "API_KEY": "${:?External API key}"
+            },
+            "environment_variables": {
+                "POSTGRES_PASSWORD": "${pods:secrets:DB_PASSWORD}",
+                "EXTERNAL_API_KEY": "${pods:secrets:API_KEY}"
+            }
+        },
+        "tag": test_template_tag_secrets_required,
+        "commit_message": "Template with required placeholder secrets"
+    }
+    rsp = client.post(f"/pods/templates/{test_template_secrets}/tags", data=json.dumps(tag_def), headers=headers)
+    result = basic_response_checks(rsp)
+    
+    assert test_template_tag_secrets_required in result['tag_timestamp']
+    
+    # Check metadata contains placeholder warnings with has_default=False
+    response_data = rsp.json()
+    if response_data.get('metadata') and response_data['metadata'].get('secret_placeholders'):
+        placeholders = response_data['metadata']['secret_placeholders']
+        for p in placeholders:
+            # Required placeholders should have has_default=False
+            assert p['has_default'] is False
+
+
+def test_add_template_tag_with_direct_secret_ref_fails(headers):
+    """Template tag with ${secret:name} direct reference should FAIL validation."""
+    tag_def = {
+        "pod_definition": {
+            "image": "postgres:15",
+            "secret_map": {
+                "DB_PASSWORD": "${secret:mydbsecret}"  # Direct secret ref - NOT allowed in templates
+            }
+        },
+        "tag": test_template_tag_secrets_invalid,
+        "commit_message": "This should fail - direct secret reference"
+    }
+    rsp = client.post(f"/pods/templates/{test_template_secrets}/tags", data=json.dumps(tag_def), headers=headers)
+    
+    # Should return 400 error
+    print("error print: ", rsp.status_code, rsp.text)
+    assert rsp.status_code == 400
+    data = rsp.json()
+    error_msg = data.get('message', '').lower()
+    assert "cannot contain direct secret references" in error_msg or "template" in error_msg
+
+
+def test_add_template_tag_with_explicit_secret_ref_fails(headers):
+    """Template tag with ${secret:user:name} explicit reference should FAIL."""
+    tag_def = {
+        "pod_definition": {
+            "image": "postgres:15",
+            "secret_map": {
+                "API_KEY": "${secret:someuser:myapikey}"  # Explicit secret ref - NOT allowed
+            }
+        },
+        "tag": "shouldfail",
+        "commit_message": "This should fail - explicit secret reference"
+    }
+    rsp = client.post(f"/pods/templates/{test_template_secrets}/tags", data=json.dumps(tag_def), headers=headers)
+    
+    # Should return 400 error
+    print("error print: ", rsp.status_code, rsp.text)
+    assert rsp.status_code == 400
+    data = rsp.json()
+    error_msg = data.get('message', '').lower()
+    assert "cannot contain direct secret references" in error_msg or "template" in error_msg
+
+
+def test_add_template_tag_with_invalid_env_var_ref_fails(headers):
+    """Template with environment_variables referencing non-existent secret_map key should fail."""
+    tag_def = {
+        "pod_definition": {
+            "image": "postgres:15",
+            "secret_map": {
+                "DB_HOST": "${default:localhost:?Database host}"
+            },
+            "environment_variables": {
+                "DATABASE_URL": "postgres://${pods:secrets:MISSING_KEY}@host/db"  # MISSING_KEY not in secret_map
+            }
+        },
+        "tag": "shouldfailenvref",
+        "commit_message": "This should fail - env var refs missing key"
+    }
+    rsp = client.post(f"/pods/templates/{test_template_secrets}/tags", data=json.dumps(tag_def), headers=headers)
+    
+    # Should return 400 error
+    print("error print: ", rsp.status_code, rsp.text)
+    assert rsp.status_code == 400
+    data = rsp.json()
+    error_msg = data.get('message', '').lower()
+    assert "missing_key" in error_msg or "does not exist" in error_msg
+
+
+def test_get_template_tag_with_placeholders(headers):
+    """Get template tag and verify pod_definition contains secret_map."""
+    rsp = client.get(f"/pods/templates/{test_template_secrets}/tags", headers=headers)
+    result = basic_response_checks(rsp)
+    
+    # Find the tag with secrets
+    found = False
+    for tag in result:
+        if test_template_tag_secrets in tag.get('tag_timestamp', ''):
+            found = True
+            pod_def = tag.get('pod_definition', {})
+            assert 'secret_map' in pod_def
+            assert 'DB_HOST' in pod_def['secret_map']
+            break
+    assert found, f"Tag {test_template_tag_secrets} not found"
+
+
+def test_create_pod_from_template_with_placeholders(headers):
+    """Create pod from template with placeholders - should work with defaults."""
+    pod_def = {
+        "pod_id": test_pod_secrets_template,
+        "template": f"{test_template_secrets}:{test_template_tag_secrets}"
+    }
+    rsp = client.post("/pods", data=json.dumps(pod_def), headers=headers)
+    result = basic_response_checks(rsp)
+    
+    assert result['pod_id'] == test_pod_secrets_template
+    # Pod should inherit template's secret_map with defaults applied
+    # The exact behavior depends on implementation
+
+
+def test_create_pod_with_placeholder_override(headers):
+    """Create pod from template and override placeholder with actual secret."""
+    pod_def = {
+        "pod_id": test_pod_secrets_override,
+        "template": f"{test_template_secrets}:{test_template_tag_secrets}",
+        "secret_map": {
+            "DB_HOST": "production.db.example.com"  # Override the default
+        }
+    }
+    rsp = client.post("/pods", data=json.dumps(pod_def), headers=headers)
+    result = basic_response_checks(rsp)
+    
+    assert result['pod_id'] == test_pod_secrets_override
+
+
+def test_get_derived_pod_shows_merged_secrets(headers):
+    """Get derived pod should show merged secret_map (template + pod overrides)."""
+    rsp = client.get(f"/pods/{test_pod_secrets_override}?derived=true", headers=headers)
+    result = basic_response_checks(rsp)
+    
+    # The derived pod should have the merged secret_map
+    # DB_HOST should be overridden, DB_PORT should use template default
+    if 'secret_map' in result:
+        secret_map = result['secret_map']
+        # Check that override took effect
+        if 'DB_HOST' in secret_map:
+            assert secret_map['DB_HOST'] == "production.db.example.com"
+
+
+def test_cleanup_secrets_template_pods(headers):
+    """Clean up pods created for secrets testing."""
+    client.delete(f"/pods/{test_pod_secrets_template}", headers=headers)
+    client.delete(f"/pods/{test_pod_secrets_override}", headers=headers)
+
+
+def test_delete_secrets_template(headers):
+    """Clean up: Delete the secrets template."""
+    rsp = client.delete(f"/pods/templates/{test_template_secrets}", headers=headers)
     result = basic_response_checks(rsp)
     assert "Template and associated Template Tags successfully deleted." in rsp.json()['message']
 

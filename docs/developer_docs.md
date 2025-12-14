@@ -149,10 +149,60 @@ Certs in each case would encompass:
 #### Postgres + Alembic + SQLModel + Fastapi
 
 
-
-
-
-
 #### Endpoints.
 This is white boarding when discussing future endpoints.
 View [live-docs](https://tapis-project.github.io/live-docs/?service=Pods) for current endpoints.  
+
+
+
+---
+## Secrets Syntax Reference
+
+### Pod `secret_map` Syntax
+| Syntax | Description | Example |
+|--------|-------------|---------|
+| `${secret:name}` | User's own secret | `${secret:my_db_pass}` |
+| `${secret:user:name}` | Another user's secret (requires permission) | `${secret:jsmith:shared_key}` |
+| `literal_value` | Plain text | `my-config-value` |
+
+### Template `secret_map` Syntax (Only allows placeholder secret values)
+| Syntax | Description | Example |
+|--------|-------------|---------|
+| `${:?description}` | Required - pod creation fails without override | `${:?Database password}` |
+| `${default:value:?description}` | Optional - uses default if not overridden | `${default:localhost:?DB hostname}` |
+| `literal_value` | Plain text for non-secret config | `production` |
+
+**Note:** Templates cannot use `${secret:name}` - they define placeholders that pod creators override.
+
+### Environment Variable References
+| Syntax | Description | Example |
+|--------|-------------|---------|
+| `${pods:secrets:KEY}` | Reference `secret_map` entry by key | `${pods:secrets:DB_PASSWORD}` |
+
+### Example: Template → Pod Flow
+```python
+# Template secret_map (defines structure)
+{
+    "DB_PASSWORD": "${:?Database password}",
+    "DB_HOST": "${default:localhost:?Database host}"
+}
+
+# Pod secret_map (provides values)
+{
+    "DB_PASSWORD": "${secret:my_db_secret}",
+    "DB_HOST": "prod-db.example.com"
+}
+
+# Pod environment_variables (consumes)
+{
+    "DATABASE_URL": "postgres://user:${pods:secrets:DB_PASSWORD}@${pods:secrets:DB_HOST}/db"
+}
+```
+
+### Secrets Model Fields
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `readable` | bool | `True` | If `False`, value cannot be retrieved via API (pod injection still works) |
+| `writable` | bool | `True` | If `False`, value cannot be updated (write-once) |
+
+---

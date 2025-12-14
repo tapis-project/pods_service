@@ -147,124 +147,126 @@ def check_k8_pods(k8_pods):
             logger.warning(f"Found k8 pod without any database entry. Deleting. Pod: {k8_pod['k8_name']}")
             rm_pod(k8_pod['k8_name'])
             continue
-        
-        # if we get a validation error in general we should skip and not break health
+
+        # Wrap entire pod processing in try/except to catch validation errors during field assignments.
+        # This can happen when a pod references a template that no longer exists - pydantic validates
+        # on every field assignment and will raise ValidationError if template lookup fails.
         try:
-            Pod(**pod.dict())  # Validate pod data
-        except Exception as e:
-            logger.error(f"Validation error for pod {pod.k8_name}: {e}", exc_info=True)
-            # We skip this pod, but continue checking others.
-            continue
+            pre_health_pod = pod.copy()
 
-        pre_health_pod = pod.copy()
+            # Found pod in db.
+            # Add last_health_check attr.
+            # TODO We could try and make a get to the pod to check if it's actually alive.
 
-        # Found pod in db.
-        # Add last_health_check attr.
-        # TODO We could try and make a get to the pod to check if it's actually alive.
-
-        k8_pod_phase = k8_pod['pod_info'].status.phase
-        start_time = k8_pod['pod_info'].status.start_time
-        if start_time:
-            start_time = start_time.isoformat().replace('+00:00', '.000000')
-        else:
-            start_time = None
-
-        status_container = {"phase": k8_pod_phase,
-                            "start_time": start_time,
-                            "message": ""}
-        
-        # Get pod container state
-        # We try to get c_state. c_state when pending is None for a bit.
-        try:
-            c_state = k8_pod['pod_info'].status.container_statuses[0].state
-        except:
-            c_state = None
-        logger.debug(f'state: {c_state}')
-
-        # We don't run these checks on pods with status_requested = OFF as they're going through tear down stuff.
-        if pod.status_requested in [OFF, RESTART]:
-            continue
-
-        # This is actually bad. Means the pod has stopped, which shouldn't be the case.
-        # We'll put pod in error state with message.
-        if k8_pod_phase == "Succeeded":
-            logger.warning(f"Kube pod in succeeded phase.")
-            status_container['message'] = "Pod phase in Succeeded, putting in COMPLETE status."
-            pod.status_container = status_container
-            pod.status = COMPLETE
-            # We update if there's been a change.
-            if pod != pre_health_pod:
-                pod.db_update(f"health found pod in succeeded, set status to COMPLETE")
-            continue
-        elif k8_pod_phase in ["Running", "Pending", "Failed"]:
-            # Check if container running or in error state
-            # Container can be in waiting state due to ContainerCreating ofc
-            if c_state:
-                if c_state.waiting and c_state.waiting.reason != "ContainerCreating":
-                    logger.critical(f"Kube pod in waiting state. msg:{c_state.waiting.message}; reason: {c_state.waiting.reason}")
-                    status_container['message'] = f"Pod in waiting state for reason: {c_state.waiting.message}."
-                    pod.status_container = status_container
-                    pod.status = ERROR
-                    # We update if there's been a change.
-                    if pod != pre_health_pod:
-                        pod.db_update(f"health found pod in waiting state, set status to ERROR")
-                    continue
-                elif c_state.terminated:
-                    logger.critical(f"Kube pod in terminated state. msg:{c_state.terminated.message}; reason: {c_state.terminated.reason}")
-                    status_container['message'] = f"Pod in terminated state for reason: {c_state.terminated.message}."
-                    pod.status_container = status_container
-                    pod.status = ERROR
-                    # We update if there's been a change.
-                    if pod != pre_health_pod:
-                        # Get logs for pod if it's being updated here as something must have changed.
-                        logs = get_k8_logs(k8_pod['k8_name'])
-                        pod.logs = logs
-                        pod.db_update(f"health found pod in terminated state, set status to ERROR")
-                    continue
-                elif c_state.waiting and c_state.waiting.reason == "ContainerCreating":
-                    logger.info(f"Kube pod in waiting state, still creating container.")
-                    status_container['message'] = "Pod is still initializing."
-                    pod.status_container = status_container
-                    # We update if there's been a change.
-                    if pod != pre_health_pod:
-                        pod.db_update() # no logs needed, spawner already states it's being put in creating.
-                    continue
-                elif c_state.running:
-                    status_container['message'] = "Pod is running."
-                    pod.status_container = status_container
-                    # This is the first time pod is in AVAILABLE. Update start_instance_ts.
-                    if pod.status != AVAILABLE:
-                        pod.start_instance_ts = datetime.utcnow()
-                        pod.status = AVAILABLE
-
-                    if pod.start_instance_ts:
-                        # This will set time_to_stop_ts the first time pod is available and if
-                        # time_to_stop_instance or time_to_stop_default is updated. 
-                        if isinstance(pod.time_to_stop_instance, int):
-                            # If set to -1, we don't do ttl.
-                            if not pod.time_to_stop_instance == -1:
-                                pod.time_to_stop_ts = pod.start_instance_ts + timedelta(seconds=pod.time_to_stop_instance)
-                        else:
-                            # If set to -1, we don't do ttl.
-                            if not pod.time_to_stop_default == -1:
-                                pod.time_to_stop_ts = pod.start_instance_ts + timedelta(seconds=pod.time_to_stop_default)
-                    # We update if there's been a change.
-                    if pod != pre_health_pod:
-                        pod.db_update(f"health set status to AVAILABLE")
+            k8_pod_phase = k8_pod['pod_info'].status.phase
+            start_time = k8_pod['pod_info'].status.start_time
+            if start_time:
+                start_time = start_time.isoformat().replace('+00:00', '.000000')
             else:
-                # Not sure if this is possible/what happens here.
-                # There is definitely an Error state. Can't replicate locally yet.
-                logger.critical(f"NO c_state. {k8_pod['pod_info'].status}")
+                start_time = None
 
-        # Getting here means pod is running. Store logs now.
-        logs = get_k8_logs(k8_pod['k8_name'])
-        if pod.logs != logs:
-            pod.logs = logs
-            #logger.critical(f"UPDATING:: Before update with logs: {pod}")
+            status_container = {"phase": k8_pod_phase,
+                                "start_time": start_time,
+                                "message": ""}
+            
+            # Get pod container state
+            # We try to get c_state. c_state when pending is None for a bit.
             try:
-                pod.db_update()  # just adding logs, no action_logs needed.
-            except Exception as e:
-                logger.error(f"Error updating pod logs: {e}", exc_info=True)
+                c_state = k8_pod['pod_info'].status.container_statuses[0].state
+            except:
+                c_state = None
+            logger.debug(f'state: {c_state}')
+
+            # We don't run these checks on pods with status_requested = OFF as they're going through tear down stuff.
+            if pod.status_requested in [OFF, RESTART]:
+                continue
+
+            # This is actually bad. Means the pod has stopped, which shouldn't be the case.
+            # We'll put pod in error state with message.
+            if k8_pod_phase == "Succeeded":
+                logger.warning(f"Kube pod in succeeded phase.")
+                status_container['message'] = "Pod phase in Succeeded, putting in COMPLETE status."
+                pod.status_container = status_container
+                pod.status = COMPLETE
+                # We update if there's been a change.
+                if pod != pre_health_pod:
+                    pod.db_update(f"health found pod in succeeded, set status to COMPLETE")
+                continue
+            elif k8_pod_phase in ["Running", "Pending", "Failed"]:
+                # Check if container running or in error state
+                # Container can be in waiting state due to ContainerCreating ofc
+                if c_state:
+                    if c_state.waiting and c_state.waiting.reason != "ContainerCreating":
+                        logger.critical(f"Kube pod in waiting state. msg:{c_state.waiting.message}; reason: {c_state.waiting.reason}")
+                        status_container['message'] = f"Pod in waiting state for reason: {c_state.waiting.message}."
+                        pod.status_container = status_container
+                        pod.status = ERROR
+                        # We update if there's been a change.
+                        if pod != pre_health_pod:
+                            pod.db_update(f"health found pod in waiting state, set status to ERROR")
+                        continue
+                    elif c_state.terminated:
+                        logger.critical(f"Kube pod in terminated state. msg:{c_state.terminated.message}; reason: {c_state.terminated.reason}")
+                        status_container['message'] = f"Pod in terminated state for reason: {c_state.terminated.message}."
+                        pod.status_container = status_container
+                        pod.status = ERROR
+                        # We update if there's been a change.
+                        if pod != pre_health_pod:
+                            # Get logs for pod if it's being updated here as something must have changed.
+                            logs = get_k8_logs(k8_pod['k8_name'])
+                            pod.logs = logs
+                            pod.db_update(f"health found pod in terminated state, set status to ERROR")
+                        continue
+                    elif c_state.waiting and c_state.waiting.reason == "ContainerCreating":
+                        logger.info(f"Kube pod in waiting state, still creating container.")
+                        status_container['message'] = "Pod is still initializing."
+                        pod.status_container = status_container
+                        # We update if there's been a change.
+                        if pod != pre_health_pod:
+                            pod.db_update() # no logs needed, spawner already states it's being put in creating.
+                        continue
+                    elif c_state.running:
+                        status_container['message'] = "Pod is running."
+                        pod.status_container = status_container
+                        # This is the first time pod is in AVAILABLE. Update start_instance_ts.
+                        if pod.status != AVAILABLE:
+                            pod.start_instance_ts = datetime.utcnow()
+                            pod.status = AVAILABLE
+
+                        if pod.start_instance_ts:
+                            # This will set time_to_stop_ts the first time pod is available and if
+                            # time_to_stop_instance or time_to_stop_default is updated. 
+                            if isinstance(pod.time_to_stop_instance, int):
+                                # If set to -1, we don't do ttl.
+                                if not pod.time_to_stop_instance == -1:
+                                    pod.time_to_stop_ts = pod.start_instance_ts + timedelta(seconds=pod.time_to_stop_instance)
+                            else:
+                                # If set to -1, we don't do ttl.
+                                if not pod.time_to_stop_default == -1:
+                                    pod.time_to_stop_ts = pod.start_instance_ts + timedelta(seconds=pod.time_to_stop_default)
+                        # We update if there's been a change.
+                        if pod != pre_health_pod:
+                            pod.db_update(f"health set status to AVAILABLE")
+                else:
+                    # Not sure if this is possible/what happens here.
+                    # There is definitely an Error state. Can't replicate locally yet.
+                    logger.critical(f"NO c_state. {k8_pod['pod_info'].status}")
+
+            # Getting here means pod is running. Store logs now.
+            logs = get_k8_logs(k8_pod['k8_name'])
+            if pod.logs != logs:
+                pod.logs = logs
+                #logger.critical(f"UPDATING:: Before update with logs: {pod}")
+                try:
+                    pod.db_update()  # just adding logs, no action_logs needed.
+                except Exception as e:
+                    logger.error(f"Error updating pod logs: {e}", exc_info=True)
+
+        except Exception as e:
+            # Catch validation errors that occur during field assignments (e.g., when a pod references
+            # a template that no longer exists). Log the error and continue checking other pods.
+            logger.error(f"Error processing pod {k8_pod['pod_id']} in health check: {e}", exc_info=True)
+            continue
 
 def check_k8_services():
     # This is all for only the site specified in conf.site_id.
@@ -307,97 +309,106 @@ def check_db_pods(k8_pods):
 
     ### Go through all pod entries in the database
     for pod in all_pods:
-        ### Delete pods with status_requested = OFF or RESTART
-        if pod.status_requested in [OFF, RESTART] and pod.status != STOPPED:
-            logger.info(f"pod_id: {pod.pod_id} found with status_requested: {pod.status_requested} and not STOPPED. Gracefully shutting pod down.")
-            container_exists, service_exists = graceful_rm_pod(pod, f"health found running {pod.status_requested} pod, set status to DELETING") # SHOULD ONLY LOG ONCE!!!
-            # if container and service not alive. Update status to STOPPED. UPDATE RESTART to ON.
-            if not container_exists and not service_exists:
-                logger.info(f"pod_id: {pod.pod_id} found with container and service stopped. Moving to status = STOPPED.")
-                pod.status = STOPPED
-                pod.start_instance_ts = None
-                pod.time_to_stop_ts = None
-                pod.time_to_stop_instance = None
-                pod.status_container = {}
-                if pod.status_requested == RESTART:
-                    logger.info(f"pod_id: {pod.pod_id} in RESTART. Now in STOPPED, so switching status_requested back to ON.")
-                    pod.status_requested = ON
-                    pod.db_update(f"health set status to STOPPED, set to ON")
-                else:
-                    pod.db_update(f"health set status to STOPPED")
-
-        ### DB entries without a running pod should be updated to STOPPED.
-        if pod.status_requested in ['ON'] and pod.status in [AVAILABLE, DELETING, REQUESTED]:
-            k8_pod_found = False
-            for k8_pod in k8_pods:
-                if pod.pod_id in k8_pod['pod_id']:
-                    k8_pod_found = True
-
-            if not k8_pod_found:
-                # Check action_logs for proper course of action
-                if not pod.action_logs:
-                    # logs can be empty if an admin manually deleted them or if we ran a db migration. Accounting for that here.
-                    log_str = "No action logs found. Expecting to go to 'else' to be shutdown"
-                    time_difference = timedelta(minutes=5) # This line exists to stop linter complaints
-                else:
-                    # We let pods in CREATING or REQUESTED have timeout of 3 minutes before we stop the pod
-                    # and let health try again. We check time based on pod action_logs.
-                    # Get the most recent log and split on ': ' to get the time, log_str
-                    log_time_str, log_str = pod.action_logs[-1].split(': ', maxsplit=1)
-                    most_recent_log_time = datetime.strptime(log_time_str, '%y/%m/%d %H:%M')
-                    time_difference = datetime.utcnow() - most_recent_log_time
-
-                # We check pod logs to see if pod is in a state where it should have a 3 minute timeout
-                if "set status to REQUESTED" in log_str or \
-                    "set status to CREATING" in log_str or \
-                    "Pod object created by" in log_str:
-                    # If pod has been in state for 3 minutes we'll stop it (Note 3+1 allows a 1 minute buffer as a log can be written at :59 seconds)
-                    if time_difference > timedelta(minutes=3+1):
-                        initial_pod_status = pod.status
-                        logger.info(f"pod_id: {pod.pod_id} found with no running pods and in {initial_pod_status} for 3 minutes. Setting status = STOPPED")
-                        pod.status = STOPPED
-                        pod.start_instance_ts = None
-                        pod.time_to_stop_ts = None
-                        pod.time_to_stop_instance = None
-                        pod.status_container = {}
-                        pod.db_update(f"health found no running pod and status = {initial_pod_status} for 3 minutes, stalled. Setting status = STOPPED")
-                    else:
-                        # Not stalled yet, we just continue
-                        continue
-                else:                 
-                    logger.info(f"pod_id: {pod.pod_id} found with no running pods. Setting status = STOPPED.")
+        # Wrap pod processing in try/except to catch validation errors during field assignments.
+        # This can happen when a pod references a template that no longer exists.
+        try:
+            ### Delete pods with status_requested = OFF or RESTART
+            if pod.status_requested in [OFF, RESTART] and pod.status != STOPPED:
+                logger.info(f"pod_id: {pod.pod_id} found with status_requested: {pod.status_requested} and not STOPPED. Gracefully shutting pod down.")
+                container_exists, service_exists = graceful_rm_pod(pod, f"health found running {pod.status_requested} pod, set status to DELETING") # SHOULD ONLY LOG ONCE!!!
+                # if container and service not alive. Update status to STOPPED. UPDATE RESTART to ON.
+                if not container_exists and not service_exists:
+                    logger.info(f"pod_id: {pod.pod_id} found with container and service stopped. Moving to status = STOPPED.")
                     pod.status = STOPPED
                     pod.start_instance_ts = None
                     pod.time_to_stop_ts = None
                     pod.time_to_stop_instance = None
                     pod.status_container = {}
-                    pod.db_update(f"health found no running pod, set status to STOPPED")
+                    if pod.status_requested == RESTART:
+                        logger.info(f"pod_id: {pod.pod_id} in RESTART. Now in STOPPED, so switching status_requested back to ON.")
+                        pod.status_requested = ON
+                        pod.db_update(f"health set status to STOPPED, set to ON")
+                    else:
+                        pod.db_update(f"health set status to STOPPED")
 
-        ### Sets pods to status_requested = OFF when current time > time_to_stop_ts.
-        if pod.status_requested in ['ON'] and pod.time_to_stop_ts and pod.time_to_stop_ts < datetime.utcnow():
-            logger.info(f"pod_id: {pod.pod_id} time_to_stop trigger passed. Current time: {datetime.utcnow()} > time_to_stop_ts: {pod.time_to_stop_ts}")
-            pod.status_requested = OFF
-            pod.db_update(f"health set pod to OFF due to time_to_stop trigger")
-        
-        ### Start pods here by putting command setting status="REQUESTED", if status_requested = ON and status = STOPPED.
-        if pod.status_requested in ['ON', RESTART] and pod.status == STOPPED:
-            logger.info(f"pod_id: {pod.pod_id} found status_requested: {pod.status_requested} and STOPPED. Starting.")
-            original_pod_status = pod.status_requested
-            if pod.status_requested == RESTART:
-                logger.info(f"pod_id: {pod.pod_id} in RESTART and STOPPED, so switching status_requested back to ON.")
-                pod.status_requested = ON
+            ### DB entries without a running pod should be updated to STOPPED.
+            if pod.status_requested in ['ON'] and pod.status in [AVAILABLE, DELETING, REQUESTED]:
+                k8_pod_found = False
+                for k8_pod in k8_pods:
+                    if pod.pod_id in k8_pod['pod_id']:
+                        k8_pod_found = True
 
-            pod.status = REQUESTED
-            pod.db_update(f"health found {original_pod_status} pod set to STOPPED, set status to REQUESTED")
+                if not k8_pod_found:
+                    # Check action_logs for proper course of action
+                    if not pod.action_logs:
+                        # logs can be empty if an admin manually deleted them or if we ran a db migration. Accounting for that here.
+                        log_str = "No action logs found. Expecting to go to 'else' to be shutdown"
+                        time_difference = timedelta(minutes=5) # This line exists to stop linter complaints
+                    else:
+                        # We let pods in CREATING or REQUESTED have timeout of 3 minutes before we stop the pod
+                        # and let health try again. We check time based on pod action_logs.
+                        # Get the most recent log and split on ': ' to get the time, log_str
+                        log_time_str, log_str = pod.action_logs[-1].split(': ', maxsplit=1)
+                        most_recent_log_time = datetime.strptime(log_time_str, '%y/%m/%d %H:%M')
+                        time_difference = datetime.utcnow() - most_recent_log_time
 
-            # Send command to start new pod
-            ch = CommandChannel(name=pod.site_id)
-            ch.put_cmd(object_id=pod.pod_id,
-                       object_type="pod",
-                       tenant_id=pod.tenant_id,
-                       site_id=pod.site_id)
-            ch.close()
-            logger.debug(f"Command Channel - Added msg for pod_id: {pod.pod_id}.")
+                    # We check pod logs to see if pod is in a state where it should have a 3 minute timeout
+                    if "set status to REQUESTED" in log_str or \
+                        "set status to CREATING" in log_str or \
+                        "Pod object created by" in log_str:
+                        # If pod has been in state for 3 minutes we'll stop it (Note 3+1 allows a 1 minute buffer as a log can be written at :59 seconds)
+                        if time_difference > timedelta(minutes=3+1):
+                            initial_pod_status = pod.status
+                            logger.info(f"pod_id: {pod.pod_id} found with no running pods and in {initial_pod_status} for 3 minutes. Setting status = STOPPED")
+                            pod.status = STOPPED
+                            pod.start_instance_ts = None
+                            pod.time_to_stop_ts = None
+                            pod.time_to_stop_instance = None
+                            pod.status_container = {}
+                            pod.db_update(f"health found no running pod and status = {initial_pod_status} for 3 minutes, stalled. Setting status = STOPPED")
+                        else:
+                            # Not stalled yet, we just continue
+                            continue
+                    else:                 
+                        logger.info(f"pod_id: {pod.pod_id} found with no running pods. Setting status = STOPPED.")
+                        pod.status = STOPPED
+                        pod.start_instance_ts = None
+                        pod.time_to_stop_ts = None
+                        pod.time_to_stop_instance = None
+                        pod.status_container = {}
+                        pod.db_update(f"health found no running pod, set status to STOPPED")
+
+            ### Sets pods to status_requested = OFF when current time > time_to_stop_ts.
+            if pod.status_requested in ['ON'] and pod.time_to_stop_ts and pod.time_to_stop_ts < datetime.utcnow():
+                logger.info(f"pod_id: {pod.pod_id} time_to_stop trigger passed. Current time: {datetime.utcnow()} > time_to_stop_ts: {pod.time_to_stop_ts}")
+                pod.status_requested = OFF
+                pod.db_update(f"health set pod to OFF due to time_to_stop trigger")
+            
+            ### Start pods here by putting command setting status="REQUESTED", if status_requested = ON and status = STOPPED.
+            if pod.status_requested in ['ON', RESTART] and pod.status == STOPPED:
+                logger.info(f"pod_id: {pod.pod_id} found status_requested: {pod.status_requested} and STOPPED. Starting.")
+                original_pod_status = pod.status_requested
+                if pod.status_requested == RESTART:
+                    logger.info(f"pod_id: {pod.pod_id} in RESTART and STOPPED, so switching status_requested back to ON.")
+                    pod.status_requested = ON
+
+                pod.status = REQUESTED
+                pod.db_update(f"health found {original_pod_status} pod set to STOPPED, set status to REQUESTED")
+
+                # Send command to start new pod
+                ch = CommandChannel(name=pod.site_id)
+                ch.put_cmd(object_id=pod.pod_id,
+                           object_type="pod",
+                           tenant_id=pod.tenant_id,
+                           site_id=pod.site_id)
+                ch.close()
+                logger.debug(f"Command Channel - Added msg for pod_id: {pod.pod_id}.")
+
+        except Exception as e:
+            # Catch validation errors that occur during field assignments (e.g., when a pod references
+            # a template that no longer exists). Log the error and continue checking other pods.
+            logger.error(f"Error processing pod {pod.pod_id} in check_db_pods: {e}", exc_info=True)
+            continue
 
 
 def main():

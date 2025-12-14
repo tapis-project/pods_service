@@ -4,7 +4,7 @@ from fastapi import APIRouter
 from models_pods import Pod, UpdatePod, PodResponse, Password, PodDeleteResponse, PodsFinalResponse, PodBaseFull
 from channels import CommandChannel
 from tapisservice.tapisfastapi.utils import g, ok, error
-from models_templates_utils import combine_pod_and_template_recursively
+from models_templates_utils import combine_pod_and_template_recursively, get_template_merged_secret_map, validate_pod_secret_map_against_template
 
 from tapisservice.logs import get_logger
 logger = get_logger(__name__)
@@ -151,4 +151,23 @@ async def get_derived_pod(pod_id):
                 
             final_pod.environment_variables[key] = new_val
 
-    return ok(result=final_pod.display(), msg="Final derived pod retrieved successfully.")
+    # Build metadata with template placeholder info if pod uses a template
+    metadata = {}
+    if pod.template:
+        try:
+            template_secret_map = get_template_merged_secret_map(
+                pod.template,
+                tenant=g.request_tenant_id,
+                site=g.site_id
+            )
+            pod_secret_map = dict(final_pod.secret_map) if final_pod.secret_map else {}
+            validation_result = validate_pod_secret_map_against_template(
+                pod_secret_map,
+                template_secret_map,
+                actor=g.username
+            )
+            metadata = validation_result.metadata
+        except Exception as e:
+            logger.warning(f"Could not compute placeholder metadata for derived pod: {e}")
+
+    return ok(result=final_pod.display(), metadata=metadata, msg="Final derived pod retrieved successfully.")

@@ -295,6 +295,15 @@ paths:
       tags:
       - Templates
       summary: add_template_tag
+      description: "Add a new tag to a template.\n\nTemplate tags can include a ``pod_definition``\
+        \ with ``secret_map`` to define placeholders \nthat users must or can optionally\
+        \ override when creating pods from this template.\n\nSecret Placeholders (25Q4\
+        \ Feature):\n- ``${default:value:?description}`` - Placeholder with a default\
+        \ value\n- ``${:?description}`` - Required placeholder (pod creation fails\
+        \ if not overridden)\n- ``${secret:name}`` - Direct secret reference (for\
+        \ templates with pre-configured secrets)\n\nWhen users create pods from this\
+        \ template, they can override placeholders with actual\nsecret references\
+        \ in their pod's ``secret_map``.\n\nReturns new template tag object."
       operationId: add_template_tag
       parameters:
       - required: true
@@ -1371,6 +1380,269 @@ paths:
           content:
             application/json:
               schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /pods/secrets:
+    get:
+      tags:
+      - Secrets
+      summary: list_secrets
+      description: 'Get all secrets you have permission to access.
+
+
+        25Q4 Feature: Pods Secrets allow secure injection of credentials into pods.
+
+
+        Note:
+
+        - Returns metadata only, not secret values (use GET /secrets/{name}/value).
+
+        - Filter shows only secrets where you have READ+ permission.
+
+
+        Returns a list of secrets (without secret values).'
+      operationId: list_secrets
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SecretsResponse'
+    post:
+      tags:
+      - Secrets
+      summary: create_secret
+      description: "Create a new secret with inputted information.\n\n25Q4 Feature:\
+        \ Pods Secrets allow secure injection of credentials into pods.\n\nNotes:\n\
+        - This endpoint creates new secrets only. Returns 409 Conflict if secret_id\
+        \ already exists.\n- To update an existing secret, use PUT /pods/secrets/{secret_id}.\n\
+        - Secrets are stored securely in Tapis Security Kernel (SK).\n- Secret names\
+        \ are automatically namespaced: ``pods_{tenant}_user_{username}_{name}``\n\
+        - Only initial ADMIN can use this secret in pods unless you grant permissions.\n\
+        - Use ``secret_map`` in pod definitions to inject as environment variables.\n\
+        - All secret operations are logged\n\nRequest Body Fields:\n- **secret_id**\
+        \ (required): Alphanumeric name with underscores/dashes allowed (max 100 chars)\n\
+        - **secret_value** (required): The actual secret value to store securely\n\
+        - **description** (optional): ASCII description (max 500 chars)\n- **scope**\
+        \ (optional): ``user`` (default) or ``pod`` - determines secret visibility\n\
+        - **pod_id** (optional): Required if scope is ``pod``, must be omitted if\
+        \ scope is ``user``\n- **readable** (optional): ``true`` (default) or ``false``\
+        \ - controls if value can be retrieved via API\n- **writable** (optional):\
+        \ ``true`` (default) or ``false`` - controls if value can be updated via PUT\n\
+        \nAccess Mode Combinations:\n- ``readable=true, writable=true`` (default):\
+        \ Full access - value can be read and updated\n- ``readable=true, writable=false``:\
+        \ Read-only - value can be read but not updated (write-once)\n- ``readable=false,\
+        \ writable=true``: Write-only - value can be updated but not read via API\n\
+        - ``readable=false, writable=false``: Locked - value cannot be read or updated,\
+        \ only used via pod injection\n\nNote: Pod injection via ``secret_map`` always\
+        \ works regardless of ``readable`` setting.\n\nUsage in Pods:\nAfter creating\
+        \ a secret, reference it in your pod's ``secret_map``; after that, reference\
+        \ it with ${} in the fields that support secrets::\n\n    {\n        \"secret_map\"\
+        : {\n            \"DB_PASSWORD\": \"${secret:my_db_secret}\"\n        },\n\
+        \        \"environment_variables\": {\n            \"DATABASE_URL\": \"postgres://user:${pods:secrets:DB_PASSWORD}@localhost/db\"\
+        \n        }\n    }\n\nReturns new secret object (without the secret value)."
+      operationId: create_secret
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewSecret'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SecretResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /pods/secrets/{secret_id}:
+    get:
+      tags:
+      - Secrets
+      summary: get_secret
+      description: 'Get secret metadata (not the secret value itself).
+
+
+        25Q4 Feature: Pods Secrets allow secure injection of credentials into pods.
+
+
+        Note:
+
+        - Returns metadata only. Use GET /secrets/{name}/value to retrieve the actual
+        value.
+
+        - Requires READ permission on the secret.
+
+
+        Returns secret metadata.'
+      operationId: get_secret
+      parameters:
+      - name: secret_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Secret Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SecretResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    put:
+      tags:
+      - Secrets
+      summary: update_secret
+      description: 'Update a secret''s description and/or value.
+
+
+        25Q4 Feature: Pods Secrets allow secure injection of credentials into pods.
+
+
+        Note:
+
+        - Requires USER permission on the secret.
+
+        - Secrets with ``writable=False`` cannot have their values updated (write-once
+        secrets).
+
+        - Description updates are always allowed regardless of ``writable`` setting.
+
+        - Updates are logged.
+
+        - Pods using this secret will get the new value on next start/restart.
+
+
+        Returns updated secret metadata.'
+      operationId: update_secret
+      parameters:
+      - name: secret_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Secret Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateSecret'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SecretResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+      - Secrets
+      summary: delete_secret
+      description: 'Delete a secret from both the database and Security Kernel (SK).
+
+
+        25Q4 Feature: Pods Secrets allow secure injection of credentials into pods.
+
+
+        Note:
+
+        - Requires ADMIN permission on the secret (only the creator has this by default).
+
+        - This operation is permanent and cannot be undone.
+
+        - Pods currently using this secret will fail to start until the secret reference
+        is removed or a new secret with the same name is created by the pod owner.
+
+        - All delete operations are logged.
+
+
+        Returns the deleted secret name.'
+      operationId: delete_secret
+      parameters:
+      - name: secret_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Secret Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SecretDeleteResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /pods/secrets/{secret_id}/value:
+    get:
+      tags:
+      - Secrets
+      summary: get_secret_value
+      description: 'Get the actual secret value from SK.
+
+
+        25Q4 Feature: Pods Secrets allow secure injection of credentials into pods.
+
+
+        Note:
+
+        - Requires USER permission on the secret (higher than READ).
+
+        - Secrets with ``readable=False`` cannot have their values retrieved via this
+        endpoint.
+
+        - Pod injection via ``secret_map`` always works regardless of ``readable``
+        setting.
+
+        - This operation is logged.
+
+
+        Returns the secret value.'
+      operationId: get_secret_value
+      parameters:
+      - name: secret_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Secret Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SecretValueResponse'
         '422':
           description: Validation Error
           content:
@@ -2498,8 +2770,17 @@ components:
         environment_variables:
           type: object
           title: Environment Variables
-          description: Environment variables to inject into k8 pod; Only for custom
-            pods.
+          description: Environment variables to inject into k8 pod. Use `${pods:secrets:KEY}`
+            to reference secret_map entries.
+          default: {}
+        secret_map:
+          additionalProperties:
+            type: string
+          type: object
+          title: Secret Map
+          description: 'Map of keys to secret values. Syntax: ${secret:name} (user
+            secret), ${secret:user:name} (explicit owner). Reference in environment_variables
+            via ${pods:secrets:KEY}. Resolved at pod start.'
           default: {}
         status_requested:
           type: string
@@ -2554,6 +2835,52 @@ components:
       - pod_id
       title: NewPod
       description: Object with fields that users are allowed to specify for the Pod
+        class.
+    NewSecret:
+      properties:
+        secret_id:
+          type: string
+          title: Secret Id
+          description: Name of the secret.
+        scope:
+          type: string
+          title: Scope
+          description: 'Scope of secret: ''user'' or ''pod'''
+          default: user
+        pod_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Pod Id
+          description: Pod ID if scope is 'pod'
+        description:
+          type: string
+          title: Description
+          description: Description of this secret.
+          default: ''
+        readable:
+          type: boolean
+          title: Readable
+          description: If True, secret value can be retrieved via GET /secrets/{id}/value.
+            Pod injection always works regardless of this setting.
+          default: true
+        writable:
+          type: boolean
+          title: Writable
+          description: If True, secret value can be updated via PUT or POST recreation.
+            If False, secret is write-once.
+          default: true
+        secret_value:
+          type: string
+          title: Secret Value
+          description: The actual secret value to store.
+      additionalProperties: false
+      type: object
+      required:
+      - secret_id
+      - secret_value
+      title: NewSecret
+      description: Object with fields that users are allowed to specify for the Secret
         class.
     NewSnapshot:
       properties:
@@ -2881,8 +3208,17 @@ components:
         environment_variables:
           type: object
           title: Environment Variables
-          description: Environment variables to inject into k8 pod; Only for custom
-            pods.
+          description: Environment variables to inject into k8 pod. Use `${pods:secrets:KEY}`
+            to reference secret_map entries.
+          default: {}
+        secret_map:
+          additionalProperties:
+            type: string
+          type: object
+          title: Secret Map
+          description: 'Map of keys to secret values. Syntax: ${secret:name} (user
+            secret), ${secret:user:name} (explicit owner). Reference in environment_variables
+            via ${pods:secrets:KEY}. Resolved at pod start.'
           default: {}
         status_requested:
           type: string
@@ -2996,6 +3332,175 @@ components:
       - status
       - version
       title: PodsResponse
+    SecretDeleteResponse:
+      properties:
+        message:
+          type: string
+          title: Message
+        metadata:
+          additionalProperties: true
+          type: object
+          title: Metadata
+        result:
+          type: string
+          title: Result
+        status:
+          type: string
+          title: Status
+        version:
+          type: string
+          title: Version
+      additionalProperties: false
+      type: object
+      required:
+      - message
+      - metadata
+      - result
+      - status
+      - version
+      title: SecretDeleteResponse
+    SecretResponse:
+      properties:
+        message:
+          type: string
+          title: Message
+        metadata:
+          additionalProperties: true
+          type: object
+          title: Metadata
+        result:
+          $ref: '#/components/schemas/SecretResponseModel'
+        status:
+          type: string
+          title: Status
+        version:
+          type: string
+          title: Version
+      additionalProperties: false
+      type: object
+      required:
+      - message
+      - metadata
+      - result
+      - status
+      - version
+      title: SecretResponse
+    SecretResponseModel:
+      properties:
+        secret_id:
+          type: string
+          title: Secret Id
+          description: Name of the secret.
+        scope:
+          type: string
+          title: Scope
+          description: 'Scope of secret: ''user'' or ''pod'''
+          default: user
+        pod_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Pod Id
+          description: Pod ID if scope is 'pod'
+        description:
+          type: string
+          title: Description
+          description: Description of this secret.
+          default: ''
+        readable:
+          type: boolean
+          title: Readable
+          description: If True, secret value can be retrieved via GET /secrets/{id}/value.
+            Pod injection always works regardless of this setting.
+          default: true
+        writable:
+          type: boolean
+          title: Writable
+          description: If True, secret value can be updated via PUT or POST recreation.
+            If False, secret is write-once.
+          default: true
+        sk_secret_name:
+          type: string
+          title: Sk Secret Name
+          description: Full secret name used in SK (prefixed).
+          default: ''
+        creation_ts:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Creation Ts
+          description: Time (UTC) that this secret was created.
+        added_by:
+          type: string
+          title: Added By
+          description: User who added this secret.
+          default: ''
+      additionalProperties: false
+      type: object
+      required:
+      - secret_id
+      title: SecretResponseModel
+      description: Response object for Secret class (no secret value returned).
+    SecretValueResponse:
+      properties:
+        message:
+          type: string
+          title: Message
+        metadata:
+          additionalProperties: true
+          type: object
+          title: Metadata
+        result:
+          additionalProperties:
+            type: string
+          type: object
+          title: Result
+        status:
+          type: string
+          title: Status
+        version:
+          type: string
+          title: Version
+      additionalProperties: false
+      type: object
+      required:
+      - message
+      - metadata
+      - result
+      - status
+      - version
+      title: SecretValueResponse
+      description: Response for getting the actual secret value.
+    SecretsResponse:
+      properties:
+        message:
+          type: string
+          title: Message
+        metadata:
+          additionalProperties: true
+          type: object
+          title: Metadata
+        result:
+          items:
+            $ref: '#/components/schemas/SecretResponseModel'
+          type: array
+          title: Result
+        status:
+          type: string
+          title: Status
+        version:
+          type: string
+          title: Version
+      additionalProperties: false
+      type: object
+      required:
+      - message
+      - metadata
+      - result
+      - status
+      - version
+      title: SecretsResponse
     SetPermission:
       properties:
         user:

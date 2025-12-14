@@ -38,9 +38,13 @@ test_timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
 test_secret_1 = f"testsecret1_{test_timestamp}"
 test_secret_2 = f"testsecret2_{test_timestamp}"
 test_secret_pod_scope = f"testsecretpod_{test_timestamp}"
-test_secret_readonly = f"testsecretro_{test_timestamp}"
+test_secret_readonly = f"testsecretro_{test_timestamp}"  # writable=False (write-once)
+test_secret_writeonly = f"testsecretwo_{test_timestamp}"  # readable=False
+test_secret_locked = f"testsecretlocked_{test_timestamp}"  # readable=False, writable=False
+test_secret_full = f"testsecretfull_{test_timestamp}"  # readable=True, writable=True (default)
 test_secret_error = f"testsecreterror_{test_timestamp}"
 test_pod_with_secrets = f"testpodwithsecrets{test_timestamp}"
+test_pod_legacy_secrets = f"testpodlegacysecrets{test_timestamp}"
 
 
 ##### Teardown
@@ -48,26 +52,42 @@ test_pod_with_secrets = f"testpodwithsecrets{test_timestamp}"
 def teardown(headers):
     """Clean up all test secrets and pods after tests complete."""
     yield None
+    
+    time.sleep(3) # have to wait for last pod to actually get created before deletion
+
+    # Clean up pods
+    pods_to_delete = [
+        test_pod_with_secrets,
+        test_pod_legacy_secrets,
+        f"testpodplaceholders{test_timestamp}",
+        f"testpodnoplacehold{test_timestamp}",
+    ]
+    for pod_id in pods_to_delete:
+        try:
+            rsp = client.delete(f'/pods/{pod_id}', headers=headers)
+            if rsp.status_code not in (200, 404):
+                print(f"Warning: Failed to delete pod {pod_id}: {rsp.status_code} - {rsp.text}")
+        except Exception:
+            print(f"Warning: Exception deleting pod {pod_id}: {e}")
+            pass
+    
     # Clean up secrets
     secrets_to_delete = [
         test_secret_1,
         test_secret_2,
         test_secret_pod_scope,
         test_secret_readonly,
+        test_secret_writeonly,
+        test_secret_locked,
+        test_secret_full,
         test_secret_error,
+        f"testsecretresolved_{test_timestamp}",
     ]
     for secret_id in secrets_to_delete:
         try:
-            rsp = client.delete(f'/pods/secrets/{secret_id}', headers=headers)
-            # Ignore errors during cleanup
+            client.delete(f'/pods/secrets/{secret_id}', headers=headers)
         except Exception:
             pass
-    
-    # Clean up pod if created
-    try:
-        rsp = client.delete(f'/pods/{test_pod_with_secrets}', headers=headers)
-    except Exception:
-        pass
 
 
 ##### Testing Secrets CRUD Operations
@@ -87,7 +107,8 @@ def test_create_secret(headers):
         "secret_value": "my_super_secret_password_123",
         "description": "Test secret for integration tests",
         "scope": "user",
-        "read_write": "read_write"
+        "readable": True,
+        "writable": True
     }
     rsp = client.post("/pods/secrets", data=json.dumps(secret_def), headers=headers)
     result = basic_response_checks(rsp)
@@ -96,7 +117,8 @@ def test_create_secret(headers):
     assert result['secret_id'] == test_secret_1
     assert result['description'] == "Test secret for integration tests"
     assert result['scope'] == "user"
-    assert result['read_write'] == "read_write"
+    assert result['readable'] == True
+    assert result['writable'] == True
     assert 'sk_secret_name' in result
     assert 'creation_ts' in result
     assert 'added_by' in result
@@ -115,43 +137,28 @@ def test_create_secret_minimal(headers):
     
     assert result['secret_id'] == test_secret_2
     assert result['scope'] == "user"  # Default
-    assert result['read_write'] == "read_write"  # Default
+    assert result['readable'] == True  # Default
+    assert result['writable'] == True  # Default
 
 
-def test_create_secret_duplicate_by_author_allowed(headers):
-    """Test that the same author can re-create a secret (updates the value)."""
+def test_create_secret_duplicate_conflict(headers):
+    """Test that creating a secret with an existing name returns 409 Conflict."""
     secret_def = {
         "secret_id": test_secret_1,
-        "secret_value": "updated_value_version_1"
+        "secret_value": "attempt_to_recreate"
     }
     rsp = client.post("/pods/secrets", data=json.dumps(secret_def), headers=headers)
-    result = basic_response_checks(rsp)
     
-    # Should succeed and update the secret
-    assert result['secret_id'] == test_secret_1
-    assert "updated" in rsp.json()['message'].lower()
+    # Should return 409 Conflict
+    assert rsp.status_code == 409
+    data = rsp.json()
+    error_msg = data.get('detail', data.get('message', '')).lower()
+    assert "already exists" in error_msg
+    assert "put" in error_msg  # Should suggest using PUT
 
 
-def test_create_secret_duplicate_by_author_multiple_times(headers):
-    """Test that the same author can re-create a secret multiple times."""
-    # Update again
-    secret_def = {
-        "secret_id": test_secret_1,
-        "secret_value": "value_version_2"
-    }
-    rsp = client.post("/pods/secrets", data=json.dumps(secret_def), headers=headers)
-    result = basic_response_checks(rsp)
-    assert result['secret_id'] == test_secret_1
-    
-    # Update again
-    secret_def["secret_value"] = "value_version_3"
-    rsp = client.post("/pods/secrets", data=json.dumps(secret_def), headers=headers)
-    result = basic_response_checks(rsp)
-    assert result['secret_id'] == test_secret_1
-
-
-def test_create_secret_duplicate_by_other_user_error(privileged_headers, headers):
-    """Test that a different user cannot create a secret with the same name."""
+def test_create_secret_duplicate_by_other_user_conflict(privileged_headers, headers):
+    """Test that a different user cannot create a secret with the same name (409 Conflict)."""
     # test_secret_1 was created by the regular user (headers)
     # Try to create the same secret with privileged_headers (different user)
     secret_def = {
@@ -160,11 +167,11 @@ def test_create_secret_duplicate_by_other_user_error(privileged_headers, headers
     }
     rsp = client.post("/pods/secrets", data=json.dumps(secret_def), headers=privileged_headers)
     
-    # Should return 400 error with helpful message
-    assert rsp.status_code == 400
+    # Should return 409 Conflict (secret exists, regardless of who owns it)
+    assert rsp.status_code == 409
     data = rsp.json()
     error_msg = data.get('detail', data.get('message', '')).lower()
-    assert "already in use by another user" in error_msg or "another user" in error_msg
+    assert "already exists" in error_msg
 
 
 def test_list_secrets_after_create(headers):
@@ -177,8 +184,8 @@ def test_list_secrets_after_create(headers):
     assert test_secret_2 in secret_ids
 
 
-def test_get_secret(headers):
-    """Test getting secret metadata (not the value)."""
+def test_get_secret_before_update(headers):
+    """Test getting secret metadata before any updates (original values)."""
     rsp = client.get(f"/pods/secrets/{test_secret_1}", headers=headers)
     result = basic_response_checks(rsp)
     
@@ -197,14 +204,13 @@ def test_get_secret_not_found(headers):
     assert "not found" in error_msg
 
 
-def test_get_secret_value(headers):
-    """Test getting the actual secret value (always returns latest version)."""
+def test_get_secret_value_before_update(headers):
+    """Test getting the actual secret value before any updates (original value)."""
     rsp = client.get(f"/pods/secrets/{test_secret_1}/value", headers=headers)
     result = basic_response_checks(rsp)
     
     assert 'secret_value' in result
-    # After multiple re-creates, should return the latest value (version 3)
-    assert result['secret_value'] == "value_version_3"
+    assert result['secret_value'] == "my_super_secret_password_123"
 
 
 def test_update_secret_description(headers):
@@ -230,6 +236,43 @@ def test_update_secret_value(headers):
     rsp = client.get(f"/pods/secrets/{test_secret_1}/value", headers=headers)
     result = basic_response_checks(rsp)
     assert result['secret_value'] == "new_secret_value_456"
+
+
+def test_update_secret_value_and_description_together(headers):
+    """Test updating both value and description in a single PUT request."""
+    update_def = {
+        "secret_value": "combined_update_value",
+        "description": "Combined update description"
+    }
+    rsp = client.put(f"/pods/secrets/{test_secret_1}", data=json.dumps(update_def), headers=headers)
+    result = basic_response_checks(rsp)
+    
+    assert result['description'] == "Combined update description"
+    
+    # Verify the value was updated
+    rsp = client.get(f"/pods/secrets/{test_secret_1}/value", headers=headers)
+    result = basic_response_checks(rsp)
+    assert result['secret_value'] == "combined_update_value"
+
+
+def test_get_secret_after_update(headers):
+    """Test getting secret metadata after updates (updated values)."""
+    rsp = client.get(f"/pods/secrets/{test_secret_1}", headers=headers)
+    result = basic_response_checks(rsp)
+    
+    assert result['secret_id'] == test_secret_1
+    assert result['description'] == "Combined update description"
+    # Secret value should NOT be returned
+    assert 'secret_value' not in result
+
+
+def test_get_secret_value_after_update(headers):
+    """Test getting the actual secret value after updates (updated value)."""
+    rsp = client.get(f"/pods/secrets/{test_secret_1}/value", headers=headers)
+    result = basic_response_checks(rsp)
+    
+    assert 'secret_value' in result
+    assert result['secret_value'] == "combined_update_value"
 
 
 def test_delete_secret(headers):
@@ -295,44 +338,242 @@ def test_create_secret_user_scope_with_pod_id_error(headers):
     assert "pod_id" in str(data['message']).lower()
 
 
-##### Testing Read-Only Secrets
+##### Testing Write-Once Secrets (writable=False)
 
-def test_create_readonly_secret(headers):
-    """Test creating a read-only secret."""
+def test_create_writeonce_secret(headers):
+    """Test creating a write-once secret (writable=False)."""
     secret_def = {
         "secret_id": test_secret_readonly,
-        "secret_value": "readonly_value",
-        "read_write": "read"
+        "secret_value": "writeonce_value",
+        "writable": False
     }
     rsp = client.post("/pods/secrets", data=json.dumps(secret_def), headers=headers)
     result = basic_response_checks(rsp)
     
-    assert result['read_write'] == "read"
+    assert result['writable'] == False
+    assert result['readable'] == True  # Default
 
 
-def test_update_readonly_secret_value_error(headers):
-    """Test that updating a read-only secret's value returns an error."""
+def test_update_writeonce_secret_value_error(headers):
+    """Test that updating a write-once secret's value returns 403."""
     update_def = {
         "secret_value": "try_to_change"
     }
     rsp = client.put(f"/pods/secrets/{test_secret_readonly}", data=json.dumps(update_def), headers=headers)
     
-    # Should fail because secret is read-only
-    assert rsp.status_code == 400
+    # Should fail because secret is write-once (writable=False)
+    assert rsp.status_code == 403
     data = rsp.json()
     error_msg = data.get('detail', data.get('message', '')).lower()
-    assert "read-only" in error_msg or "cannot" in error_msg
+    assert "writable=false" in error_msg or "write-once" in error_msg
 
 
-def test_update_readonly_secret_description_ok(headers):
-    """Test that updating a read-only secret's description is allowed."""
+def test_update_writeonce_secret_description_ok(headers):
+    """Test that updating a write-once secret's description is allowed."""
     update_def = {
-        "description": "Description can still be updated"
+        "description": "Description can still be updated for write-once secrets"
     }
     rsp = client.put(f"/pods/secrets/{test_secret_readonly}", data=json.dumps(update_def), headers=headers)
     result = basic_response_checks(rsp)
     
-    assert result['description'] == "Description can still be updated"
+    assert result['description'] == "Description can still be updated for write-once secrets"
+
+
+def test_recreate_writeonce_secret_conflict(headers):
+    """Test that re-POSTing a write-once secret returns 409 Conflict (POST is create-only)."""
+    secret_def = {
+        "secret_id": test_secret_readonly,
+        "secret_value": "try_to_recreate_value"
+    }
+    rsp = client.post("/pods/secrets", data=json.dumps(secret_def), headers=headers)
+    
+    # Should return 409 Conflict (POST is create-only, use PUT to update)
+    assert rsp.status_code == 409
+    data = rsp.json()
+    error_msg = data.get('detail', data.get('message', '')).lower()
+    assert "already exists" in error_msg
+
+
+def test_get_writeonce_secret_value_ok(headers):
+    """Test that getting a write-once secret's value is allowed (readable=True by default)."""
+    rsp = client.get(f"/pods/secrets/{test_secret_readonly}/value", headers=headers)
+    result = basic_response_checks(rsp)
+    
+    assert 'secret_value' in result
+    assert result['secret_value'] == "writeonce_value"
+
+
+##### Testing Write-Only Secrets (readable=False)
+
+def test_create_writeonly_secret(headers):
+    """Test creating a write-only secret (readable=False)."""
+    secret_def = {
+        "secret_id": test_secret_writeonly,
+        "secret_value": "writeonly_value",
+        "readable": False,
+        "writable": True
+    }
+    rsp = client.post("/pods/secrets", data=json.dumps(secret_def), headers=headers)
+    result = basic_response_checks(rsp)
+    
+    assert result['readable'] == False
+    assert result['writable'] == True
+
+
+def test_get_writeonly_secret_value_error(headers):
+    """Test that getting a write-only secret's value returns 403."""
+    rsp = client.get(f"/pods/secrets/{test_secret_writeonly}/value", headers=headers)
+    
+    # Should fail because secret is write-only (readable=False)
+    assert rsp.status_code == 403
+    data = rsp.json()
+    error_msg = data.get('detail', data.get('message', '')).lower()
+    assert "readable=false" in error_msg
+    assert "secret_map" in error_msg  # Should mention pod injection still works
+
+
+def test_update_writeonly_secret_value_ok(headers):
+    """Test that updating a write-only secret's value is allowed (writable=True)."""
+    update_def = {
+        "secret_value": "updated_writeonly_value"
+    }
+    rsp = client.put(f"/pods/secrets/{test_secret_writeonly}", data=json.dumps(update_def), headers=headers)
+    result = basic_response_checks(rsp)
+    
+    assert result['secret_id'] == test_secret_writeonly
+
+
+def test_recreate_writeonly_secret_conflict(headers):
+    """Test that re-POSTing a write-only secret returns 409 Conflict (POST is create-only)."""
+    secret_def = {
+        "secret_id": test_secret_writeonly,
+        "secret_value": "recreated_writeonly_value"
+    }
+    rsp = client.post("/pods/secrets", data=json.dumps(secret_def), headers=headers)
+    
+    # Should return 409 Conflict (POST is create-only, use PUT to update)
+    assert rsp.status_code == 409
+    data = rsp.json()
+    error_msg = data.get('detail', data.get('message', '')).lower()
+    assert "already exists" in error_msg
+
+
+##### Testing Locked Secrets (readable=False, writable=False)
+
+def test_create_locked_secret(headers):
+    """Test creating a locked secret (readable=False, writable=False)."""
+    secret_def = {
+        "secret_id": test_secret_locked,
+        "secret_value": "locked_value",
+        "readable": False,
+        "writable": False
+    }
+    rsp = client.post("/pods/secrets", data=json.dumps(secret_def), headers=headers)
+    result = basic_response_checks(rsp)
+    
+    assert result['readable'] == False
+    assert result['writable'] == False
+
+
+def test_get_locked_secret_value_error(headers):
+    """Test that getting a locked secret's value returns 403."""
+    rsp = client.get(f"/pods/secrets/{test_secret_locked}/value", headers=headers)
+    
+    assert rsp.status_code == 403
+    data = rsp.json()
+    error_msg = data.get('detail', data.get('message', '')).lower()
+    assert "readable=false" in error_msg
+
+
+def test_update_locked_secret_value_error(headers):
+    """Test that updating a locked secret's value returns 403."""
+    update_def = {
+        "secret_value": "try_to_change_locked"
+    }
+    rsp = client.put(f"/pods/secrets/{test_secret_locked}", data=json.dumps(update_def), headers=headers)
+    
+    assert rsp.status_code == 403
+    data = rsp.json()
+    error_msg = data.get('detail', data.get('message', '')).lower()
+    assert "writable=false" in error_msg
+
+
+def test_update_locked_secret_description_ok(headers):
+    """Test that updating a locked secret's description is still allowed."""
+    update_def = {
+        "description": "Description updates always work"
+    }
+    rsp = client.put(f"/pods/secrets/{test_secret_locked}", data=json.dumps(update_def), headers=headers)
+    result = basic_response_checks(rsp)
+    
+    assert result['description'] == "Description updates always work"
+
+
+def test_recreate_locked_secret_conflict(headers):
+    """Test that re-POSTing a locked secret returns 409 Conflict (POST is create-only)."""
+    secret_def = {
+        "secret_id": test_secret_locked,
+        "secret_value": "try_to_recreate_locked"
+    }
+    rsp = client.post("/pods/secrets", data=json.dumps(secret_def), headers=headers)
+    
+    # Should return 409 Conflict (POST is create-only)
+    assert rsp.status_code == 409
+
+
+##### Testing Full Access Secrets (readable=True, writable=True - default)
+
+def test_create_full_access_secret(headers):
+    """Test creating a full access secret (readable=True, writable=True)."""
+    secret_def = {
+        "secret_id": test_secret_full,
+        "secret_value": "full_access_value",
+        "readable": True,
+        "writable": True,
+        "description": "Full access secret"
+    }
+    rsp = client.post("/pods/secrets", data=json.dumps(secret_def), headers=headers)
+    result = basic_response_checks(rsp)
+    
+    assert result['readable'] == True
+    assert result['writable'] == True
+    assert result['secret_id'] == test_secret_full
+
+
+def test_get_full_access_secret_value_ok(headers):
+    """Test that getting a full access secret's value works."""
+    rsp = client.get(f"/pods/secrets/{test_secret_full}/value", headers=headers)
+    result = basic_response_checks(rsp)
+    
+    assert 'secret_value' in result
+    assert result['secret_value'] == "full_access_value"
+
+
+def test_update_full_access_secret_value_ok(headers):
+    """Test that updating a full access secret's value works."""
+    update_def = {
+        "secret_value": "updated_full_access_value"
+    }
+    rsp = client.put(f"/pods/secrets/{test_secret_full}", data=json.dumps(update_def), headers=headers)
+    result = basic_response_checks(rsp)
+    
+    assert result['secret_id'] == test_secret_full
+
+
+def test_recreate_full_access_secret_conflict(headers):
+    """Test that re-POSTing a full access secret returns 409 Conflict (POST is create-only)."""
+    secret_def = {
+        "secret_id": test_secret_full,
+        "secret_value": "recreated_full_access_value",
+        "description": "Recreated description"
+    }
+    rsp = client.post("/pods/secrets", data=json.dumps(secret_def), headers=headers)
+    
+    # Should return 409 Conflict (POST is create-only, use PUT to update)
+    assert rsp.status_code == 409
+    data = rsp.json()
+    error_msg = data.get('detail', data.get('message', '')).lower()
+    assert "already exists" in error_msg
 
 
 ##### Testing Secret Name Validation
@@ -390,7 +631,7 @@ def test_create_secret_id_too_long(headers):
     assert rsp.status_code == 400 or rsp.status_code == 422  # Validation error
 
 
-##### Testing Invalid read_write and scope values
+##### Testing Invalid scope values
 
 def test_create_secret_invalid_scope(headers):
     """Test that invalid scope values are rejected."""
@@ -405,17 +646,23 @@ def test_create_secret_invalid_scope(headers):
     assert rsp.status_code == 400
 
 
-def test_create_secret_invalid_read_write(headers):
-    """Test that invalid read_write values are rejected."""
+def test_create_secret_readable_writable_booleans(headers):
+    """Test that readable and writable accept boolean values."""
+    # Test with explicit True values
     secret_def = {
-        "secret_id": test_secret_error,
+        "secret_id": f"bool_test_{test_timestamp}",
         "secret_value": "value",
-        "read_write": "invalid_mode"
+        "readable": True,
+        "writable": True
     }
     rsp = client.post("/pods/secrets", data=json.dumps(secret_def), headers=headers)
-    data = response_format(rsp)
+    result = basic_response_checks(rsp)
     
-    assert rsp.status_code == 400
+    assert result['readable'] == True
+    assert result['writable'] == True
+    
+    # Cleanup
+    client.delete(f"/pods/secrets/bool_test_{test_timestamp}", headers=headers)
 
 
 ##### Testing Description Validation
@@ -503,13 +750,99 @@ def test_pod_secret_map_validation(headers):
                for msg in (data['message'] if isinstance(data['message'], list) else [data['message']]))
 
 
+##### Testing Pod Creation Placeholder Metadata
+
+# These tests verify that pod creation returns helpful metadata about unresolved placeholders
+# in the secret_map, informing users about required/optional placeholders they can override.
+
+test_pod_placeholders = f"testpodplaceholders{test_timestamp}"
+
+def test_pod_creation_returns_placeholder_metadata(headers):
+    """Test that creating a pod with placeholders returns available_placeholders metadata."""
+    pod_def = {
+        "pod_id": test_pod_placeholders,
+        "image": "notchristiangarcia/testserver:fastapi",
+        "description": "Test pod with placeholders in secret_map",
+        "secret_map": {
+            "REQUIRED_KEY": "${:?This is a required secret}",
+            "OPTIONAL_KEY": "${default:fallback_value:?This is optional}"
+        }
+    }
+    rsp = client.post("/pods", data=json.dumps(pod_def), headers=headers)
+    
+    data = rsp.json()
+    assert rsp.status_code == 200, f"Pod creation failed: {data}"
+    
+    # Check metadata contains placeholder info
+    metadata = data.get('metadata', {})
+    assert 'available_placeholders' in metadata, f"Expected available_placeholders in metadata: {metadata}"
+    
+    placeholders = metadata['available_placeholders']
+    assert 'required' in placeholders
+    assert 'optional' in placeholders
+    
+    # Check required placeholder - now a simple string list
+    assert len(placeholders['required']) == 1
+    required_str = placeholders['required'][0]
+    assert "REQUIRED_KEY" in required_str
+    assert "This is a required secret" in required_str
+    assert "REQUIRED:" in required_str
+    
+    # Check optional placeholder - now a simple string list
+    assert len(placeholders['optional']) == 1
+    optional_str = placeholders['optional'][0]
+    assert "OPTIONAL_KEY" in optional_str
+    assert "This is optional" in optional_str
+    assert "Default: 'fallback_value'" in optional_str
+    
+    # Clean up
+    client.delete(f"/pods/{test_pod_placeholders}", headers=headers)
+
+
+test_pod_no_placeholders = f"testpodnoplacehold{test_timestamp}"
+
+def test_pod_creation_no_placeholder_metadata_when_resolved(headers):
+    """Test that pods with actual secrets (not placeholders) don't return placeholder metadata."""
+    # First create a secret to reference
+    secret_id = f"testsecretresolved_{test_timestamp}"
+    secret_def = {
+        "secret_id": secret_id,
+        "secret_value": "actual_secret_value"
+    }
+    rsp = client.post("/pods/secrets", data=json.dumps(secret_def), headers=headers)
+    
+    # Create pod with resolved secret reference
+    pod_def = {
+        "pod_id": test_pod_no_placeholders,
+        "image": "notchristiangarcia/testserver:fastapi",
+        "secret_map": {
+            "DB_PASSWORD": f"${{secret:{secret_id}}}"
+        }
+    }
+    rsp = client.post("/pods", data=json.dumps(pod_def), headers=headers)
+    
+    data = rsp.json()
+    assert rsp.status_code == 200, f"Pod creation failed: {data}"
+    
+    # Metadata should be empty or not contain available_placeholders
+    metadata = data.get('metadata', {})
+    available = metadata.get('available_placeholders', {})
+    
+    # If available_placeholders exists, it should have empty required/optional lists
+    if available:
+        assert len(available.get('required', [])) == 0, f"Expected no required placeholders: {available}"
+        assert len(available.get('optional', [])) == 0, f"Expected no optional placeholders: {available}"
+    
+    # Clean up
+    client.delete(f"/pods/{test_pod_no_placeholders}", headers=headers)
+    client.delete(f"/pods/secrets/{secret_id}", headers=headers)
+
+
 ##### Testing Legacy <<tapissecret_...>> Replacement
 
 # These tests verify that the legacy <<tapissecret_user_username>> and <<tapissecret_user_password>>
 # placeholders in environment_variables get replaced with values from the Password table at pod start.
 # This feature will be replaced at some point, just can't deprecate fully yet.
-
-test_pod_legacy_secrets = f"testpodlegacysecrets{test_timestamp}"
 
 def test_create_pod_with_tapissecret_placeholders(headers):
     """Test creating a pod with <<tapissecret_...>> placeholders in environment_variables."""
@@ -562,29 +895,3 @@ def test_get_derived_pod_replaces_tapissecret(headers):
     assert f"user:{test_pod_legacy_secrets}:pass:" in combined
 
 
-def test_cleanup_legacy_secrets_pod(headers):
-    """Cleanup the legacy secrets test pod."""
-    rsp = client.delete(f"/pods/{test_pod_legacy_secrets}", headers=headers)
-    # Don't assert success, pod may already be deleted or never created
-
-
-##### Cleanup test - runs last
-
-def test_final_cleanup(headers):
-    """Final cleanup of test secret 1 and pod scope secret."""
-    # Delete remaining test secrets
-    for secret_id in [test_secret_1, test_secret_pod_scope, test_secret_readonly]:
-        rsp = client.delete(f"/pods/secrets/{secret_id}", headers=headers)
-        # Just ensure the call was made, don't assert success (may already be deleted)
-    
-    # Delete test pod
-    rsp = client.delete(f"/pods/{test_pod_with_secrets}", headers=headers)
-    
-    # Verify secrets are gone
-    rsp = client.get("/pods/secrets", headers=headers)
-    result = basic_response_checks(rsp)
-    secret_ids = [s['secret_id'] for s in result]
-    
-    # Our test secrets should be gone
-    assert test_secret_1 not in secret_ids
-    assert test_secret_2 not in secret_ids
