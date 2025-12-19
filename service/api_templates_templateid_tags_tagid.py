@@ -17,7 +17,11 @@ router = APIRouter()
     summary="get_template_tag",
     operation_id="get_template_tag",
     response_model=TemplateTagsResponse)
-async def get_template_tag(template_id: str, tag_id: str):
+async def get_template_tag(
+    template_id: str,
+    tag_id: str,
+    include_configs: bool = Query(False, description="Include full config_content for volume mounts using field. Default: false (shows placeholder with size)")
+):
     """
     Get a specific tag entry the template has
 
@@ -33,7 +37,7 @@ async def get_template_tag(template_id: str, tag_id: str):
 
     display_template_tags = []
     for template_tag in template_tags:
-        display_template_tags.append(template_tag.display())
+        display_template_tags.append(template_tag.display(include_configs=include_configs))
 
     return ok(result=display_template_tags, msg = "Template tags retrieved and filtered successfully.")
 

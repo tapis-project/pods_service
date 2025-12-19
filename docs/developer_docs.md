@@ -206,3 +206,200 @@ View [live-docs](https://tapis-project.github.io/live-docs/?service=Pods) for cu
 | `writable` | bool | `True` | If `False`, value cannot be updated (write-once) |
 
 ---
+
+## Volume Mounts Reference
+
+The `volume_mounts` field is an **object keyed by mount path**, enabling template inheritance and partial overrides.
+
+### Mount Types
+| Type | Description | Default `read_only` | `source_id` |
+|------|-------------|---------------------|-------------|
+| `tapisvolume` | Persistent Tapis volume | `false` | Required |
+| `tapissnapshot` | Read-only snapshot | `true` | Required |
+| `ephemeral` | Inline config (K8s ConfigMap) | `true` | No |
+| `pvc` | Raw K8s PVC (admin only) | `false` | Required |
+
+### All Fields
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `type` | string | Yes | - | `tapisvolume`, `tapissnapshot`, `ephemeral`, `pvc` |
+| `source_id` | string | For storage types | - | Volume/snapshot/PVC ID |
+| `sub_path` | string | No | `""` | Subdirectory within source to mount |
+| `read_only` | bool | No | Varies | Override default read-only behavior |
+| `config_content` | string | For ephemeral | - | File content (max 1MB) |
+| `config_filename` | string | No | basename of path | Filename in volume (tapisvolume only (so far)) |
+| `config_permissions` | string | No | `"0644"` | Unix permissions (octal) |
+| `config_update_mode` | string | No | `"always"` | `"always"` or `"once"` |
+
+### Ephemeral vs Tapisvolume with Config
+| Feature | ephemeral | tapisvolume + config |
+|---------|-----------|---------------------|
+| Storage | K8s ConfigMap | NFS Volume |
+| Read/Write | **Read-only** | **Read-write** |
+| Persists on delete | No | Yes (in volume) |
+| Max size | 1MB | Volume limit |
+| `config_update_mode` default | `"always"` | `"once"` recommended |
+
+---
+
+### Examples
+
+#### Basic Mounts
+```python
+"volume_mounts": {
+    "/data": {"type": "tapisvolume", "source_id": "my-volume"},
+    "/reference": {"type": "tapissnapshot", "source_id": "shared-snap"},
+    "/models": {"type": "tapisvolume", "source_id": "ml-data", "sub_path": "v2"}
+}
+```
+
+#### Ephemeral Config with Secret Interpolation
+```python
+"secret_map": {"DB_PASS": "${secret:my_db_secret}"},
+"volume_mounts": {
+    "/etc/app/db.ini": {
+        "type": "ephemeral",
+        "config_content": "[db]\nhost=localhost\npassword=${pods:secrets:DB_PASS}",
+        "config_permissions": "0600"
+    }
+}
+```
+
+#### Tapisvolume with Persistent Config
+```python
+"volume_mounts": {
+    "/app/data": {
+        "type": "tapisvolume",
+        "source_id": "my-volume",
+        "config_content": "[settings]\ninitialized=true",
+        "config_filename": "app.conf",        # Written to /app/data/app.conf
+        "config_permissions": "0600",
+        "config_update_mode": "once"          # Only create if doesn't exist
+    }
+}
+```
+
+#### Multiple Config Files
+```python
+"volume_mounts": {
+    "/etc/app/database.yml": {"type": "ephemeral", "config_content": "host: db\nport: 5432", "config_permissions": "0600"},
+    "/etc/app/api.yml": {"type": "ephemeral", "config_content": "endpoint: https://api.example.com"},
+    "/etc/app/logging.yml": {"type": "ephemeral", "config_content": "level: INFO"}
+}
+```
+
+---
+
+### Template Inheritance
+
+**Merge rules:**
+1. Pod's mounts merged with template's by path
+2. Pod definition **completely replaces** template mount at same path
+3. `null` removes inherited mount
+
+```python
+# Template definition
+POST /pods/templates/webapp/tags
+{
+    "tag": "v1",
+    "pod_definition": {
+        "image": "myorg/webapp:1.0",
+        "volume_mounts": {
+            "/data": {"type": "tapisvolume", "source_id": "shared-data", "config_content": "init=true", "config_filename": "app.conf", "config_update_mode": "once"},
+            "/etc/app/config.yml": {"type": "ephemeral", "config_content": "env: prod"}
+        }
+    }
+}
+
+# Pod usage patterns:
+# Inherit all fields
+{"template": "webapp:v1"}
+
+# Add new mount (template mounts inherited)
+{"template": "webapp:v1", "volume_mounts": {"/extra": {"type": "tapisvolume", "source_id": "extra-vol"}}}
+
+# Remove inherited mount
+{"template": "webapp:v1", "volume_mounts": {"/etc/app/config.yml": null}}
+```
+
+#### Overriding source_id While Keeping Config
+
+**Option 1: Use `template_overrides` (Recommended)**
+
+The `template_overrides` field allows partial overrides without repeating full config:
+
+```python
+# Template has volume with config:
+# "/data": {"type": "tapisvolume", "source_id": "shared-data", "config_content": "init=true", "config_filename": "app.conf"}
+
+# Override only source_id, keep all other config
+{
+    "template": "webapp:v1",
+    "template_overrides": {
+        "volume_mounts": {"/data": {"source_id": "my-volume"}}
+    }
+}
+# Result: /data uses my-volume with original config_content, config_filename, etc.
+```
+
+**template_overrides supports:**
+- `volume_mounts`: Dict[mount_path, partial_config] - merges fields into existing mount
+- `secret_map`: Dict[key, value] - replaces placeholder with your secret reference
+
+```python
+# Override both volumes and secrets
+{
+    "template": "postgres:v2",
+    "template_overrides": {
+        "volume_mounts": {
+            "/var/lib/postgresql/data": {"source_id": "my-pgdata"}
+        },
+        "secret_map": {
+            "POSTGRES_PASSWORD": "${secret:my-pg-password}"
+        }
+    }
+}
+```
+
+**Option 2: Full replacement via `volume_mounts`**
+
+When using `volume_mounts` directly, you must **repeat the full config**:
+
+```python
+# WRONG: Just changing source_id loses the config
+{"template": "webapp:v1", "volume_mounts": {"/data": {"type": "tapisvolume", "source_id": "my-volume"}}}
+# Result: /data has no config_content!
+
+# CORRECT: Repeat full config with new source_id
+{"template": "webapp:v1", "volume_mounts": {
+    "/data": {
+        "type": "tapisvolume",
+        "source_id": "my-volume",           # Your volume
+        "config_content": "init=true",       # Repeat from template
+        "config_filename": "app.conf",       # Repeat from template
+        "config_update_mode": "once"         # Repeat from template
+    }
+}}
+```
+
+**Tip**: Use `GET /pods/templates/{template_id}/tags/{tag}?include_configs=true` to see the full mount config to copy.
+
+---
+
+### Permission Validation
+
+- **Direct creation**: Missing volume permission → Error
+- **Template-defined**: Missing permission → Warning (non-blocking)
+
+---
+
+### Legacy Migration
+
+List format auto-converts to object-keyed. Migration via alembic, user shouldn't need to touch.
+```python
+# Legacy                                           # Current
+[{"type": "tapisvolume", "source_id": "vol1",  →  {"/data": {"type": "tapisvolume", "source_id": "vol1"}}
+  "mount_path": "/data"}]
+```
+
+---

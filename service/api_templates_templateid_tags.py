@@ -4,6 +4,7 @@ from models_misc import SetPermission
 from models_templates import Template, TemplatePermissionsResponse
 from models_templates_tags import TemplateTagsResponse, TemplateTagResponse, NewTemplateTag, TemplateTag, TemplateTagsSmallResponse
 from models_templates_utils import validate_template_tag_secret_map, validate_template_tag_env_vars
+from models_volume_mounts_utils import validate_template_volume_mounts
 from tapisservice.tapisfastapi.utils import g, ok
 from tapisservice.config import conf
 from tapisservice.logs import get_logger
@@ -18,7 +19,11 @@ router = APIRouter()
     summary="list_template_tags",
     operation_id="list_template_tags",
     response_model=TemplateTagsResponse)
-async def list_template_tags(template_id: str, full: bool = Query(True, description="Return pod_definition in tag when full=true")):
+async def list_template_tags(
+    template_id: str,
+    full: bool = Query(True, description="Return pod_definition in tag when full=true"),
+    include_configs: bool = Query(False, description="Include full config_content for volume mounts using field. Default: false (shows placeholder with size)")
+):
     """
     List tag entries the template has
 
@@ -30,7 +35,7 @@ async def list_template_tags(template_id: str, full: bool = Query(True, descript
     display_template_tags = []
     for template_tag in template_tags:
         if full:
-            display_template_tags.append(template_tag.display())
+            display_template_tags.append(template_tag.display(include_configs=include_configs))
         else:
             display_template_tags.append(template_tag.display_small())
 
@@ -80,6 +85,28 @@ async def add_template_tag(template_id: str, new_template_tag: NewTemplateTag):
         result = validate_template_tag_env_vars(pod_def.environment_variables, secret_map)
         if not result.is_valid:
             raise ValueError(result.error_message)
+    
+    # Validate volume_mounts - template creator must have access to referenced volumes/snapshots/configs
+    if pod_def and hasattr(pod_def, 'volume_mounts') and pod_def.volume_mounts:
+        volume_mounts = pod_def.volume_mounts
+        # Convert to dict if it's a Pydantic model with model_dump/dict method
+        if hasattr(volume_mounts, 'model_dump'):
+            volume_mounts = volume_mounts.model_dump()
+        elif hasattr(volume_mounts, 'dict'):
+            volume_mounts = volume_mounts.dict()
+        
+        result = validate_template_volume_mounts(
+            volume_mounts=volume_mounts,
+            user=g.username,
+            tenant=g.request_tenant_id,
+            site=g.site_id,
+            roles=getattr(g, 'roles', None),
+            is_template_creation=True  # Block on permission errors
+        )
+        if not result.is_valid:
+            raise ValueError(result.error_message)
+        if result.metadata:
+            metadata.update(result.metadata)
     
     template_tag = TemplateTag(template_id=template_id, **new_template_tag.dict())
 

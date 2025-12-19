@@ -1,6 +1,6 @@
 import re
 import json
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from models_pods import Pod, UpdatePod, PodResponse, Password, PodDeleteResponse, PodsFinalResponse, PodBaseFull
 from channels import CommandChannel
 from tapisservice.tapisfastapi.utils import g, ok, error
@@ -90,7 +90,10 @@ async def delete_pod(pod_id):
     summary="get_pod",
     operation_id="get_pod",
     response_model=PodResponse)
-async def get_pod(pod_id):
+async def get_pod(
+    pod_id: str,
+    include_configs: bool = Query(False, description="Include full config_content for volume mounts using field. Default: false (shows placeholder with size)")
+    ):
     """
     Get a pod.
 
@@ -102,7 +105,7 @@ async def get_pod(pod_id):
 
     pod = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
 
-    return ok(result=pod.display(), msg="Pod retrieved successfully.")
+    return ok(result=pod.display(include_configs=include_configs), msg="Pod retrieved successfully.")
 
 
 @router.get(
@@ -111,7 +114,10 @@ async def get_pod(pod_id):
     summary="get_derived_pod",
     operation_id="get_derived_pod",
     response_model=PodResponse)
-async def get_derived_pod(pod_id):
+async def get_derived_pod(
+    pod_id: str,
+    include_configs: bool = Query(False, description="Include full config_content for volume mounts using field. Default: false (shows placeholder with size)")
+    ):
     """
     Derive a pod's final definition if templates are used.
 
@@ -170,4 +176,5 @@ async def get_derived_pod(pod_id):
         except Exception as e:
             logger.warning(f"Could not compute placeholder metadata for derived pod: {e}")
 
-    return ok(result=final_pod.display(), metadata=metadata, msg="Final derived pod retrieved successfully.")
+
+    return ok(result=final_pod.display(include_configs=include_configs), metadata=metadata, msg="Final derived pod retrieved successfully.")

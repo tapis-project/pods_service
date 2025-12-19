@@ -20,6 +20,10 @@ client = TestClient(api, base_url="https://dev.develop.tapis.io", raise_server_e
 # Set up test variables
 test_pod_1 = "testspodsneo4j"
 test_pod_error_1 = "testspodsneo4jerror"
+test_pod_ephemeral_1 = "testspodsephemeral1"
+test_pod_ephemeral_2 = "testspodsephemeral2"
+test_pod_ephemeral_3 = "testspodsephemeral3"
+test_pod_ephemeral_4 = "testspodsephemeral4"
 
 
 ##### Teardown
@@ -34,7 +38,7 @@ def teardown(headers):
     yield None
 
     # Delete all objects after the tests are done.
-    pods = [test_pod_1, "testspodsephemeral1", "testspodsephemeral2", "testspodsephemeral3", "testspodsephunlimited", "testspodsephmixed", "testspodsephmixed2", "testspodsephskip"]
+    pods = [test_pod_1, test_pod_error_1, test_pod_ephemeral_1, test_pod_ephemeral_2, test_pod_ephemeral_3, test_pod_ephemeral_4]
     volumes = []
     for pod_id in pods:
         rsp = client.delete(f'/pods/{pod_id}', headers=headers)
@@ -193,10 +197,6 @@ def test_description_is_ascii_400(headers):
 
 
 ##### Ephemeral Storage Tests
-test_pod_ephemeral_1 = "testspodsephemeral1"
-test_pod_ephemeral_2 = "testspodsephemeral2"
-test_pod_ephemeral_3 = "testspodsephemeral3"
-
 
 def test_create_pod_with_ephemeral_storage(headers):
     """Test creating a pod with ephemeral storage request and limit set."""
@@ -292,11 +292,8 @@ def test_ephemeral_storage_above_maximum_error(headers):
 
 def test_create_pod_with_all_resources(headers):
     """Test creating a pod with all resource fields including ephemeral storage."""
-    # First delete the existing pod if it exists
-    client.delete(f"/pods/{test_pod_ephemeral_1}", headers=headers)
-    
     pod_def = {
-        "pod_id": test_pod_ephemeral_1,
+        "pod_id": test_pod_ephemeral_4,
         "image": "notchristiangarcia/testserver:fastapi",
         "description": "Test pod with all resources",
         "resources": {
@@ -310,7 +307,7 @@ def test_create_pod_with_all_resources(headers):
     }
     rsp = client.post("/pods", data=json.dumps(pod_def), headers=headers)
     result = basic_response_checks(rsp)
-    assert result['pod_id'] == test_pod_ephemeral_1
+    assert result['pod_id'] == test_pod_ephemeral_4
     assert result['resources']['cpu_request'] == 500
     assert result['resources']['cpu_limit'] == 1000
     assert result['resources']['mem_request'] == 512

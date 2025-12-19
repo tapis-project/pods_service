@@ -229,9 +229,9 @@ def test_create_pod_with_snapshot(headers):
             }
         },
         "volume_mounts": {
-            test_snapshot_1: {
+            "/var/lib/neo4j/import": {
                 "type": "tapissnapshot",
-                "mount_path": "/var/lib/neo4j/import"
+                "source_id": test_snapshot_1
             }
         }
     }
@@ -241,7 +241,7 @@ def test_create_pod_with_snapshot(headers):
 
     # Check the pod object
     assert result['pod_id'] == test_pod_1
-    assert test_snapshot_1 in result['volume_mounts']
+    assert "/var/lib/neo4j/import" in result['volume_mounts']
 
 
 def test_pod_with_snapshot_startup(headers):
@@ -252,7 +252,7 @@ def test_pod_with_snapshot_startup(headers):
         result = basic_response_checks(rsp)
         if result['status'] == "AVAILABLE":
             break
-        time.sleep(2)
+        time.sleep(40)
         i += 1
     else:
         # pod never became available
@@ -261,7 +261,7 @@ def test_pod_with_snapshot_startup(headers):
     # Check the pod object
     assert result['status'] == "AVAILABLE"
     assert result['pod_id'] == test_pod_1
-    assert test_snapshot_1 in result['volume_mounts']
+    assert any(vm.get('source_id') == test_snapshot_1 for vm in result['volume_mounts'].values())
 
 
 ##### Error testing

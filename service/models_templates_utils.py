@@ -235,6 +235,12 @@ def get_template_merged_secret_map(template_name: str, tenant: str = None, site:
         _, _, template_tag = derive_template_info(tpl_name, tenant=tenant, site=site)
         pod_def = template_tag.pod_definition or {}
         
+        # Convert Pydantic model to dict if necessary
+        if hasattr(pod_def, 'model_dump'):
+            pod_def = pod_def.model_dump()
+        elif hasattr(pod_def, 'dict'):
+            pod_def = pod_def.dict()
+        
         # First process deeper template (if this template references another)
         modified_fields = get_modified_template_fields(TemplateTagPodDefinition().dict(), pod_def)
         if modified_fields.get('template'):
@@ -256,6 +262,12 @@ def get_modified_template_fields(original_template, modified_template_def):
     Returns a dictionary of fields that have been modified from a base template
     Meaning, returns fields that user defined in template.
     """
+    # Convert Pydantic model to dict if necessary
+    if hasattr(modified_template_def, 'model_dump'):
+        modified_template_def = modified_template_def.model_dump()
+    elif hasattr(modified_template_def, 'dict'):
+        modified_template_def = modified_template_def.dict()
+    
     changed_fields = {}
     for key, value in original_template.items():
         if key not in modified_template_def or value != modified_template_def[key]:
@@ -267,6 +279,68 @@ def get_modified_template_fields(original_template, modified_template_def):
             if resource_val is None:
                 del changed_fields['resources'][resource_key]
     return changed_fields
+
+
+def apply_template_overrides(
+    volume_mounts: Dict[str, Any],
+    secret_map: Dict[str, str],
+    template_overrides: Dict[str, Any] = None
+) -> Tuple[Dict[str, Any], Dict[str, str], List[str]]:
+    """
+    Apply template_overrides to merged volume_mounts and secret_map.
+    
+    For volume_mounts: merges override fields into existing mount config at mount_path.
+    For secret_map: replaces value at key.
+    
+    Args:
+        volume_mounts: Merged volume_mounts dict (from template + pod)
+        secret_map: Merged secret_map dict (from template + pod)
+        template_overrides: TemplateOverrides dict or object with volume_mounts and secret_map
+        
+    Returns:
+        Tuple of (updated_volume_mounts, updated_secret_map, warnings)
+    """
+    warnings = []
+    
+    if not template_overrides:
+        return volume_mounts, secret_map, warnings
+    
+    # Convert to dict if needed
+    if hasattr(template_overrides, 'model_dump'):
+        template_overrides = template_overrides.model_dump()
+    elif hasattr(template_overrides, 'dict'):
+        template_overrides = template_overrides.dict()
+    
+    # Apply volume_mounts overrides
+    vm_overrides = template_overrides.get('volume_mounts', {})
+    if vm_overrides and volume_mounts:
+        volume_mounts = dict(volume_mounts)  # Copy to avoid mutation
+        for mount_path, override_fields in vm_overrides.items():
+            if mount_path in volume_mounts and volume_mounts[mount_path] is not None:
+                # Merge override fields into existing config
+                existing = volume_mounts[mount_path]
+                if isinstance(existing, dict):
+                    merged = dict(existing)
+                    merged.update(override_fields)
+                    volume_mounts[mount_path] = merged
+            else:
+                # Mount path not found in merged mounts - warn but don't error
+                warnings.append(f"template_overrides.volume_mounts['{mount_path}'] not found in merged volume_mounts")
+    
+    # Apply secret_map overrides
+    sm_overrides = template_overrides.get('secret_map', {})
+    if sm_overrides:
+        secret_map = dict(secret_map) if secret_map else {}  # Copy to avoid mutation
+        for key, value in sm_overrides.items():
+            if key in secret_map:
+                secret_map[key] = value
+            else:
+                # Key not found - warn but still apply (user may be adding new key)
+                warnings.append(f"template_overrides.secret_map['{key}'] not found in merged secret_map, adding as new entry")
+                secret_map[key] = value
+    
+    return volume_mounts, secret_map, warnings
+
 
 def combine_pod_and_template_recursively(input_obj, template_name, seen_templates=None, tenant: str = None, site: str = None, original_pod_envs=None, original_pod_secret_map=None):
     """
@@ -296,7 +370,17 @@ def combine_pod_and_template_recursively(input_obj, template_name, seen_template
         seen_templates.add(template_name)
 
         template_name_str, template, template_tag = derive_template_info(template_name, tenant=tenant, site=site)
-        modified_fields = get_modified_template_fields(TemplateTagPodDefinition().dict(), template_tag.pod_definition)
+        
+        # Convert pod_definition to dict if it's a Pydantic model
+        template_pod_def = template_tag.pod_definition
+        if hasattr(template_pod_def, 'model_dump'):
+            template_pod_def = template_pod_def.model_dump()
+        elif hasattr(template_pod_def, 'dict'):
+            template_pod_def = template_pod_def.dict()
+        elif template_pod_def is None:
+            template_pod_def = {}
+        
+        modified_fields = get_modified_template_fields(TemplateTagPodDefinition().dict(), template_pod_def)
 
         # First, recursively combine the input_obj with the next template in the chain
         input_obj = combine_pod_and_template_recursively(input_obj, modified_fields.get('template'), seen_templates, tenant, site, original_pod_envs, original_pod_secret_map)
@@ -336,14 +420,14 @@ def combine_pod_and_template_recursively(input_obj, template_name, seen_template
                     outer_arg, inner_arg = resources.split('.') # resources.gpus
                     outer_obj = getattr(input_obj, outer_arg) # resources
                     logger.critical('oh no!')
-                    new_obj_value = template_tag.pod_definition[outer_arg][inner_arg]
+                    new_obj_value = template_pod_def[outer_arg][inner_arg]
                     setattr(outer_obj, inner_arg, new_obj_value)
                 elif mod_key == "networking":
                     # must take template3, update with template2, template,1 and then pod, in that order
                     # Preserving order of objs, pod being the most important.
                     # Merge template networking with pod networking, pod values take precedence
                     final_network_obj = getattr(input_obj, mod_key)
-                    template_networks = template_tag.pod_definition[mod_key]
+                    template_networks = template_pod_def[mod_key]
                     for network_name, network_def in template_networks.items():
                         # Start with template's network definition
                         merged_network = network_def.copy()
@@ -375,7 +459,7 @@ def combine_pod_and_template_recursively(input_obj, template_name, seen_template
                         # 2. Apply this template's env vars on top (closer template wins over deeper)
                         # 3. Re-apply pod's original env vars if user modified them (pod wins over all templates)
                         input_envs = input_obj.environment_variables.copy()
-                        template_envs = template_tag.pod_definition[mod_key]
+                        template_envs = template_pod_def[mod_key]
                         if template_envs:
                             # Closer template overrides deeper template values
                             final_envs = input_envs.copy()
@@ -402,7 +486,7 @@ def combine_pod_and_template_recursively(input_obj, template_name, seen_template
                     # Order: Pod was already applied first. We recursively went deep, now coming back up.
                     # So we need: start with deeper values (input_obj), apply current template on top,
                     # but pod's original values must override all templates.
-                    template_secret_map = template_tag.pod_definition.get(mod_key, {}) or {}
+                    template_secret_map = template_pod_def.get(mod_key, {}) or {}
                     current_secret_map = getattr(input_obj, "secret_map", {}) or {}
                     
                     if hasattr(template_secret_map, 'dict'):
@@ -422,18 +506,37 @@ def combine_pod_and_template_recursively(input_obj, template_name, seen_template
                     setattr(input_obj, mod_key, final_secret_map)
                     logger.debug(f"Merged secret_map: template had {len(template_secret_map)} entries, current has {len(current_secret_map)}, final has {len(final_secret_map)}")
                 elif mod_key.startswith("volume_mount."):
-                    print('dog') # i have no idea what this was meant to debug
+                    pass  # Reserved for future per-mount overrides
                 elif mod_key == "volume_mounts":
                     # Use only user's volume_mounts by default, or merge if _TAPIS_INTERNAL_USE_TEMPLATE_VOLUMES is True
+                    # Dict-based structure: keys are mount_paths, values are VolumeMount configs or None
+                    from models_volume_mounts_utils import merge_pod_volume_mounts_with_template
+                    
                     pod_volume_mounts = getattr(input_obj, "volume_mounts", {})
                     if hasattr(pod_volume_mounts, 'dict'):
-                        pod_volume_mounts = pod_volume_mounts.dict()
-                    template_volume_mounts = template_tag.pod_definition[mod_key]
+                        pod_volume_mounts = pod_volume_mounts.dict() if hasattr(pod_volume_mounts, 'dict') else dict(pod_volume_mounts)
+                    elif not isinstance(pod_volume_mounts, dict):
+                        # Fallback for any non-dict format
+                        pod_volume_mounts = {}
+                    
+                    template_volume_mounts = template_pod_def.get(mod_key, {})
+                    if hasattr(template_volume_mounts, 'dict'):
+                        template_volume_mounts = template_volume_mounts.dict() if hasattr(template_volume_mounts, 'dict') else dict(template_volume_mounts)
+                    elif not isinstance(template_volume_mounts, dict):
+                        # Fallback for any non-dict format
+                        template_volume_mounts = {}
+                    
                     env_vars = getattr(input_obj, "environment_variables", {})
                     use_template_vols_flag = env_vars.get('_TAPIS_INTERNAL_USE_TEMPLATE_VOLUMES', "True")
+                    
                     if use_template_vols_flag.lower() == "true":
-                        merged_volume_mounts = template_volume_mounts.copy() if template_volume_mounts else {}
-                        merged_volume_mounts.update(pod_volume_mounts or {})
+                        # Merge: template provides base mounts, pod can override or add
+                        # None values in pod_volume_mounts remove inherited mounts
+                        merged_volume_mounts = merge_pod_volume_mounts_with_template(
+                            pod_mounts=pod_volume_mounts,
+                            template_mounts=template_volume_mounts
+                        )
+                        
                         setattr(input_obj, mod_key, merged_volume_mounts)
                     else:
                         setattr(input_obj, mod_key, pod_volume_mounts or {})
@@ -461,5 +564,16 @@ def combine_pod_and_template_recursively(input_obj, template_name, seen_template
 
         except Exception as e:
             logger.debug(f'Got exception when attempting to combine pod and templates: {e}')
+
+    # Apply template_overrides if present (partial overrides for volume_mounts and secret_map)
+    if hasattr(input_obj, 'template_overrides') and input_obj.template_overrides:
+        vol_mounts = getattr(input_obj, 'volume_mounts', {}) or {}
+        sec_map = getattr(input_obj, 'secret_map', {}) or {}
+        updated_vol, updated_sec, warnings = apply_template_overrides(vol_mounts, sec_map, input_obj.template_overrides)
+        setattr(input_obj, 'volume_mounts', updated_vol)
+        setattr(input_obj, 'secret_map', updated_sec)
+        # Log warnings for missing paths/keys (non-blocking)
+        for warn in warnings:
+            logger.warning(f"template_overrides: {warn}")
 
     return input_obj

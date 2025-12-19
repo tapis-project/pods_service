@@ -38,7 +38,7 @@ from datetime import datetime, timedelta
 from channels import CommandChannel
 from kubernetes import client, config
 from kubernetes_utils import get_current_k8_services, get_current_k8_pods, rm_container, rm_pvc, \
-    rm_service, KubernetesError, get_k8_logs, list_all_containers, run_k8_exec
+    rm_service, KubernetesError, get_k8_logs, list_all_containers, run_k8_exec, list_configmaps_by_prefix, delete_configmap
 from codes import AVAILABLE, DELETING, STOPPED, ERROR, REQUESTED, COMPLETE, RESTART, ON, OFF
 from stores import pg_store, SITE_TENANT_DICT
 from models_pods import Pod
@@ -72,8 +72,30 @@ def rm_pod(k8_name):
         # service not found
         service_exists = False
         pass
+    
+    # Clean up any ConfigMaps associated with this pod (ephemeral volume mounts)
+    rm_pod_configmaps(k8_name)
 
     return container_exists, service_exists
+
+
+def rm_pod_configmaps(k8_name):
+    """
+    Remove all ConfigMaps associated with a pod (created for ephemeral volume mounts).
+    ConfigMap names are prefixed with the pod's k8_name.
+    """    
+    try:
+        # List ConfigMaps that start with the pod's k8_name
+        configmap_names = list_configmaps_by_prefix(k8_name.lower(), namespace=conf.spawner_host_id)
+        
+        for cm_name in configmap_names:
+            try:
+                delete_configmap(cm_name, namespace=conf.spawner_host_id)
+                logger.info(f"Deleted ConfigMap {cm_name} for pod {k8_name}")
+            except Exception as e:
+                logger.warning(f"Failed to delete ConfigMap {cm_name}: {e}")
+    except Exception as e:
+        logger.warning(f"Failed to list ConfigMaps for pod {k8_name}: {e}")
 
 def rm_volume(k8_name):
     volume_exists = True

@@ -23,6 +23,16 @@ from sqlalchemy.inspection import inspect
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlmodel import Field, Session, SQLModel, select, JSON, Column, String
 from models_images import Image
+
+# Import VolumeMount and related from centralized utils module
+from models_volume_mounts_utils import (
+    VolumeMount, 
+    MAX_CONFIG_CONTENT_SIZE, 
+    VALID_VOLUME_MOUNT_TYPES,
+    validate_volume_mounts_dict as _validate_volume_mounts_dict,
+    validate_and_convert_volume_mounts,
+    interpolate_config_content
+)
 from models_templates import Template
 from models_templates_tags import TemplateTag, derive_template_info
 from models_base import TapisModel, TapisApiModel
@@ -354,26 +364,35 @@ class Resources(TapisModel):
         return values
 
 
-class VolumeMount(TapisModel):
-    type: str =  Field("", description = "Type of volume to attach.")
-    mount_path: str = Field("/tapis_volume_mount", description = "Path to mount volume to.")
-    sub_path: str = Field("", description = "Path to mount volume to.")
-
-    @validator('type')
-    def check_type(cls, v):
-        v = v.lower()
-        valid_types = ['tapisvolume', 'tapissnapshot', 'pvc']
-        if v not in valid_types:
-            raise ValueError(f"volumemount.type must be one of the following: {valid_types}.")
-        return v
-
-    @validator('mount_path')
-    def check_mount_path(cls, v):
-        return v
-
-    @validator('sub_path')
-    def check_sub_path(cls, v):
-        return v
+# Re-export validate_volume_mounts_dict with same signature for backwards compatibility
+def validate_volume_mounts_dict(volume_mounts: Dict[str, Any], context: str = "volume_mounts") -> Dict[str, VolumeMount]:
+    """
+    Validate and convert volume_mounts dict to Dict[str, VolumeMount].
+    
+    This is a wrapper around the centralized validation function that 
+    adds context to error messages.
+    """
+    if not isinstance(volume_mounts, dict):
+        raise TypeError(f"{context} must be a dict keyed by mount_path. Got {type(volume_mounts).__name__}.")
+    
+    try:
+        validated = _validate_volume_mounts_dict(volume_mounts)
+    except Exception as e:
+        raise ValueError(f"{context}: {str(e)}")
+    
+    # Convert validated dicts back to VolumeMount objects
+    result = {}
+    for mount_path, mount_config in validated.items():
+        if mount_config is None:
+            result[mount_path] = None
+        elif isinstance(mount_config, dict):
+            result[mount_path] = VolumeMount(**mount_config)
+        elif isinstance(mount_config, VolumeMount):
+            result[mount_path] = mount_config
+        else:
+            result[mount_path] = mount_config
+    
+    return result
 
 
 class Probes(TapisModel):
@@ -412,13 +431,13 @@ class PodBase(TapisApiModel):
     secret_map: Dict[str, str] = Field({}, description = "Map of keys to secret values. Syntax: ${secret:name} (user secret), ${secret:user:name} (explicit owner). Reference in environment_variables via ${pods:secrets:KEY}. Resolved at pod start.", sa_column=Column(JSON))
     #probes: Dict[str, Any] = Field({}, description = "Probes to run on pod. ex. `{\"livenessProbe\": {\"httpGet\": {\"path\": \"/\", \"port\": 5000}}}`", sa_column=Column(JSON))
     status_requested: str = Field("ON", description = "Status requested by user, `ON`, `OFF`, or `RESTART`.")
-    volume_mounts: Dict[str, VolumeMount] = Field({}, description = "Key: Volume name. Value: List of strs specifying volume folders/files to mount in pod", sa_column=Column(JSON))
+    volume_mounts: Dict[str, Any] = Field({}, description = 'Volume mounts keyed by mount_path. Ex: {"/data": {"type": "tapisvolume", "source_id": "myvolume"}, "/etc/config.ini": {"type": "ephemeral", "config_content": "key=value"}}', sa_column=Column(JSON))
     time_to_stop_default: int = Field(43200, description = "Default time (sec) for pod to run from instance start. -1 for unlimited. 12 hour default.")
     time_to_stop_instance: int | None = Field(None, description = "Time (sec) for pod to run from instance start. Reset each time instance is started. -1 for unlimited. None uses default.")
     networking: Dict[str, Networking] = Field({"default": {"protocol": "http", "port": 5000}}, description = 'Networking information. `{"url_suffix": {"protocol": "http"  "tcp", "port": int}}`', sa_column=Column(JSON))
     resources: Resources = Field({}, description = 'Pod resource management `{"cpu_limit": 3000, "mem_limit": 3000, "cpu_request": 500, "mem_limit": 500, "gpus": 0}`', sa_column=Column(JSON))
     compute_queue: str = Field("default", description = "Queue to run pod in. `default` is the default queue.")
-    #update_template_timestamp_on_restart: bool = Field(False, description = "If true, will update the template timestamp on pod restart.")
+    template_overrides: Dict[str, Any] | None = Field(None, description = 'Partial overrides for template values. Override volume_mounts or secret_map values without rewriting full template field. Ex: {"volume_mounts": {"/data": {"source_id": "my-vol"}}, "secret_map": {"DB_PASS": "${secret:mypass}"}}', sa_column=Column(JSON))
 
 class PodBaseRead(PodBase):
     # Provided
@@ -440,7 +459,13 @@ class PodBaseFull(PodBaseRead):
     modified_fields: List[str] = Field([], description = "Fields that have been modified by the user since creation.", sa_column=Column(ARRAY(String, dimensions=1)))
     action_logs: List[str] = Field([], description = "Log of past 10 actions taken on this pod.", sa_column=Column(ARRAY(String, dimensions=1)))
     
-    def display(self):
+    def display(self, include_configs: bool = False):
+        """Return displayable dict, optionally including config content.
+        
+        Args:
+            include_configs: If True, include full config_content in ephemeral mounts.
+                           If False (default), replace with placeholder to reduce response size.
+        """
         display = self.dict()
         display.pop('logs', None)
         display.pop('k8_name')
@@ -449,7 +474,14 @@ class PodBaseFull(PodBaseRead):
         display.pop('site_id')
         display.pop('modified_fields')
         display.pop('action_logs')
-        #display['action_logs'] = display['action_logs'][-10:]
+        
+        # Redact config_content if not requested
+        if not include_configs and display.get('volume_mounts'):
+            for mount_path, mount_config in display['volume_mounts'].items():
+                if mount_config and mount_config.get('type') == 'ephemeral' and mount_config.get('config_content'):
+                    content_size = len(mount_config['config_content'])
+                    mount_config['config_content'] = f"<{content_size} bytes - use ?include_configs=true to retrieve>"
+        
         return display
 
 
@@ -535,37 +567,44 @@ class Pod(TapisPodBaseFull, table=True, validate=True):
                 raise ValueError(f"secret_map key must be alphanumeric and may include '_' or '-'. Got: {key}")
         return v
 
-    @validator('volume_mounts')
+    @validator('volume_mounts', pre=True)
     def check_volume_mounts(cls, v):
-        if v:
-            if not isinstance(v, dict):
-                raise TypeError(f"volume_mounts must be dict. Got {type(v).__name__}.")
-            for vol_name, vol_mounts in v.items():
-                if not isinstance(vol_name, str):
-                    raise TypeError(f"volume_mounts key must be str. Got {type(vol_name).__name__}.")
-                if not vol_mounts:
-                    raise ValueError(f"volume_mounts val must exist")
-                vol_name_regex = re.fullmatch(r'[a-z][a-z0-9]+', vol_name)
-                if not vol_name_regex:
-                    raise ValueError(f"volume_mounts key must be lowercase alphanumeric. First character must be alpha.")
-        return v
+        """Validate volume_mounts dict structure (keyed by mount_path)."""
+        if not v:
+            return v
+        
+        # Use consolidated validation function (handles legacy list format + VolumeMount validation)
+        return validate_and_convert_volume_mounts(v, use_full_validation=True)
 
     @model_validator(mode="after")
     def check_volume_mounts_db(cls, values):
+        """Validate that referenced volumes/snapshots exist in database."""
         volume_mounts = getattr(values, 'volume_mounts', None)
         tenant_id = getattr(values, 'tenant_id', None)
         site_id = getattr(values, 'site_id', None)
-        if volume_mounts and tenant_id != None and tenant_id != "" and site_id != None and site_id != "":
-            for vol_name, vol_mounts in volume_mounts.items():
-                if hasattr(vol_mounts, 'type'):
-                    if vol_mounts.type == "tapisvolume":
-                        volume = Volume.db_get_with_pk(vol_name, tenant=tenant_id, site=site_id)
-                        if not volume:
-                            raise ValueError(f"volume_mounts key must be a valid volume_id when type == 'tapisvolume'. Could not find volume_id: {vol_name}.")
-                    if vol_mounts.type == "tapissnapshot":
-                        snapshot = Snapshot.db_get_with_pk(vol_name, tenant=tenant_id, site=site_id)
-                        if not snapshot:
-                            raise ValueError(f"volume_mounts key must be a valid snapshot_id when type == 'tapissnapshot'. Could not find snapshot_id: {vol_name}.")
+        
+        if volume_mounts and tenant_id and tenant_id != "" and site_id and site_id != "":
+            for mount_path, mount_config in volume_mounts.items():
+                # Skip null mounts (used to remove template mounts)
+                if mount_config is None:
+                    continue
+                
+                vol_type = mount_config.get('type', '').lower()
+                source_id = mount_config.get('source_id', '')
+                
+                if vol_type == "tapisvolume":
+                    volume = Volume.db_get_with_pk(source_id, tenant=tenant_id, site=site_id)
+                    if not volume:
+                        raise ValueError(f"volume_mounts['{mount_path}'] source_id '{source_id}' not found. No volume with this ID exists.")
+                
+                elif vol_type == "tapissnapshot":
+                    snapshot = Snapshot.db_get_with_pk(source_id, tenant=tenant_id, site=site_id)
+                    if not snapshot:
+                        raise ValueError(f"volume_mounts['{mount_path}'] source_id '{source_id}' not found. No snapshot with this ID exists.")
+                
+                # 'ephemeral' doesn't need db validation - config is inline
+                # 'pvc' type doesn't need db validation - it references k8s PVC
+        
         return values
     
     @validator('arguments')
@@ -839,7 +878,7 @@ class Pod(TapisPodBaseFull, table=True, validate=True):
                     pass
         return values
 
-    def display(self):
+    def display(self, include_configs: bool = False):
         display = self.dict()
         display.pop('logs', None)
         display.pop('k8_name')
@@ -849,6 +888,14 @@ class Pod(TapisPodBaseFull, table=True, validate=True):
         display.pop('modified_fields')
         display.pop('action_logs')
         #display['action_logs'] = display['action_logs'][-10:]
+        
+        # Redact config_content if not requested
+        if not include_configs and display.get('volume_mounts'):
+            for mount_path, mount_config in display['volume_mounts'].items():
+                if mount_config and isinstance(mount_config, dict) and mount_config.get('type') == 'ephemeral' and mount_config.get('config_content'):
+                    content_size = len(mount_config['config_content'])
+                    mount_config['config_content'] = f"<{content_size} bytes - use ?include_configs=true to retrieve>"
+        
         return display
 
     def get_pod_definition_for_template_tag(self):
@@ -921,7 +968,7 @@ class UpdatePod(TapisApiModel):
     arguments: List[str] | None = Field(None, description = "Arguments for the Pod's command.", sa_column=Column(ARRAY(String)))
     environment_variables: Optional[Dict[str, Any]] = Field({}, description = "Environment variables to inject into k8 pod.", sa_column=Column(JSON))
     status_requested: Optional[str] = Field("ON", description = "Status requested by user, `ON`, `OFF`, or `RESTART`.")
-    volume_mounts: Optional[Dict[str, VolumeMount]] = Field({}, description = "Key: Volume name. Value: List of strs specifying volume folders/files to mount in pod", sa_column=Column(JSON))
+    volume_mounts: Optional[List[VolumeMount]] = Field([], description = 'List of volume mounts. Each mount specifies type, source_id, mount_path, and optionally sub_path and read_only.', sa_column=Column(JSON))
     time_to_stop_default: Optional[int] = Field(43200, description = "Default time (sec) for pod to run from instance start. -1 for unlimited. 12 hour default.")
     time_to_stop_instance: Optional[int] = Field(None, description = "Time (sec) for pod to run from instance start. Reset each time instance is started. -1 for unlimited. None uses default.")
     networking: Optional[Dict[str, Networking]] = Field({"default": {"protocol": "http", "port": 5000}}, description = 'Networking information. {"url_suffix": {"protocol": "http"  "tcp", "port": int}}', sa_column=Column(JSON))

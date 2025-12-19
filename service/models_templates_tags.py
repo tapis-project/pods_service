@@ -26,6 +26,9 @@ from models_base import TapisApiModel, TapisModel
 from models_templates import Template
 from models_misc import PermissionsModel, CredentialsModel, LogsModel
 from models_images import Image
+from models_volumes import Volume
+from models_snapshots import Snapshot
+from models_volume_mounts_utils import VolumeMount, validate_and_convert_volume_mounts, VALID_VOLUME_MOUNT_TYPES
 from typing import Optional
 
 
@@ -350,28 +353,6 @@ class Resources(TapisModel):
         return values
 
 
-class VolumeMount(TapisModel):
-    type: str =  Field("", description = "Type of volume to attach.")
-    mount_path: str = Field("/tapis_volume_mount", description = "Path to mount volume to.")
-    sub_path: str = Field("", description = "Path to mount volume to.")
-
-    @validator('type')
-    def check_type(cls, v):
-        v = v.lower()
-        valid_types = ['tapisvolume', 'tapissnapshot', 'pvc']
-        if v not in valid_types:
-            raise ValueError(f"volumemount.type must be one of the following: {valid_types}.")
-        return v
-
-    @validator('mount_path')
-    def check_mount_path(cls, v):
-        return v
-
-    @validator('sub_path')
-    def check_sub_path(cls, v):
-        return v
-
-
 class TemplateTagPodDefinition(TapisModel):
     # All fields are optional and default to None or empty objects for easier parsing of modified fields later
     # Optional
@@ -382,7 +363,7 @@ class TemplateTagPodDefinition(TapisModel):
     arguments: List[str] | None = Field(None, description = "Arguments for the Pod's command.", sa_column=Column(ARRAY(String)))
     environment_variables: Dict[str, Any] = Field({}, description = "Environment variables to inject into pod. Use `${pods:secrets:KEY}` to reference secret_map entries.", sa_column=Column(JSON))
     secret_map: Dict[str, str] = Field({}, description = "Map of keys to secret references or placeholders. Use ${secret:name} for user secrets, ${default:val:?desc} for placeholders with defaults, ${:?desc} for required placeholders. Secrets resolved at pod start.", sa_column=Column(JSON))
-    volume_mounts: Dict[str, VolumeMount] = Field({}, description = "Key: Volume name. Value: List of strs specifying volume folders/files to mount in pod", sa_column=Column(JSON))
+    volume_mounts: Dict[str, Any] = Field({}, description = 'Volume mounts keyed by mount_path. Ex: {"/data": {"type": "tapisvolume", "source_id": "myvolume"}, "/etc/config.ini": {"type": "ephemeral", "config_content": "key=value"}}', sa_column=Column(JSON))
     time_to_stop_default: int | None = Field(None, description = "Default time (sec) for pod to run from instance start. -1 for unlimited. 12 hour default.")
     time_to_stop_instance: int | None = Field(None, description = "Time (sec) for pod to run from instance start. Reset each time instance is started. -1 for unlimited. None uses default.")
     networking: Dict[str, Networking] = Field({}, description = 'Networking information. `{"url_suffix": {"protocol": "http"  "tcp", "port": int}}`', sa_column=Column(JSON))
@@ -446,37 +427,44 @@ class TemplateTagPodDefinition(TapisModel):
                 raise ValueError(f"secret_map key must be alphanumeric and may include '_' or '-'. Got: {key}")
         return v
 
-    @validator('volume_mounts')
+    @validator('volume_mounts', pre=True)
     def check_volume_mounts(cls, v):
-        if v:
-            if not isinstance(v, dict):
-                raise TypeError(f"volume_mounts must be dict. Got {type(v).__name__}.")
-            for vol_name, vol_mounts in v.items():
-                if not isinstance(vol_name, str):
-                    raise TypeError(f"volume_mounts key must be str. Got {type(vol_name).__name__}.")
-                if not vol_mounts:
-                    raise ValueError(f"volume_mounts val must exist")
-                vol_name_regex = re.fullmatch(r'[a-z][a-z0-9]+', vol_name)
-                if not vol_name_regex:
-                    raise ValueError(f"volume_mounts key must be lowercase alphanumeric. First character must be alpha.")
-        return v
+        """Validate volume_mounts dict structure (keyed by mount_path)."""
+        if not v:
+            return v
+        
+        # Use consolidated validation function (handles legacy list format + VolumeMount validation)
+        return validate_and_convert_volume_mounts(v, use_full_validation=True)
 
     @model_validator(mode="after")
     def check_volume_mounts_db(cls, values):
+        """Validate that referenced volumes/snapshots exist in database."""
         volume_mounts = getattr(values, 'volume_mounts', None)
-        tenant_id = getattr(values, 'tenant_id', None)
-        site_id = getattr(values, 'site_id', None)
-        if volume_mounts and tenant_id != None and tenant_id != "" and site_id != None and site_id != "":
-            for vol_name, vol_mounts in volume_mounts.items():
-                if hasattr(vol_mounts, 'type'):
-                    if vol_mounts.type == "tapisvolume":
-                        volume = Volume.db_get_with_pk(vol_name, tenant=tenant_id, site=site_id)
-                        if not volume:
-                            raise ValueError(f"volume_mounts key must be a valid volume_id when type == 'tapisvolume'. Could not find volume_id: {vol_name}.")
-                    if vol_mounts.type == "tapissnapshot":
-                        snapshot = Snapshot.db_get_with_pk(vol_name, tenant=tenant_id, site=site_id)
-                        if not snapshot:
-                            raise ValueError(f"volume_mounts key must be a valid snapshot_id when type == 'tapissnapshot'. Could not find snapshot_id: {vol_name}.")
+        tenant_id = g.tenant_id if hasattr(g, 'tenant_id') else None
+        site_id = g.site_id if hasattr(g, 'site_id') else None
+        
+        if volume_mounts and tenant_id and tenant_id != "" and site_id and site_id != "":
+            for mount_path, mount_config in volume_mounts.items():
+                # Skip null mounts (used to remove template mounts)
+                if mount_config is None:
+                    continue
+                
+                vol_type = mount_config.get('type', '').lower()
+                source_id = mount_config.get('source_id', '')
+                
+                if vol_type == "tapisvolume":
+                    volume = Volume.db_get_with_pk(source_id, tenant=tenant_id, site=site_id)
+                    if not volume:
+                        raise ValueError(f"volume_mounts['{mount_path}'] source_id '{source_id}' not found. No volume with this ID exists.")
+                
+                elif vol_type == "tapissnapshot":
+                    snapshot = Snapshot.db_get_with_pk(source_id, tenant=tenant_id, site=site_id)
+                    if not snapshot:
+                        raise ValueError(f"volume_mounts['{mount_path}'] source_id '{source_id}' not found. No snapshot with this ID exists.")
+                
+                # 'ephemeral' doesn't need db validation - config is inline
+                # 'pvc' type doesn't need db validation - it references k8s PVC
+        
         return values
 
     @validator('arguments')
@@ -649,8 +637,22 @@ class TemplateTag(TapisModel, table=True, validate=True):
         object.__setattr__(values, "tag_timestamp", tag_timestamp)
         return values
 
-    def display(self):
+    def display(self, include_configs: bool = False):
+        """Return displayable dict, optionally including config content.
+        
+        Args:
+            include_configs: If True, include full config_content in ephemeral mounts.
+                           If False (default), replace with placeholder to reduce response size.
+        """
         display = self.dict()
+        
+        # Redact config_content in pod_definition.volume_mounts if not requested
+        if not include_configs and display.get('pod_definition') and display['pod_definition'].get('volume_mounts'):
+            for mount_path, mount_config in display['pod_definition']['volume_mounts'].items():
+                if mount_config and mount_config.get('type') == 'ephemeral' and mount_config.get('config_content'):
+                    content_size = len(mount_config['config_content'])
+                    mount_config['config_content'] = f"<{content_size} bytes - use ?include_configs=true to retrieve>"
+        
         return display
     
     def display_small(self):

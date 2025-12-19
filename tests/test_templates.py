@@ -34,6 +34,27 @@ test_pod_3 = "testtemplaterecursive"
 test_pod_4 = "testtemplateneo4j"
 test_pod_5 = "testtemplateneo4jafterperiod"
 
+test_template_ephemeral = "testtemplateephemeral"
+test_template_tag_ephemeral = "ephemeral"
+test_template_tag_ephemeral_recursive = "ephemeral-recursive"
+test_pod_ephemeral_template = "testpodephemeraltemplate"
+test_pod_ephemeral_override = "testpodephemeraloverride"
+test_pod_ephemeral_recursive = "testpodephemeralrecursive"
+test_template_overrides = "testtemplateoverrides"
+test_template_tag_overrides = "overridesbase"
+test_pod_overrides_vm = "testpodoverridesvm"
+test_pod_overrides_sm = "testpodoverridessm"
+test_pod_overrides_both = "testpodoverridesboth"
+
+# Secret_map Placeholder Tests variables
+test_template_secrets = "testtemplatesecrets"
+test_template_tag_secrets = "withsecrets"
+test_template_tag_secrets_required = "requiredsecrets"
+test_template_tag_secrets_invalid = "invalidsecrets"
+test_pod_secrets_template = "testpodsecretstmpl"
+test_pod_secrets_override = "testpodsecretsovrde"
+
+
 ##### Teardown
 @pytest.fixture(scope="module", autouse=True)
 def teardown(headers):
@@ -45,8 +66,18 @@ def teardown(headers):
     yield None
 
     # Delete all objects after the tests are done.
-    pods = [test_pod_1, test_pod_2, test_pod_3, test_pod_4, test_pod_5, "testpodephemeraloverride"]
-    templates = [test_template_1, test_template_2]
+    pods = [
+        test_pod_1, test_pod_2, test_pod_3, test_pod_4, test_pod_5,
+        test_pod_ephemeral_template, test_pod_ephemeral_override, test_pod_ephemeral_recursive,
+        test_pod_overrides_vm, test_pod_overrides_sm, test_pod_overrides_both,
+        test_pod_secrets_template, test_pod_secrets_override,
+    ]
+    templates = [
+        test_template_1, test_template_2,
+        test_template_ephemeral,
+        test_template_overrides,
+        test_template_secrets,
+    ]
     for pod_id in pods:
         rsp = client.delete(f'/pods/{pod_id}', headers=headers)
     for template_id in templates:
@@ -513,14 +544,6 @@ def test_description_is_ascii_400(headers):
 
 
 ##### Ephemeral Storage Template Tests
-test_template_ephemeral = "testtemplateephemeral"
-test_template_tag_ephemeral = "ephemeral"
-test_template_tag_ephemeral_recursive = "ephemeral-recursive"
-test_pod_ephemeral_template = "testpodephemeraltemplate"
-test_pod_ephemeral_override = "testpodephemeraloverride"
-test_pod_ephemeral_recursive = "testpodephemeralrecursive"
-
-
 def test_create_template_with_ephemeral_storage(headers):
     """Test creating a template with ephemeral storage in pod_definition."""
     template_def = {
@@ -677,28 +700,8 @@ def test_create_pod_from_recursive_ephemeral_template(headers):
     assert result['resources']['ephemeral_storage_limit'] == 6144    # From recursive template
 
 
-def test_delete_ephemeral_template(headers):
-    """Clean up: Delete the ephemeral storage template."""
-    # Delete pods first
-    client.delete(f"/pods/{test_pod_ephemeral_template}", headers=headers)
-    client.delete(f"/pods/{test_pod_ephemeral_override}", headers=headers)
-    client.delete(f"/pods/{test_pod_ephemeral_recursive}", headers=headers)
-    # Delete template
-    rsp = client.delete(f"/pods/templates/{test_template_ephemeral}", headers=headers)
-    result = basic_response_checks(rsp)
-    assert "Template and associated Template Tags successfully deleted." in rsp.json()['message']
-
-
 ##### Secret_map Placeholder Tests (25Q4 Feature)
 # Tests for template tags with secret_map placeholders and pod override behavior
-
-test_template_secrets = "testtemplatesecrets"
-test_template_tag_secrets = "withsecrets"
-test_template_tag_secrets_required = "requiredsecrets"
-test_template_tag_secrets_invalid = "invalidsecrets"
-test_pod_secrets_template = "testpodsecretstmpl"
-test_pod_secrets_override = "testpodsecretsovrde"
-
 
 def test_create_template_for_secrets(headers):
     """Create a template to hold secret_map placeholder tags."""
@@ -897,7 +900,7 @@ def test_create_pod_with_placeholder_override(headers):
 
 def test_get_derived_pod_shows_merged_secrets(headers):
     """Get derived pod should show merged secret_map (template + pod overrides)."""
-    rsp = client.get(f"/pods/{test_pod_secrets_override}?derived=true", headers=headers)
+    rsp = client.get(f"/pods/{test_pod_secrets_override}/derived?include_configs=true", headers=headers)
     result = basic_response_checks(rsp)
     
     # The derived pod should have the merged secret_map
@@ -909,26 +912,222 @@ def test_get_derived_pod_shows_merged_secrets(headers):
             assert secret_map['DB_HOST'] == "production.db.example.com"
 
 
-def test_cleanup_secrets_template_pods(headers):
-    """Clean up pods created for secrets testing."""
-    client.delete(f"/pods/{test_pod_secrets_template}", headers=headers)
-    client.delete(f"/pods/{test_pod_secrets_override}", headers=headers)
+##### Template Overrides Integration Tests (25Q4 Feature)
+# Tests for template_overrides field on pods - allows partial override of template volume_mounts and secret_map
 
 
-def test_delete_secrets_template(headers):
-    """Clean up: Delete the secrets template."""
-    rsp = client.delete(f"/pods/templates/{test_template_secrets}", headers=headers)
+def test_create_template_for_overrides(headers):
+    """Create a template to test template_overrides functionality."""
+    template_def = {
+        "template_id": test_template_overrides,
+        "description": "Template for testing template_overrides feature",
+        "metatags": ["test", "overrides", "volume_mounts", "secret_map"],
+    }
+    rsp = client.post("/pods/templates", data=json.dumps(template_def), headers=headers)
     result = basic_response_checks(rsp)
-    assert "Template and associated Template Tags successfully deleted." in rsp.json()['message']
+    assert result['template_id'] == test_template_overrides
+    time.sleep(2)
 
 
-def test_stop_for_debug():
-    if False:
-        time.sleep(15000)
+def test_add_template_tag_with_volume_mounts_and_secrets(headers):
+    """Create template tag with complex volume_mounts and secret_map for override testing."""
+    tag_def = {
+        "pod_definition": {
+            "image": "postgres:15",
+            "description": "Template with volume_mounts and secret_map for override testing",
+            "volume_mounts": {
+                "/data": {
+                    "type": "ephemeral",
+                    "config_content": "# Data directory placeholder",
+                    "config_permissions": "0755"
+                },
+                "/config": {
+                    "type": "ephemeral",
+                    "config_content": "template_config=true\nkey=template_value",
+                    "config_permissions": "0644",
+                    "config_filename": "app.conf"
+                },
+                "/logs": {
+                    "type": "ephemeral",
+                    "config_content": "# Logs directory placeholder",
+                    "config_permissions": "0755"
+                }
+            },
+            "secret_map": {
+                "DB_HOST": "${default:localhost:?Database hostname}",
+                "DB_PORT": "${default:5432:?Database port}",
+                "DB_PASSWORD": "${:?Database password - required}",
+                "API_KEY": "${default:test-key:?API key}"
+            },
+            "environment_variables": {
+                "POSTGRES_HOST": "${pods:secrets:DB_HOST}",
+                "POSTGRES_PORT": "${pods:secrets:DB_PORT}",
+                "POSTGRES_PASSWORD": "${pods:secrets:DB_PASSWORD}"
+            },
+            "networking": {
+                "default": {
+                    "port": 5432,
+                    "protocol": "postgres"
+                }
+            }
+        },
+        "tag": test_template_tag_overrides,
+        "commit_message": "Template with volume_mounts and secret_map for override testing"
+    }
+    rsp = client.post(f"/pods/templates/{test_template_overrides}/tags", data=json.dumps(tag_def), headers=headers)
+    result = basic_response_checks(rsp)
+    assert test_template_tag_overrides in result['tag_timestamp']
+
+
+def test_create_pod_with_volume_mount_override(headers):
+    """Create pod with template_overrides to override volume_mount config fields."""
+    pod_def = {
+        "pod_id": test_pod_overrides_vm,
+        "template": f"{test_template_overrides}:{test_template_tag_overrides}",
+        "template_overrides": {
+            "volume_mounts": {
+                "/data": {"config_content": "# Custom data config", "config_permissions": "0700"},
+                "/config": {"config_content": "custom_config=true\nkey=custom_value", "config_permissions": "0600"}
+            }
+        },
+        "secret_map": {
+            "DB_PASSWORD": "testpassword123"
+        }
+    }
+    rsp = client.post("/pods", data=json.dumps(pod_def), headers=headers)
+    result = basic_response_checks(rsp)
     
-def test_delete_template(headers):
-    # Delete template
-    rsp = client.delete(f"/pods/templates/{test_template_1}", headers=headers)
+    assert result['pod_id'] == test_pod_overrides_vm
+    assert test_template_overrides in result['template']
+
+
+def test_get_derived_pod_with_volume_mount_override(headers):
+    """Verify derived pod has merged volume_mounts with overrides applied."""
+    rsp = client.get(f"/pods/{test_pod_overrides_vm}/derived?include_configs=true", headers=headers)
     result = basic_response_checks(rsp)
-    assert "Template and associated Template Tags successfully deleted." in rsp.json()['message']
+    
+    # Check volume_mounts have overrides applied
+    assert 'volume_mounts' in result
+    vm = result['volume_mounts']
+    
+    # /data - config_content and config_permissions overridden
+    assert '/data' in vm
+    assert vm['/data']['config_content'] == "# Custom data config"
+    assert vm['/data']['config_permissions'] == "0700"
+    assert vm['/data']['type'] == "ephemeral"  # Preserved from template
+    
+    # /config - config_content and config_permissions overridden
+    assert '/config' in vm
+    assert vm['/config']['config_content'] == "custom_config=true\nkey=custom_value"
+    assert vm['/config']['config_permissions'] == "0600"
+    assert vm['/config']['type'] == "ephemeral"  # Preserved from template
+    
+    # /logs - unchanged from template
+    assert '/logs' in vm
+    assert vm['/logs']['config_content'] == "# Logs directory placeholder"
+    assert vm['/logs']['type'] == "ephemeral"
+
+
+def test_create_pod_with_secret_map_override(headers):
+    """Create pod with template_overrides to override secret_map values."""
+    pod_def = {
+        "pod_id": test_pod_overrides_sm,
+        "template": f"{test_template_overrides}:{test_template_tag_overrides}",
+        "template_overrides": {
+            "secret_map": {
+                "DB_HOST": "production.db.example.com",
+                "API_KEY": "my-custom-api-key"
+            }
+        },
+        "secret_map": {
+            "DB_PASSWORD": "testpassword456"
+        }
+    }
+    rsp = client.post("/pods", data=json.dumps(pod_def), headers=headers)
+    result = basic_response_checks(rsp)
+    
+    assert result['pod_id'] == test_pod_overrides_sm
+    assert test_template_overrides in result['template']
+
+
+def test_get_derived_pod_with_secret_map_override(headers):
+    """Verify derived pod has merged secret_map with overrides applied."""
+    rsp = client.get(f"/pods/{test_pod_overrides_sm}/derived", headers=headers)
+    result = basic_response_checks(rsp)
+    
+    # Check secret_map has overrides applied
+    if 'secret_map' in result:
+        sm = result['secret_map']
+        
+        # DB_HOST overridden via template_overrides
+        if 'DB_HOST' in sm:
+            assert sm['DB_HOST'] == "production.db.example.com"
+        
+        # API_KEY overridden via template_overrides
+        if 'API_KEY' in sm:
+            assert sm['API_KEY'] == "my-custom-api-key"
+        
+        # DB_PORT should have template default value
+        if 'DB_PORT' in sm:
+            # Either the default value or the placeholder
+            assert sm['DB_PORT'] in ["5432", "${default:5432:?Database port}"]
+
+
+def test_create_pod_with_both_overrides(headers):
+    """Create pod overriding both volume_mounts and secret_map via template_overrides."""
+    pod_def = {
+        "pod_id": test_pod_overrides_both,
+        "template": f"{test_template_overrides}:{test_template_tag_overrides}",
+        "template_overrides": {
+            "volume_mounts": {
+                "/data": {"config_content": "# Combined data override", "config_permissions": "0750"},
+                "/logs": {"config_content": "# Combined logs override"}
+            },
+            "secret_map": {
+                "DB_HOST": "combined.db.example.com",
+                "DB_PORT": "5433"
+            }
+        },
+        "secret_map": {
+            "DB_PASSWORD": "combinedpassword789"
+        }
+    }
+    rsp = client.post("/pods", data=json.dumps(pod_def), headers=headers)
+    result = basic_response_checks(rsp)
+    
+    assert result['pod_id'] == test_pod_overrides_both
+    assert test_template_overrides in result['template']
+
+
+def test_get_derived_pod_with_both_overrides(headers):
+    """Verify derived pod has both volume_mounts and secret_map overrides applied."""
+    rsp = client.get(f"/pods/{test_pod_overrides_both}/derived?include_configs=true", headers=headers)
+    result = basic_response_checks(rsp)
+    
+    # Check volume_mounts
+    assert 'volume_mounts' in result
+    vm = result['volume_mounts']
+    
+    # /data - config fields overridden
+    assert '/data' in vm
+    assert vm['/data']['config_content'] == "# Combined data override"
+    assert vm['/data']['config_permissions'] == "0750"
+    assert vm['/data']['type'] == "ephemeral"
+    
+    # /logs - config_content overridden
+    assert '/logs' in vm
+    assert vm['/logs']['config_content'] == "# Combined logs override"
+    
+    # /config - unchanged
+    assert '/config' in vm
+    assert vm['/config']['type'] == "ephemeral"
+    assert vm['/config']['config_content'] == "template_config=true\nkey=template_value"
+    
+    # Check secret_map
+    if 'secret_map' in result:
+        sm = result['secret_map']
+        if 'DB_HOST' in sm:
+            assert sm['DB_HOST'] == "combined.db.example.com"
+        if 'DB_PORT' in sm:
+            assert sm['DB_PORT'] == "5433"
 

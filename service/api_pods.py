@@ -5,6 +5,11 @@ from pydantic import ValidationError
 
 from models_pods import Pod, NewPod, Password, PodsResponse, PodResponse, PodBase, PodBaseRead
 from models_templates_utils import validate_pod_secret_map_against_template, get_template_merged_secret_map
+from models_volume_mounts_utils import (
+    validate_pod_volume_mounts_against_template, 
+    get_template_merged_volume_mounts,
+    validate_volume_mounts_permissions
+)
 from secret_utils import get_placeholder_warnings
 from tapisservice.tapisfastapi.utils import g, ok
 from tapisservice.logs import get_logger
@@ -88,6 +93,7 @@ async def create_pod(new_pod: NewPod):
 
     # Validate secret_map placeholders if pod uses a template
     placeholder_metadata = {}
+    volume_mount_metadata = {}
     if pod.template:
         try:
             # Get merged secret_map from all chained templates
@@ -113,6 +119,36 @@ async def create_pod(new_pod: NewPod):
             
             # Capture placeholder metadata from validation (already computed)
             placeholder_metadata = validation_result.metadata
+            
+            # Validate volume_mounts from template
+            template_volume_mounts = get_template_merged_volume_mounts(
+                pod.template,
+                tenant=g.request_tenant_id,
+                site=g.site_id
+            )
+            
+            if template_volume_mounts:
+                # Get pod's volume_mounts as dict
+                pod_volume_mounts = pod.volume_mounts or {}
+                # Convert to dict if it's a Pydantic model
+                if hasattr(pod_volume_mounts, 'model_dump'):
+                    pod_volume_mounts = pod_volume_mounts.model_dump()
+                elif hasattr(pod_volume_mounts, 'dict'):
+                    pod_volume_mounts = pod_volume_mounts.dict()
+                
+                # Validate pod's volume_mounts against template
+                vm_validation = validate_pod_volume_mounts_against_template(
+                    pod_volume_mounts,
+                    template_volume_mounts,
+                    user=g.username,
+                    tenant=g.request_tenant_id,
+                    site=g.site_id,
+                    roles=getattr(g, 'roles', None)
+                )
+                
+                # Capture volume mount warnings in metadata
+                if vm_validation.metadata:
+                    volume_mount_metadata = vm_validation.metadata
                 
         except Exception as e:
             logger.error(f"Error validating template placeholders for pod {pod.pod_id}: {e}")
@@ -131,6 +167,31 @@ async def create_pod(new_pod: NewPod):
                     "required": required,
                     "optional": optional
                 }
+    
+    # Validate pod's own volume_mounts permissions (not from template)
+    if pod.volume_mounts and not pod.template:
+        pod_volume_mounts = pod.volume_mounts or []
+        if hasattr(pod_volume_mounts, 'dict'):
+            pod_volume_mounts = [vm.dict() if hasattr(vm, 'dict') else vm for vm in pod_volume_mounts]
+        
+        vm_validation = validate_volume_mounts_permissions(
+            pod_volume_mounts,
+            user=g.username,
+            tenant=g.request_tenant_id,
+            site=g.site_id,
+            roles=getattr(g, 'roles', None)
+        )
+        
+        # For direct pod creation, permission errors should block
+        if not vm_validation.is_valid:
+            raise ValueError(vm_validation.error_message)
+
+    # Merge metadata from both validations
+    final_metadata = {}
+    if placeholder_metadata:
+        final_metadata.update(placeholder_metadata)
+    if volume_mount_metadata:
+        final_metadata.update(volume_mount_metadata)
 
     # Create pod password db entry. If it's successful, we continue.
     password = Password(pod_id=pod.pod_id)
@@ -152,4 +213,4 @@ async def create_pod(new_pod: NewPod):
         ch.close()
         logger.debug(f"Command Channel - Added msg for pod_id: {pod.pod_id}.")
     
-    return ok(result=pod.display(), metadata=placeholder_metadata, msg="Pod created successfully.")
+    return ok(result=pod.display(), metadata=final_metadata, msg="Pod created successfully.")

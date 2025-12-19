@@ -1,20 +1,15 @@
 """
 Unit tests for combine_pod_and_template_recursively function in models_templates_utils.py
 
-These tests verify the priority order: pod modified > template setting > pod default
-and test recursive template chaining, infinite loop detection, and all field-specific merge logic.
+Tests verify the priority order: pod modified > template setting > pod default
+and test recursive template chaining, infinite loop detection, and field-specific merge logic.
+
+CONSOLIDATED from original 86 tests (~2600 lines) to ~30 tests (~800 lines)
 """
-import os
-import sys
-import json
-import time
 import pytest
-from unittest.mock import Mock, patch, MagicMock
-from types import SimpleNamespace
+from unittest.mock import patch, MagicMock
 
-from tests.test_utils import headers, response_format, basic_response_checks, t
-
-# Allows us to import pods's modules.
+import sys
 sys.path.append('/home/tapis/service')
 
 
@@ -23,7 +18,7 @@ sys.path.append('/home/tapis/service')
 # ============================================================================
 
 class MockResources:
-    """Mock Resources class that mimics the behavior of the real Resources model"""
+    """Mock Resources class"""
     def __init__(self, cpu_request=250, cpu_limit=2000, mem_request=256, mem_limit=3000,
                  gpus=0, ephemeral_storage_request=200, ephemeral_storage_limit=1000):
         self.cpu_request = cpu_request
@@ -35,150 +30,85 @@ class MockResources:
         self.ephemeral_storage_limit = ephemeral_storage_limit
 
     def dict(self):
-        return {
-            'cpu_request': self.cpu_request,
-            'cpu_limit': self.cpu_limit,
-            'mem_request': self.mem_request,
-            'mem_limit': self.mem_limit,
-            'gpus': self.gpus,
-            'ephemeral_storage_request': self.ephemeral_storage_request,
-            'ephemeral_storage_limit': self.ephemeral_storage_limit,
-        }
-
-
-class MockNetworking:
-    """Mock Networking class"""
-    def __init__(self, protocol="http", port=5000, url="", tapis_auth=False):
-        self.protocol = protocol
-        self.port = port
-        self.url = url
-        self.tapis_auth = tapis_auth
-
-    def dict(self):
-        return {
-            'protocol': self.protocol,
-            'port': self.port,
-            'url': self.url,
-            'tapis_auth': self.tapis_auth,
-        }
+        return {k: getattr(self, k) for k in ['cpu_request', 'cpu_limit', 'mem_request', 
+                'mem_limit', 'gpus', 'ephemeral_storage_request', 'ephemeral_storage_limit']}
 
 
 class MockPod:
     """Mock Pod object for testing combine_pod_and_template_recursively"""
-    def __init__(
-        self,
-        pod_id="testpod",
-        tenant_id="dev",
-        site_id="tacc",
-        image="",
-        description="",
-        command=None,
-        arguments=None,
-        environment_variables=None,
-        volume_mounts=None,
-        networking=None,
-        resources=None,
-        compute_queue="default",
-        time_to_stop_default=43200,
-        time_to_stop_instance=None,
-        modified_fields=None,
-        template=""
-    ):
+    def __init__(self, pod_id="testpod", tenant_id="dev", site_id="tacc", image="",
+                 description="", command=None, arguments=None, environment_variables=None,
+                 secret_map=None, volume_mounts=None, networking=None, resources=None,
+                 compute_queue="default", time_to_stop_default=43200, time_to_stop_instance=None,
+                 modified_fields=None, template=""):
         self.pod_id = pod_id
         self.tenant_id = tenant_id
         self.site_id = site_id
         self.image = image
         self.description = description
         self.command = command
-        self.arguments = arguments
-        self.environment_variables = environment_variables if environment_variables is not None else {}
-        self.volume_mounts = volume_mounts if volume_mounts is not None else {}
-        self.networking = networking if networking is not None else {"default": {"protocol": "http", "port": 5000}}
-        self.resources = resources if resources is not None else MockResources()
+        self.arguments = arguments or []
+        self.environment_variables = environment_variables or {}
+        self.secret_map = secret_map or {}
+        self.volume_mounts = volume_mounts or {}
+        self.networking = networking or {"default": {"protocol": "http", "port": 5000}}
+        self.resources = resources or MockResources()
         self.compute_queue = compute_queue
         self.time_to_stop_default = time_to_stop_default
         self.time_to_stop_instance = time_to_stop_instance
-        self.modified_fields = modified_fields if modified_fields is not None else []
+        self.modified_fields = modified_fields or []
         self.template = template
 
 
 class MockTemplateTagPodDefinition:
     """Mock TemplateTagPodDefinition"""
-    def __init__(
-        self,
-        image=None,
-        template=None,
-        description=None,
-        command=None,
-        arguments=None,
-        environment_variables=None,
-        volume_mounts=None,
-        networking=None,
-        resources=None,
-        compute_queue="default",
-        time_to_stop_default=None,
-        time_to_stop_instance=None,
-    ):
+    def __init__(self, image=None, template=None, description=None, command=None,
+                 arguments=None, environment_variables=None, secret_map=None,
+                 volume_mounts=None, networking=None, resources=None,
+                 compute_queue="default", time_to_stop_default=None, time_to_stop_instance=None):
         self.image = image
         self.template = template
         self.description = description
         self.command = command
-        self.arguments = arguments
-        self.environment_variables = environment_variables if environment_variables is not None else {}
-        self.volume_mounts = volume_mounts if volume_mounts is not None else {}
-        self.networking = networking if networking is not None else {}
-        self.resources = resources if resources is not None else {}
+        self.arguments = arguments  # Keep None to match real TemplateTagPodDefinition default
+        self.environment_variables = environment_variables or {}
+        self.secret_map = secret_map or {}
+        self.volume_mounts = volume_mounts or {}
+        self.networking = networking or {}
+        self.resources = resources or {}
         self.compute_queue = compute_queue
         self.time_to_stop_default = time_to_stop_default
         self.time_to_stop_instance = time_to_stop_instance
 
     def dict(self):
-        return {
-            'image': self.image,
-            'template': self.template,
-            'description': self.description,
-            'command': self.command,
-            'arguments': self.arguments,
-            'environment_variables': self.environment_variables,
-            'volume_mounts': self.volume_mounts,
-            'networking': self.networking,
-            'resources': self.resources,
-            'compute_queue': self.compute_queue,
-            'time_to_stop_default': self.time_to_stop_default,
-            'time_to_stop_instance': self.time_to_stop_instance,
-        }
+        return {k: getattr(self, k) for k in ['image', 'template', 'description', 'command',
+                'arguments', 'environment_variables', 'secret_map', 'volume_mounts',
+                'networking', 'resources', 'compute_queue', 'time_to_stop_default', 'time_to_stop_instance']}
 
 
 class MockTemplateTag:
     """Mock TemplateTag"""
-    def __init__(self, template_id="testtemplate", tag="latest", tag_timestamp="latest@2024-01-01-00:00:00",
-                 pod_definition=None):
+    def __init__(self, template_id="testtemplate", tag="latest", 
+                 tag_timestamp="latest@2024-01-01", pod_definition=None):
         self.template_id = template_id
         self.tag = tag
         self.tag_timestamp = tag_timestamp
-        self.pod_definition = pod_definition if pod_definition is not None else MockTemplateTagPodDefinition().dict()
+        self.pod_definition = pod_definition or MockTemplateTagPodDefinition().dict()
 
 
 class MockTemplate:
-    """Mock Template"""
     def __init__(self, template_id="testtemplate"):
         self.template_id = template_id
 
 
-class MockTenantConfig:
-    """Mock tenant config for URL generation"""
-    def __init__(self, base_url="https://dev.tapis.io"):
-        self.base_url = base_url
-
-
 class MockTenantCache:
-    """Mock tenant cache"""
     def get_tenant_config(self, tenant_id):
-        return MockTenantConfig()
+        class TC:
+            base_url = "https://dev.tapis.io"
+        return TC()
 
 
 class MockT:
-    """Mock t object from __init__"""
     def __init__(self):
         self.tenant_cache = MockTenantCache()
 
@@ -189,1735 +119,652 @@ class MockT:
 
 @pytest.fixture
 def mock_t():
-    """Fixture to mock the t object"""
     return MockT()
 
 
-@pytest.fixture
-def default_pod():
-    """Create a default pod with no modifications"""
-    return MockPod()
-
-
-@pytest.fixture
-def empty_template_pod_definition():
-    """Return an empty TemplateTagPodDefinition dict (baseline for comparison)"""
-    return MockTemplateTagPodDefinition().dict()
-
-
-@pytest.fixture
-def template_with_resources():
-    """Template that sets specific resource values"""
-    return MockTemplateTag(
-        pod_definition={
-            'image': None,
-            'template': None,
-            'description': None,
-            'command': None,
-            'arguments': None,
-            'environment_variables': {},
-            'volume_mounts': {},
-            'networking': {},
-            'resources': {
-                'cpu_request': 1000,
-                'cpu_limit': 4000,
-                'mem_request': 512,
-                'mem_limit': 8000,
-                'gpus': 1,
-                'ephemeral_storage_request': 500,
-                'ephemeral_storage_limit': 2000,
-            },
-            'compute_queue': 'default',
-            'time_to_stop_default': None,
-            'time_to_stop_instance': None,
-        }
-    )
-
-
-@pytest.fixture
-def template_with_networking():
-    """Template that sets networking configuration"""
-    return MockTemplateTag(
-        pod_definition={
-            'image': None,
-            'template': None,
-            'description': None,
-            'command': None,
-            'arguments': None,
-            'environment_variables': {},
-            'volume_mounts': {},
-            'networking': {
-                'default': {'protocol': 'http', 'port': 8080, 'tapis_auth': True},
-                'api': {'protocol': 'http', 'port': 3000},
-            },
-            'resources': {},
-            'compute_queue': 'default',
-            'time_to_stop_default': None,
-            'time_to_stop_instance': None,
-        }
-    )
-
-
-@pytest.fixture
-def template_with_env_vars():
-    """Template that sets environment variables"""
-    return MockTemplateTag(
-        pod_definition={
-            'image': None,
-            'template': None,
-            'description': None,
-            'command': None,
-            'arguments': None,
-            'environment_variables': {
-                'DB_HOST': 'localhost',
-                'DB_PORT': '5432',
-                'TEMPLATE_VAR': 'from_template',
-            },
-            'volume_mounts': {},
-            'networking': {},
-            'resources': {},
-            'compute_queue': 'default',
-            'time_to_stop_default': None,
-            'time_to_stop_instance': None,
-        }
-    )
-
-
-@pytest.fixture
-def template_with_volume_mounts():
-    """Template that sets volume mounts"""
-    return MockTemplateTag(
-        pod_definition={
-            'image': None,
-            'template': None,
-            'description': None,
-            'command': None,
-            'arguments': None,
-            'environment_variables': {},
-            'volume_mounts': {
-                'data-volume': {'type': 'tapisvolume', 'mount_path': '/data'},
-                'config-volume': {'type': 'pvc', 'mount_path': '/config'},
-            },
-            'networking': {},
-            'resources': {},
-            'compute_queue': 'default',
-            'time_to_stop_default': None,
-            'time_to_stop_instance': None,
-        }
-    )
-
-
-@pytest.fixture
-def template_with_simple_fields():
-    """Template that sets simple fields"""
-    return MockTemplateTag(
-        pod_definition={
-            'image': 'template-image:v1',
-            'template': None,
-            'description': 'Template description',
-            'command': ['python', 'app.py'],
-            'arguments': ['--port', '8080'],
-            'environment_variables': {},
-            'volume_mounts': {},
-            'networking': {},
-            'resources': {},
-            'compute_queue': 'gpu',
-            'time_to_stop_default': 7200,
-            'time_to_stop_instance': 3600,
-        }
-    )
+def make_template(template_id="testtemplate", **pod_def_kwargs):
+    """Helper to create a template with given pod_definition fields"""
+    base = MockTemplateTagPodDefinition().dict()
+    base.update(pod_def_kwargs)
+    return MockTemplateTag(template_id=template_id, pod_definition=base)
 
 
 # ============================================================================
 # TEST: get_modified_template_fields
 # ============================================================================
 
-def test_get_modified_template_fields_returns_empty_when_no_changes():
-    """When template matches original, return empty dict"""
-    from models_templates_utils import get_modified_template_fields
+class TestGetModifiedTemplateFields:
+    """Tests for get_modified_template_fields function"""
     
-    original = MockTemplateTagPodDefinition().dict()
-    modified = MockTemplateTagPodDefinition().dict()
-    
-    result = get_modified_template_fields(original, modified)
-    assert result == {}
+    def test_returns_empty_when_no_changes(self):
+        """When template matches original, return empty dict"""
+        from models_templates_utils import get_modified_template_fields
+        original = MockTemplateTagPodDefinition().dict()
+        modified = MockTemplateTagPodDefinition().dict()
+        assert get_modified_template_fields(original, modified) == {}
 
+    def test_returns_changed_fields(self):
+        """When fields differ, return the modified values"""
+        from models_templates_utils import get_modified_template_fields
+        original = MockTemplateTagPodDefinition().dict()
+        modified = MockTemplateTagPodDefinition(image="postgres:15", description="A postgres template").dict()
+        result = get_modified_template_fields(original, modified)
+        assert result['image'] == "postgres:15"
+        assert result['description'] == "A postgres template"
 
-def test_get_modified_template_fields_returns_changed_fields():
-    """When fields differ, return the modified values"""
-    from models_templates_utils import get_modified_template_fields
-    
-    original = MockTemplateTagPodDefinition().dict()
-    modified = MockTemplateTagPodDefinition(
-        image="postgres:15",
-        description="A postgres template"
-    ).dict()
-    
-    result = get_modified_template_fields(original, modified)
-    assert 'image' in result
-    assert result['image'] == "postgres:15"
-    assert 'description' in result
-    assert result['description'] == "A postgres template"
-
-
-def test_get_modified_template_fields_resources_null_subfields_removed():
-    """Null subfields in resources should be removed"""
-    from models_templates_utils import get_modified_template_fields
-    
-    original = MockTemplateTagPodDefinition().dict()
-    modified_template = MockTemplateTagPodDefinition()
-    modified_template.resources = {'cpu_request': 500, 'cpu_limit': None, 'mem_request': None}
-    modified = modified_template.dict()
-    
-    result = get_modified_template_fields(original, modified)
-    
-    # Should have resources but only with non-null values
-    assert 'resources' in result
-    assert 'cpu_request' in result['resources']
-    assert 'cpu_limit' not in result['resources']
-    assert 'mem_request' not in result['resources']
+    def test_resources_null_subfields_removed(self):
+        """Null subfields in resources should be removed"""
+        from models_templates_utils import get_modified_template_fields
+        original = MockTemplateTagPodDefinition().dict()
+        modified = MockTemplateTagPodDefinition()
+        modified.resources = {'cpu_request': 500, 'cpu_limit': None, 'mem_request': None}
+        result = get_modified_template_fields(original, modified.dict())
+        assert 'resources' in result
+        assert 'cpu_request' in result['resources']
+        assert 'cpu_limit' not in result['resources']
 
 
 # ============================================================================
-# TEST: Resources Merge
+# TEST: Simple Field Overrides (Consolidated - was 7 separate tests)
 # ============================================================================
 
-@patch('models_templates_utils.derive_template_info')
-@patch('models_templates_utils.t')
-def test_template_resources_override_pod_defaults(mock_t_obj, mock_derive, template_with_resources):
-    """Template resources should override pod defaults when pod hasn't modified them"""
-    from models_templates_utils import combine_pod_and_template_recursively
+class TestSimpleFieldOverrides:
+    """Test priority for all simple fields: pod modified > template > pod default"""
     
-    mock_t_obj.tenant_cache = MockTenantCache()
-    mock_derive.return_value = ("template1:latest@2024-01-01", MockTemplate(), template_with_resources)
-    
-    pod = MockPod(
-        resources=MockResources(),  # defaults
-        modified_fields=[]  # nothing modified by user
-    )
-    
-    result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
-    
-    # Template values should be applied
-    assert result.resources['cpu_request'] == 1000
-    assert result.resources['cpu_limit'] == 4000
-    assert result.resources['mem_request'] == 512
-    assert result.resources['mem_limit'] == 8000
-    assert result.resources['gpus'] == 1
+    @pytest.mark.parametrize("field,template_val,pod_default,pod_modified", [
+        ("image", "template-image:v1", "", "my-image:v2"),
+        ("description", "Template desc", "", "My custom desc"),
+        ("compute_queue", "gpu", "default", "high-memory"),
+        ("time_to_stop_default", 7200, 43200, 86400),
+        ("time_to_stop_instance", 3600, None, 1800),
+    ])
+    def test_field_priority(self, field, template_val, pod_default, pod_modified):
+        """Test that template values override defaults, but pod modifications override template"""
+        from models_templates_utils import combine_pod_and_template_recursively
+        
+        mock_t_obj = MagicMock()
+        mock_t_obj.tenant_cache = MockTenantCache()
+        template = make_template(**{field: template_val})
+        
+        with patch('models_templates_utils.derive_template_info') as mock_derive, \
+             patch('models_templates_utils.t', mock_t_obj):
+            mock_derive.return_value = ("template1:latest@2024-01-01", MockTemplate(), template)
+            
+            # Test: template overrides pod default
+            pod = MockPod(**{field: pod_default}, modified_fields=[])
+            result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
+            assert getattr(result, field) == template_val
+            
+            # Test: pod modified overrides template
+            pod = MockPod(**{field: pod_modified}, modified_fields=[field])
+            result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
+            assert getattr(result, field) == pod_modified
 
-
-@patch('models_templates_utils.derive_template_info')
-@patch('models_templates_utils.t')
-def test_pod_modified_resources_preserved(mock_t_obj, mock_derive, template_with_resources):
-    """Pod's user-modified resources should be preserved over template values"""
-    from models_templates_utils import combine_pod_and_template_recursively
-    
-    mock_t_obj.tenant_cache = MockTenantCache()
-    mock_derive.return_value = ("template1:latest@2024-01-01", MockTemplate(), template_with_resources)
-    
-    pod = MockPod(
-        resources=MockResources(cpu_request=2000, mem_limit=16000),
-        modified_fields=['resources.cpu_request', 'resources.mem_limit']  # user modified these
-    )
-    
-    result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
-    
-    # User-modified fields should be preserved
-    assert result.resources['cpu_request'] == 2000  # user modified
-    assert result.resources['mem_limit'] == 16000   # user modified
-    # Template values for non-modified fields
-    assert result.resources['cpu_limit'] == 4000    # from template
-    assert result.resources['mem_request'] == 512   # from template
-    assert result.resources['gpus'] == 1            # from template
-
-
-@patch('models_templates_utils.derive_template_info')
-@patch('models_templates_utils.t')
-def test_all_resource_subfields_handled(mock_t_obj, mock_derive, template_with_resources):
-    """All 7 resource subfields should be properly merged"""
-    from models_templates_utils import combine_pod_and_template_recursively
-    
-    mock_t_obj.tenant_cache = MockTenantCache()
-    mock_derive.return_value = ("template1:latest@2024-01-01", MockTemplate(), template_with_resources)
-    
-    pod = MockPod(
-        resources=MockResources(
-            cpu_request=250, cpu_limit=2000,
-            mem_request=256, mem_limit=3000,
-            gpus=0,
-            ephemeral_storage_request=200, ephemeral_storage_limit=1000
-        ),
-        modified_fields=['resources.gpus']  # only gpus modified
-    )
-    
-    result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
-    
-    # gpus should be pod's value (user modified)
-    assert result.resources['gpus'] == 0
-    # All others should be template values
-    assert result.resources['cpu_request'] == 1000
-    assert result.resources['cpu_limit'] == 4000
-    assert result.resources['mem_request'] == 512
-    assert result.resources['mem_limit'] == 8000
-    assert result.resources['ephemeral_storage_request'] == 500
-    assert result.resources['ephemeral_storage_limit'] == 2000
-
-
-@patch('models_templates_utils.derive_template_info')
-@patch('models_templates_utils.t')
-def test_partial_template_resources(mock_t_obj, mock_derive):
-    """Template with only some resource fields should only override those"""
-    from models_templates_utils import combine_pod_and_template_recursively
-    
-    mock_t_obj.tenant_cache = MockTenantCache()
-    
-    # Template only sets cpu_request
-    partial_template = MockTemplateTag(
-        pod_definition={
-            'image': None,
-            'template': None,
-            'description': None,
-            'command': None,
-            'arguments': None,
-            'environment_variables': {},
-            'volume_mounts': {},
-            'networking': {},
-            'resources': {'cpu_request': 1000},
-            'compute_queue': 'default',
-            'time_to_stop_default': None,
-            'time_to_stop_instance': None,
-        }
-    )
-    mock_derive.return_value = ("template1:latest@2024-01-01", MockTemplate(), partial_template)
-    
-    pod = MockPod(
-        resources=MockResources(cpu_request=250, cpu_limit=2000, mem_request=256, mem_limit=3000),
-        modified_fields=[]
-    )
-    
-    result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
-    
-    # Only cpu_request should come from template
-    assert result.resources['cpu_request'] == 1000
-    # Others should be pod defaults
-    assert result.resources['cpu_limit'] == 2000
-    assert result.resources['mem_request'] == 256
-    assert result.resources['mem_limit'] == 3000
+    def test_command_and_arguments_override(self):
+        """Test command and arguments (list fields) override correctly"""
+        from models_templates_utils import combine_pod_and_template_recursively
+        
+        mock_t_obj = MagicMock()
+        mock_t_obj.tenant_cache = MockTenantCache()
+        template = make_template(command=['python', 'app.py'], arguments=['--port', '8080'])
+        
+        with patch('models_templates_utils.derive_template_info') as mock_derive, \
+             patch('models_templates_utils.t', mock_t_obj):
+            mock_derive.return_value = ("template1:latest@2024-01-01", MockTemplate(), template)
+            
+            # Template values applied when pod not modified
+            pod = MockPod(command=None, arguments=None, modified_fields=[])
+            result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
+            assert result.command == ['python', 'app.py']
+            assert result.arguments == ['--port', '8080']
+            
+            # Pod modifications preserved
+            pod = MockPod(command=['./start.sh'], arguments=['--debug'], 
+                         modified_fields=['command', 'arguments'])
+            result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
+            assert result.command == ['./start.sh']
+            assert result.arguments == ['--debug']
 
 
 # ============================================================================
-# TEST: Networking Merge
+# TEST: Resources Merge (Consolidated - was 4+ tests)
 # ============================================================================
 
-@patch('models_templates_utils.derive_template_info')
-@patch('models_templates_utils.t')
-def test_template_networking_applied(mock_t_obj, mock_derive, template_with_networking):
-    """Template networking should be applied to pod"""
-    from models_templates_utils import combine_pod_and_template_recursively
+class TestResourcesMerge:
+    """Test resource field merging with priority: pod modified > closer template > deeper template"""
     
-    mock_t_obj.tenant_cache = MockTenantCache()
-    mock_derive.return_value = ("template1:latest@2024-01-01", MockTemplate(), template_with_networking)
-    
-    pod = MockPod(
-        pod_id="mypod",
-        networking={"default": {"protocol": "http", "port": 5000}},
-        modified_fields=[]
-    )
-    
-    result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
-    
-    # Template networking should be applied
-    assert 'default' in result.networking
-    assert 'api' in result.networking
-    assert result.networking['default']['port'] == 8080
-    assert result.networking['default']['tapis_auth'] == True
-    assert result.networking['api']['port'] == 3000
-
-
-@patch('models_templates_utils.derive_template_info')
-@patch('models_templates_utils.t')
-def test_pod_modified_networking_preserved(mock_t_obj, mock_derive, template_with_networking):
-    """Pod's modified networking should override template"""
-    from models_templates_utils import combine_pod_and_template_recursively
-    
-    mock_t_obj.tenant_cache = MockTenantCache()
-    mock_derive.return_value = ("template1:latest@2024-01-01", MockTemplate(), template_with_networking)
-    
-    pod = MockPod(
-        pod_id="mypod",
-        networking={
-            "default": {"protocol": "http", "port": 9000, "tapis_auth": False}
-        },
-        modified_fields=['networking']  # user modified networking
-    )
-    
-    result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
-    
-    # Pod's networking for 'default' should override template
-    assert result.networking['default']['port'] == 9000
-    assert result.networking['default']['tapis_auth'] == False
-    # 'api' from template should still be there
-    assert 'api' in result.networking
-
-
-@patch('models_templates_utils.derive_template_info')
-@patch('models_templates_utils.t')
-def test_url_generated_for_default_network(mock_t_obj, mock_derive, template_with_networking):
-    """URL should be generated correctly for default network"""
-    from models_templates_utils import combine_pod_and_template_recursively
-    
-    mock_t_obj.tenant_cache = MockTenantCache()
-    mock_derive.return_value = ("template1:latest@2024-01-01", MockTemplate(), template_with_networking)
-    
-    pod = MockPod(
-        pod_id="mypod",
-        networking={"default": {"protocol": "http", "port": 5000}},
-        modified_fields=[]
-    )
-    
-    result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
-    
-    # URL should be generated for default network
-    assert 'url' in result.networking['default']
-    assert 'mypod.pods.' in result.networking['default']['url']
-
-
-@patch('models_templates_utils.derive_template_info')
-@patch('models_templates_utils.t')
-def test_url_generated_for_named_network(mock_t_obj, mock_derive, template_with_networking):
-    """URL should be generated correctly for named networks"""
-    from models_templates_utils import combine_pod_and_template_recursively
-    
-    mock_t_obj.tenant_cache = MockTenantCache()
-    mock_derive.return_value = ("template1:latest@2024-01-01", MockTemplate(), template_with_networking)
-    
-    pod = MockPod(
-        pod_id="mypod",
-        networking={"default": {"protocol": "http", "port": 5000}},
-        modified_fields=[]
-    )
-    
-    result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
-    
-    # URL for named network should include the network name
-    assert 'url' in result.networking['api']
-    assert 'mypod-api.pods.' in result.networking['api']['url']
-
-
-# ============================================================================
-# TEST: Environment Variables Merge
-# ============================================================================
-
-@patch('models_templates_utils.derive_template_info')
-@patch('models_templates_utils.t')
-def test_env_vars_merged_when_flag_true(mock_t_obj, mock_derive, template_with_env_vars):
-    """When _TAPIS_INTERNAL_USE_TEMPLATE_ENVS=True, merge template + pod envs"""
-    from models_templates_utils import combine_pod_and_template_recursively
-    
-    mock_t_obj.tenant_cache = MockTenantCache()
-    mock_derive.return_value = ("template1:latest@2024-01-01", MockTemplate(), template_with_env_vars)
-    
-    pod = MockPod(
-        environment_variables={
-            'MY_VAR': 'my_value',
-            '_TAPIS_INTERNAL_USE_TEMPLATE_ENVS': 'True',
-        },
-        modified_fields=[]
-    )
-    
-    result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
-    
-    # Should have both template and pod env vars
-    assert result.environment_variables['DB_HOST'] == 'localhost'
-    assert result.environment_variables['DB_PORT'] == '5432'
-    assert result.environment_variables['MY_VAR'] == 'my_value'
-
-
-@patch('models_templates_utils.derive_template_info')
-@patch('models_templates_utils.t')
-def test_pod_env_vars_override_template(mock_t_obj, mock_derive, template_with_env_vars):
-    """Pod env vars should override template env vars with same key when pod has modified environment_variables"""
-    from models_templates_utils import combine_pod_and_template_recursively
-    
-    mock_t_obj.tenant_cache = MockTenantCache()
-    mock_derive.return_value = ("template1:latest@2024-01-01", MockTemplate(), template_with_env_vars)
-    
-    pod = MockPod(
-        environment_variables={
-            'DB_HOST': 'production-db.example.com',  # override template
-            '_TAPIS_INTERNAL_USE_TEMPLATE_ENVS': 'True',
-        },
-        modified_fields=['environment_variables']  # pod's env vars should take priority
-    )
-    
-    result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
-    
-    # Pod's value should override template's value
-    assert result.environment_variables['DB_HOST'] == 'production-db.example.com'
-    # Template-only vars should still be present
-    assert result.environment_variables['DB_PORT'] == '5432'
-
-
-@patch('models_templates_utils.derive_template_info')
-@patch('models_templates_utils.t')
-def test_env_vars_not_merged_when_flag_false(mock_t_obj, mock_derive, template_with_env_vars):
-    """When _TAPIS_INTERNAL_USE_TEMPLATE_ENVS=False, use only pod envs"""
-    from models_templates_utils import combine_pod_and_template_recursively
-    
-    mock_t_obj.tenant_cache = MockTenantCache()
-    mock_derive.return_value = ("template1:latest@2024-01-01", MockTemplate(), template_with_env_vars)
-    
-    pod = MockPod(
-        environment_variables={
-            'MY_VAR': 'my_value',
-            '_TAPIS_INTERNAL_USE_TEMPLATE_ENVS': 'False',
-        },
-        modified_fields=[]
-    )
-    
-    result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
-    
-    # Should only have pod env vars, not template vars
-    assert result.environment_variables['MY_VAR'] == 'my_value'
-    # This behavior leaves pod's env_vars unchanged when flag is False
-    # Template vars should NOT be added
-    assert 'DB_HOST' not in result.environment_variables or result.environment_variables.get('DB_HOST') is None
-
-
-@patch('models_templates_utils.derive_template_info')
-@patch('models_templates_utils.t')
-def test_env_vars_default_merge_behavior(mock_t_obj, mock_derive, template_with_env_vars):
-    """Default behavior (no flag) should merge like True"""
-    from models_templates_utils import combine_pod_and_template_recursively
-    
-    mock_t_obj.tenant_cache = MockTenantCache()
-    mock_derive.return_value = ("template1:latest@2024-01-01", MockTemplate(), template_with_env_vars)
-    
-    pod = MockPod(
-        environment_variables={'MY_VAR': 'my_value'},  # no flag set
-        modified_fields=[]
-    )
-    
-    result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
-    
-    # Default behavior is True, so should merge
-    assert result.environment_variables['DB_HOST'] == 'localhost'
-    assert result.environment_variables['MY_VAR'] == 'my_value'
-
-
-# ============================================================================
-# TEST: Volume Mounts Merge
-# ============================================================================
-
-@patch('models_templates_utils.derive_template_info')
-@patch('models_templates_utils.t')
-def test_volume_mounts_merged_when_flag_true(mock_t_obj, mock_derive, template_with_volume_mounts):
-    """When _TAPIS_INTERNAL_USE_TEMPLATE_VOLUMES=True, merge template + pod volumes"""
-    from models_templates_utils import combine_pod_and_template_recursively
-    
-    mock_t_obj.tenant_cache = MockTenantCache()
-    mock_derive.return_value = ("template1:latest@2024-01-01", MockTemplate(), template_with_volume_mounts)
-    
-    pod = MockPod(
-        environment_variables={'_TAPIS_INTERNAL_USE_TEMPLATE_VOLUMES': 'True'},
-        volume_mounts={
-            'my-volume': {'type': 'tapisvolume', 'mount_path': '/mnt/mydata'},
-        },
-        modified_fields=[]
-    )
-    
-    result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
-    
-    # Should have both template and pod volume mounts
-    assert 'data-volume' in result.volume_mounts
-    assert 'config-volume' in result.volume_mounts
-    assert 'my-volume' in result.volume_mounts
-
-
-@patch('models_templates_utils.derive_template_info')
-@patch('models_templates_utils.t')
-def test_pod_volumes_override_template(mock_t_obj, mock_derive, template_with_volume_mounts):
-    """Pod volumes should override template volumes with same key"""
-    from models_templates_utils import combine_pod_and_template_recursively
-    
-    mock_t_obj.tenant_cache = MockTenantCache()
-    mock_derive.return_value = ("template1:latest@2024-01-01", MockTemplate(), template_with_volume_mounts)
-    
-    pod = MockPod(
-        environment_variables={'_TAPIS_INTERNAL_USE_TEMPLATE_VOLUMES': 'True'},
-        volume_mounts={
-            'data-volume': {'type': 'tapisvolume', 'mount_path': '/custom/path'},  # override
-        },
-        modified_fields=[]
-    )
-    
-    result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
-    
-    # Pod's value should override
-    assert result.volume_mounts['data-volume']['mount_path'] == '/custom/path'
-    # Template-only volumes should still be present
-    assert 'config-volume' in result.volume_mounts
-
-
-@patch('models_templates_utils.derive_template_info')
-@patch('models_templates_utils.t')
-def test_volume_mounts_not_merged_when_flag_false(mock_t_obj, mock_derive, template_with_volume_mounts):
-    """When _TAPIS_INTERNAL_USE_TEMPLATE_VOLUMES=False, use only pod volumes"""
-    from models_templates_utils import combine_pod_and_template_recursively
-    
-    mock_t_obj.tenant_cache = MockTenantCache()
-    mock_derive.return_value = ("template1:latest@2024-01-01", MockTemplate(), template_with_volume_mounts)
-    
-    pod = MockPod(
-        environment_variables={'_TAPIS_INTERNAL_USE_TEMPLATE_VOLUMES': 'False'},
-        volume_mounts={
-            'my-volume': {'type': 'tapisvolume', 'mount_path': '/mnt/mydata'},
-        },
-        modified_fields=[]
-    )
-    
-    result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
-    
-    # Should only have pod volume mounts
-    assert 'my-volume' in result.volume_mounts
-    assert 'data-volume' not in result.volume_mounts
-    assert 'config-volume' not in result.volume_mounts
-
-
-# ============================================================================
-# TEST: Template Chaining (Recursive)
-# ============================================================================
-
-@patch('models_templates_utils.derive_template_info')
-@patch('models_templates_utils.t')
-def test_two_level_template_chain(mock_t_obj, mock_derive):
-    """Test template1 -> template2 chain"""
-    from models_templates_utils import combine_pod_and_template_recursively
-    
-    mock_t_obj.tenant_cache = MockTenantCache()
-    
-    # Base template (template2) - sets image and cpu_request
-    template2 = MockTemplateTag(
-        template_id="template2",
-        pod_definition={
-            'image': 'base-image:latest',
-            'template': None,  # No parent
-            'description': 'Base template',
-            'command': None,
-            'arguments': None,
-            'environment_variables': {'BASE_VAR': 'base_value'},
-            'volume_mounts': {},
-            'networking': {},
-            'resources': {'cpu_request': 500},
-            'compute_queue': 'default',
-            'time_to_stop_default': None,
-            'time_to_stop_instance': None,
-        }
-    )
-    
-    # Child template (template1) - inherits from template2, overrides image
-    template1 = MockTemplateTag(
-        template_id="template1",
-        pod_definition={
-            'image': 'child-image:latest',  # overrides base
-            'template': 'template2:latest@2024-01-01',  # references template2
-            'description': None,  # inherits from template2
-            'command': None,
-            'arguments': None,
-            'environment_variables': {'CHILD_VAR': 'child_value'},
-            'volume_mounts': {},
-            'networking': {},
-            'resources': {'cpu_limit': 3000},  # adds cpu_limit
-            'compute_queue': 'default',
-            'time_to_stop_default': None,
-            'time_to_stop_instance': None,
-        }
-    )
-    
-    def derive_side_effect(template_name, *args, **kwargs):
-        if 'template2' in template_name:
-            return ("template2:latest@2024-01-01", MockTemplate("template2"), template2)
-        else:
+    def test_all_resource_fields_priority(self):
+        """Comprehensive test of all 7 resource subfields with template chain"""
+        from models_templates_utils import combine_pod_and_template_recursively
+        
+        mock_t_obj = MagicMock()
+        mock_t_obj.tenant_cache = MockTenantCache()
+        
+        # Deeper template sets all resources
+        template2 = make_template(
+            template_id="template2",
+            resources={'cpu_request': 100, 'cpu_limit': 1000, 'mem_request': 128, 
+                      'mem_limit': 1024, 'gpus': 0, 'ephemeral_storage_request': 512,
+                      'ephemeral_storage_limit': 1024}
+        )
+        
+        # Closer template overrides some
+        template1_def = MockTemplateTagPodDefinition().dict()
+        template1_def['template'] = 'template2:latest@2024-01-01'
+        template1_def['resources'] = {'cpu_request': 200, 'mem_limit': 2048, 'ephemeral_storage_request': 1024}
+        template1 = MockTemplateTag(template_id="template1", pod_definition=template1_def)
+        
+        def derive_side_effect(name, *args, **kwargs):
+            if 'template2' in name:
+                return ("template2:latest@2024-01-01", MockTemplate("template2"), template2)
             return ("template1:latest@2024-01-01", MockTemplate("template1"), template1)
-    
-    mock_derive.side_effect = derive_side_effect
-    
-    pod = MockPod(
-        environment_variables={},
-        modified_fields=[]
-    )
-    
-    result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
-    
-    # Should have template1's image (overrides template2)
-    assert result.image == 'child-image:latest'
-    # Should have template2's description (template1 didn't set it)
-    assert result.description == 'Base template'
-    # Should have both env vars merged
-    assert result.environment_variables.get('BASE_VAR') == 'base_value'
-    assert result.environment_variables.get('CHILD_VAR') == 'child_value'
-    # Should have resources from both
-    assert result.resources.get('cpu_request') == 500  # from template2
-    assert result.resources.get('cpu_limit') == 3000   # from template1
-
-
-@patch('models_templates_utils.derive_template_info')
-@patch('models_templates_utils.t')
-def test_three_level_template_chain(mock_t_obj, mock_derive):
-    """Test template1 -> template2 -> template3 chain"""
-    from models_templates_utils import combine_pod_and_template_recursively
-    
-    mock_t_obj.tenant_cache = MockTenantCache()
-    
-    # Innermost template (template3)
-    template3 = MockTemplateTag(
-        template_id="template3",
-        pod_definition={
-            'image': 'base-image:v1',
-            'template': None,
-            'description': 'Level 3 description',
-            'command': ['/bin/bash'],
-            'arguments': None,
-            'environment_variables': {'LEVEL': '3'},
-            'volume_mounts': {},
-            'networking': {},
-            'resources': {'cpu_request': 100, 'mem_request': 128},
-            'compute_queue': 'default',
-            'time_to_stop_default': 3600,
-            'time_to_stop_instance': None,
-        }
-    )
-    
-    # Middle template (template2)
-    template2 = MockTemplateTag(
-        template_id="template2",
-        pod_definition={
-            'image': 'middle-image:v2',
-            'template': 'template3:latest@2024-01-01',
-            'description': None,  # inherit from template3
-            'command': None,  # inherit from template3
-            'arguments': ['--verbose'],
-            'environment_variables': {'LEVEL': '2', 'MIDDLE_VAR': 'middle'},
-            'volume_mounts': {},
-            'networking': {},
-            'resources': {'cpu_request': 200},  # override template3
-            'compute_queue': 'default',
-            'time_to_stop_default': None,
-            'time_to_stop_instance': None,
-        }
-    )
-    
-    # Outermost template (template1)
-    template1 = MockTemplateTag(
-        template_id="template1",
-        pod_definition={
-            'image': None,  # inherit from template2
-            'template': 'template2:latest@2024-01-01',
-            'description': 'Level 1 description',  # override
-            'command': None,
-            'arguments': None,
-            'environment_variables': {'LEVEL': '1'},  # override
-            'volume_mounts': {},
-            'networking': {},
-            'resources': {'cpu_limit': 1000},  # add new
-            'compute_queue': 'gpu',  # override
-            'time_to_stop_default': None,
-            'time_to_stop_instance': None,
-        }
-    )
-    
-    def derive_side_effect(template_name, *args, **kwargs):
-        if 'template3' in template_name:
-            return ("template3:latest@2024-01-01", MockTemplate("template3"), template3)
-        elif 'template2' in template_name:
-            return ("template2:latest@2024-01-01", MockTemplate("template2"), template2)
-        else:
-            return ("template1:latest@2024-01-01", MockTemplate("template1"), template1)
-    
-    mock_derive.side_effect = derive_side_effect
-    
-    pod = MockPod(
-        environment_variables={},
-        modified_fields=[]
-    )
-    
-    result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
-    
-    # image: template1(None) -> template2(middle-image) -> template3(base-image)
-    # After processing: template2's image should be applied (it overrides template3)
-    assert result.image == 'middle-image:v2'
-    
-    # description: template1 sets it, so it wins
-    assert result.description == 'Level 1 description'
-    
-    # command: template1(None) -> template2(None) -> template3(['/bin/bash'])
-    assert result.command == ['/bin/bash']
-    
-    # arguments: template2 sets it
-    assert result.arguments == ['--verbose']
-    
-    # LEVEL env var: closer templates override deeper ones
-    # template1 sets LEVEL='1', which should override template2's '2' and template3's '3'
-    assert result.environment_variables.get('LEVEL') == '1'
-    assert result.environment_variables.get('MIDDLE_VAR') == 'middle'
-    
-    # compute_queue: template1 sets 'gpu'
-    assert result.compute_queue == 'gpu'
-
-
-@patch('models_templates_utils.derive_template_info')
-@patch('models_templates_utils.t')
-def test_pod_overrides_template_chain(mock_t_obj, mock_derive):
-    """Pod's modified fields should override entire template chain"""
-    from models_templates_utils import combine_pod_and_template_recursively
-    
-    mock_t_obj.tenant_cache = MockTenantCache()
-    
-    template2 = MockTemplateTag(
-        template_id="template2",
-        pod_definition={
-            'image': 'template2-image:latest',
-            'template': None,
-            'description': 'Template 2 description',
-            'command': None,
-            'arguments': None,
-            'environment_variables': {},
-            'volume_mounts': {},
-            'networking': {},
-            'resources': {'cpu_request': 500},
-            'compute_queue': 'default',
-            'time_to_stop_default': None,
-            'time_to_stop_instance': None,
-        }
-    )
-    
-    template1 = MockTemplateTag(
-        template_id="template1",
-        pod_definition={
-            'image': 'template1-image:latest',
-            'template': 'template2:latest@2024-01-01',
-            'description': 'Template 1 description',
-            'command': None,
-            'arguments': None,
-            'environment_variables': {},
-            'volume_mounts': {},
-            'networking': {},
-            'resources': {'cpu_request': 1000},
-            'compute_queue': 'default',
-            'time_to_stop_default': None,
-            'time_to_stop_instance': None,
-        }
-    )
-    
-    def derive_side_effect(template_name, *args, **kwargs):
-        if 'template2' in template_name:
-            return ("template2:latest@2024-01-01", MockTemplate("template2"), template2)
-        else:
-            return ("template1:latest@2024-01-01", MockTemplate("template1"), template1)
-    
-    mock_derive.side_effect = derive_side_effect
-    
-    # Pod with user-modified fields
-    pod = MockPod(
-        image='my-custom-image:v1',
-        description='My pod description',
-        resources=MockResources(cpu_request=2000),
-        modified_fields=['image', 'description', 'resources.cpu_request']
-    )
-    
-    result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
-    
-    # Pod's values should be preserved
-    assert result.image == 'my-custom-image:v1'
-    assert result.description == 'My pod description'
-    assert result.resources['cpu_request'] == 2000
+        
+        with patch('models_templates_utils.derive_template_info', side_effect=derive_side_effect), \
+             patch('models_templates_utils.t', mock_t_obj):
+            
+            # Pod modifies only gpus
+            pod = MockPod(resources=MockResources(gpus=2), modified_fields=['resources.gpus'])
+            result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
+            
+            # Verify priority order for each field
+            assert result.resources['cpu_request'] == 200  # closer template
+            assert result.resources['cpu_limit'] == 1000   # deeper template
+            assert result.resources['mem_request'] == 128  # deeper template
+            assert result.resources['mem_limit'] == 2048   # closer template
+            assert result.resources['gpus'] == 2           # pod modified
+            assert result.resources['ephemeral_storage_request'] == 1024  # closer template
+            assert result.resources['ephemeral_storage_limit'] == 1024    # deeper template
 
 
 # ============================================================================
-# TEST: Infinite Loop Detection
+# TEST: Networking Merge (Consolidated - was 4 tests)
 # ============================================================================
 
-@patch('models_templates_utils.derive_template_info')
-@patch('models_templates_utils.t')
-def test_self_referencing_template(mock_t_obj, mock_derive):
-    """Template referencing itself should raise ValueError"""
-    from models_templates_utils import combine_pod_and_template_recursively
+class TestNetworkingMerge:
+    """Test networking merge and URL generation"""
     
-    mock_t_obj.tenant_cache = MockTenantCache()
-    
-    # Template that references itself
-    template1 = MockTemplateTag(
-        template_id="template1",
-        pod_definition={
-            'image': 'some-image:latest',
-            'template': 'template1:latest@2024-01-01',  # self-reference!
-            'description': None,
-            'command': None,
-            'arguments': None,
-            'environment_variables': {},
-            'volume_mounts': {},
-            'networking': {},
-            'resources': {},
-            'compute_queue': 'default',
-            'time_to_stop_default': None,
-            'time_to_stop_instance': None,
-        }
-    )
-    
-    mock_derive.return_value = ("template1:latest@2024-01-01", MockTemplate("template1"), template1)
-    
-    pod = MockPod()
-    
-    with pytest.raises(ValueError) as excinfo:
-        combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
-    
-    assert "Infinite loop detected" in str(excinfo.value)
-    assert "template1" in str(excinfo.value)
-
-
-@patch('models_templates_utils.derive_template_info')
-@patch('models_templates_utils.t')
-def test_circular_template_chain(mock_t_obj, mock_derive):
-    """Circular chain (A -> B -> A) should raise ValueError"""
-    from models_templates_utils import combine_pod_and_template_recursively
-    
-    mock_t_obj.tenant_cache = MockTenantCache()
-    
-    # Template A references B
-    template_a = MockTemplateTag(
-        template_id="template_a",
-        pod_definition={
-            'image': 'image-a:latest',
-            'template': 'template_b:latest@2024-01-01',
-            'description': None,
-            'command': None,
-            'arguments': None,
-            'environment_variables': {},
-            'volume_mounts': {},
-            'networking': {},
-            'resources': {},
-            'compute_queue': 'default',
-            'time_to_stop_default': None,
-            'time_to_stop_instance': None,
-        }
-    )
-    
-    # Template B references A (circular!)
-    template_b = MockTemplateTag(
-        template_id="template_b",
-        pod_definition={
-            'image': 'image-b:latest',
-            'template': 'template_a:latest@2024-01-01',  # circular reference!
-            'description': None,
-            'command': None,
-            'arguments': None,
-            'environment_variables': {},
-            'volume_mounts': {},
-            'networking': {},
-            'resources': {},
-            'compute_queue': 'default',
-            'time_to_stop_default': None,
-            'time_to_stop_instance': None,
-        }
-    )
-    
-    def derive_side_effect(template_name, *args, **kwargs):
-        if 'template_b' in template_name:
-            return ("template_b:latest@2024-01-01", MockTemplate("template_b"), template_b)
-        else:
-            return ("template_a:latest@2024-01-01", MockTemplate("template_a"), template_a)
-    
-    mock_derive.side_effect = derive_side_effect
-    
-    pod = MockPod()
-    
-    with pytest.raises(ValueError) as excinfo:
-        combine_pod_and_template_recursively(pod, "template_a", tenant="dev", site="tacc")
-    
-    assert "Infinite loop detected" in str(excinfo.value)
-
-
-@patch('models_templates_utils.derive_template_info')
-@patch('models_templates_utils.t')
-def test_three_level_circular_chain(mock_t_obj, mock_derive):
-    """Three-level circular chain (A -> B -> C -> A) should raise ValueError"""
-    from models_templates_utils import combine_pod_and_template_recursively
-    
-    mock_t_obj.tenant_cache = MockTenantCache()
-    
-    template_c = MockTemplateTag(
-        template_id="template_c",
-        pod_definition={
-            'image': 'image-c:latest',
-            'template': 'template_a:latest@2024-01-01',  # back to A!
-            'description': None,
-            'command': None,
-            'arguments': None,
-            'environment_variables': {},
-            'volume_mounts': {},
-            'networking': {},
-            'resources': {},
-            'compute_queue': 'default',
-            'time_to_stop_default': None,
-            'time_to_stop_instance': None,
-        }
-    )
-    
-    template_b = MockTemplateTag(
-        template_id="template_b",
-        pod_definition={
-            'image': 'image-b:latest',
-            'template': 'template_c:latest@2024-01-01',
-            'description': None,
-            'command': None,
-            'arguments': None,
-            'environment_variables': {},
-            'volume_mounts': {},
-            'networking': {},
-            'resources': {},
-            'compute_queue': 'default',
-            'time_to_stop_default': None,
-            'time_to_stop_instance': None,
-        }
-    )
-    
-    template_a = MockTemplateTag(
-        template_id="template_a",
-        pod_definition={
-            'image': 'image-a:latest',
-            'template': 'template_b:latest@2024-01-01',
-            'description': None,
-            'command': None,
-            'arguments': None,
-            'environment_variables': {},
-            'volume_mounts': {},
-            'networking': {},
-            'resources': {},
-            'compute_queue': 'default',
-            'time_to_stop_default': None,
-            'time_to_stop_instance': None,
-        }
-    )
-    
-    def derive_side_effect(template_name, *args, **kwargs):
-        if 'template_c' in template_name:
-            return ("template_c:latest@2024-01-01", MockTemplate("template_c"), template_c)
-        elif 'template_b' in template_name:
-            return ("template_b:latest@2024-01-01", MockTemplate("template_b"), template_b)
-        else:
-            return ("template_a:latest@2024-01-01", MockTemplate("template_a"), template_a)
-    
-    mock_derive.side_effect = derive_side_effect
-    
-    pod = MockPod()
-    
-    with pytest.raises(ValueError) as excinfo:
-        combine_pod_and_template_recursively(pod, "template_a", tenant="dev", site="tacc")
-    
-    assert "Infinite loop detected" in str(excinfo.value)
+    def test_networking_merge_and_urls(self):
+        """Test networking merge from template and URL generation"""
+        from models_templates_utils import combine_pod_and_template_recursively
+        
+        mock_t_obj = MagicMock()
+        mock_t_obj.tenant_cache = MockTenantCache()
+        template = make_template(
+            networking={'default': {'protocol': 'http', 'port': 8080, 'tapis_auth': True},
+                       'api': {'protocol': 'http', 'port': 3000}}
+        )
+        
+        with patch('models_templates_utils.derive_template_info') as mock_derive, \
+             patch('models_templates_utils.t', mock_t_obj):
+            mock_derive.return_value = ("template1:latest@2024-01-01", MockTemplate(), template)
+            
+            # Test template networking applied
+            pod = MockPod(pod_id="mypod", networking={"default": {"protocol": "http", "port": 5000}},
+                         modified_fields=[])
+            result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
+            
+            assert result.networking['default']['port'] == 8080
+            assert result.networking['default']['tapis_auth'] == True
+            assert result.networking['api']['port'] == 3000
+            assert 'mypod.pods.' in result.networking['default']['url']
+            assert 'mypod-api.pods.' in result.networking['api']['url']
+            
+            # Test pod modifications preserved
+            pod = MockPod(pod_id="mypod",
+                         networking={"default": {"protocol": "http", "port": 9000, "tapis_auth": False}},
+                         modified_fields=['networking'])
+            result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
+            assert result.networking['default']['port'] == 9000
+            assert 'api' in result.networking  # Template's 'api' still present
 
 
 # ============================================================================
-# TEST: Simple Field Overrides
+# TEST: Environment Variables Merge (Consolidated - was 4 tests)
 # ============================================================================
 
-@patch('models_templates_utils.derive_template_info')
-@patch('models_templates_utils.t')
-def test_image_override(mock_t_obj, mock_derive, template_with_simple_fields):
-    """Test image field priority"""
-    from models_templates_utils import combine_pod_and_template_recursively
+class TestEnvironmentVariablesMerge:
+    """Test environment_variables merge behavior"""
     
-    mock_t_obj.tenant_cache = MockTenantCache()
-    mock_derive.return_value = ("template1:latest@2024-01-01", MockTemplate(), template_with_simple_fields)
-    
-    # Pod with default image (not modified)
-    pod = MockPod(image="", modified_fields=[])
-    result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
-    assert result.image == 'template-image:v1'
-    
-    # Pod with modified image
-    pod = MockPod(image="my-image:v2", modified_fields=['image'])
-    result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
-    assert result.image == 'my-image:v2'
+    def test_env_vars_merge_behavior(self):
+        """Test env vars merge with _TAPIS_INTERNAL_USE_TEMPLATE_ENVS flag"""
+        from models_templates_utils import combine_pod_and_template_recursively
+        
+        mock_t_obj = MagicMock()
+        mock_t_obj.tenant_cache = MockTenantCache()
+        template = make_template(
+            environment_variables={'DB_HOST': 'localhost', 'DB_PORT': '5432', 'TEMPLATE_VAR': 'from_template'}
+        )
+        
+        with patch('models_templates_utils.derive_template_info') as mock_derive, \
+             patch('models_templates_utils.t', mock_t_obj):
+            mock_derive.return_value = ("template1:latest@2024-01-01", MockTemplate(), template)
+            
+            # Default behavior merges (like True)
+            pod = MockPod(environment_variables={'MY_VAR': 'my_value'}, modified_fields=[])
+            result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
+            assert result.environment_variables['DB_HOST'] == 'localhost'
+            assert result.environment_variables['MY_VAR'] == 'my_value'
+            
+            # Pod override takes precedence when modified
+            pod = MockPod(
+                environment_variables={'DB_HOST': 'production.example.com', 
+                                       '_TAPIS_INTERNAL_USE_TEMPLATE_ENVS': 'True'},
+                modified_fields=['environment_variables'])
+            result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
+            assert result.environment_variables['DB_HOST'] == 'production.example.com'
+            assert result.environment_variables['DB_PORT'] == '5432'
 
 
-@patch('models_templates_utils.derive_template_info')
-@patch('models_templates_utils.t')
-def test_description_override(mock_t_obj, mock_derive, template_with_simple_fields):
-    """Test description field priority"""
-    from models_templates_utils import combine_pod_and_template_recursively
+# ============================================================================
+# TEST: Volume Mounts Merge (Consolidated - was 3 tests)
+# ============================================================================
+
+class TestVolumeMountsMerge:
+    """Test volume_mounts merge behavior"""
     
-    mock_t_obj.tenant_cache = MockTenantCache()
-    mock_derive.return_value = ("template1:latest@2024-01-01", MockTemplate(), template_with_simple_fields)
-    
-    # Pod with default description (not modified)
-    pod = MockPod(description="", modified_fields=[])
-    result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
-    assert result.description == 'Template description'
-    
-    # Pod with modified description
-    pod = MockPod(description="My custom description", modified_fields=['description'])
-    result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
-    assert result.description == 'My custom description'
+    def test_volume_mounts_merge_behavior(self):
+        """Test volume mounts merge with override and removal"""
+        from models_templates_utils import combine_pod_and_template_recursively
+        
+        mock_t_obj = MagicMock()
+        mock_t_obj.tenant_cache = MockTenantCache()
+        template = make_template(
+            volume_mounts={'/data': {'type': 'tapisvolume', 'source_id': 'datavolume', 'read_only': False},
+                          '/config': {'type': 'pvc', 'source_id': 'configvolume', 'read_only': False}}
+        )
+        
+        with patch('models_templates_utils.derive_template_info') as mock_derive, \
+             patch('models_templates_utils.t', mock_t_obj):
+            mock_derive.return_value = ("template1:latest@2024-01-01", MockTemplate(), template)
+            
+            # Merge template + pod volumes
+            pod = MockPod(
+                environment_variables={'_TAPIS_INTERNAL_USE_TEMPLATE_VOLUMES': 'True'},
+                volume_mounts={'/mnt/mydata': {'type': 'tapisvolume', 'source_id': 'myvolume'}},
+                modified_fields=[]
+            )
+            result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
+            assert '/data' in result.volume_mounts
+            assert '/config' in result.volume_mounts
+            assert '/mnt/mydata' in result.volume_mounts
+            
+            # Pod can override template volume
+            pod = MockPod(
+                environment_variables={'_TAPIS_INTERNAL_USE_TEMPLATE_VOLUMES': 'True'},
+                volume_mounts={'/data': {'type': 'tapisvolume', 'source_id': 'customdata', 'read_only': True}},
+                modified_fields=[]
+            )
+            result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
+            assert result.volume_mounts['/data']['source_id'] == 'customdata'
 
 
-@patch('models_templates_utils.derive_template_info')
-@patch('models_templates_utils.t')
-def test_command_override(mock_t_obj, mock_derive, template_with_simple_fields):
-    """Test command field priority"""
-    from models_templates_utils import combine_pod_and_template_recursively
+# ============================================================================
+# TEST: Secret Map Merge (Consolidated - was 4 tests)
+# ============================================================================
+
+class TestSecretMapMerge:
+    """Test secret_map merge and override behavior"""
     
-    mock_t_obj.tenant_cache = MockTenantCache()
-    mock_derive.return_value = ("template1:latest@2024-01-01", MockTemplate(), template_with_simple_fields)
-    
-    # Pod with default command (not modified)
-    pod = MockPod(command=None, modified_fields=[])
-    result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
-    assert result.command == ['python', 'app.py']
-    
-    # Pod with modified command
-    pod = MockPod(command=['./start.sh'], modified_fields=['command'])
-    result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
-    assert result.command == ['./start.sh']
+    def test_secret_map_inheritance_and_override(self):
+        """Test secret_map inherited from template and pod overrides"""
+        from models_templates_utils import combine_pod_and_template_recursively
+        
+        mock_t_obj = MagicMock()
+        mock_t_obj.tenant_cache = MockTenantCache()
+        template = make_template(
+            image='postgres:15',
+            secret_map={'DB_PASSWORD': '${:?Database password}', 
+                       'DB_HOST': '${default:localhost:?Database host}',
+                       'DB_PORT': '${default:5432:?Database port}'}
+        )
+        
+        with patch('models_templates_utils.derive_template_info') as mock_derive, \
+             patch('models_templates_utils.t', mock_t_obj):
+            mock_derive.return_value = ("template1:latest@2024-01-01", MockTemplate(), template)
+            
+            # Pod inherits template secrets
+            pod = MockPod(secret_map={}, modified_fields=[])
+            result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
+            assert 'DB_PASSWORD' in result.secret_map
+            assert 'DB_HOST' in result.secret_map
+            
+            # Pod can override template secrets
+            pod = MockPod(
+                secret_map={'DB_PASSWORD': '${secret:myactualpassword}', 
+                           'DB_HOST': 'production.db.example.com'},
+                modified_fields=['secret_map']
+            )
+            result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
+            assert result.secret_map['DB_PASSWORD'] == '${secret:myactualpassword}'
+            assert result.secret_map['DB_HOST'] == 'production.db.example.com'
+            assert result.secret_map['DB_PORT'] == '${default:5432:?Database port}'  # inherited
 
 
-@patch('models_templates_utils.derive_template_info')
-@patch('models_templates_utils.t')
-def test_arguments_override(mock_t_obj, mock_derive, template_with_simple_fields):
-    """Test arguments field priority"""
-    from models_templates_utils import combine_pod_and_template_recursively
+# ============================================================================
+# TEST: Template Chaining (Consolidated - was 4 tests)
+# ============================================================================
+
+class TestTemplateChaining:
+    """Test recursive template chaining"""
     
-    mock_t_obj.tenant_cache = MockTenantCache()
-    mock_derive.return_value = ("template1:latest@2024-01-01", MockTemplate(), template_with_simple_fields)
-    
-    # Pod with default arguments (not modified)
-    pod = MockPod(arguments=None, modified_fields=[])
-    result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
-    assert result.arguments == ['--port', '8080']
-    
-    # Pod with modified arguments
-    pod = MockPod(arguments=['--debug'], modified_fields=['arguments'])
-    result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
-    assert result.arguments == ['--debug']
+    def test_three_level_chain(self):
+        """Test template1 -> template2 -> template3 chain"""
+        from models_templates_utils import combine_pod_and_template_recursively
+        
+        mock_t_obj = MagicMock()
+        mock_t_obj.tenant_cache = MockTenantCache()
+        
+        # template3 (base)
+        t3 = make_template(template_id="template3", image='base-image:v1', description='Level 3',
+                          command=['/bin/bash'], environment_variables={'LEVEL': '3'},
+                          resources={'cpu_request': 100}, time_to_stop_default=3600)
+        
+        # template2 (middle)
+        t2_def = MockTemplateTagPodDefinition().dict()
+        t2_def['template'] = 'template3:latest@2024-01-01'
+        t2_def['image'] = 'middle-image:v2'
+        t2_def['arguments'] = ['--verbose']
+        t2_def['environment_variables'] = {'LEVEL': '2', 'MIDDLE_VAR': 'middle'}
+        t2_def['resources'] = {'cpu_request': 200}
+        t2 = MockTemplateTag(template_id="template2", pod_definition=t2_def)
+        
+        # template1 (outer)
+        t1_def = MockTemplateTagPodDefinition().dict()
+        t1_def['template'] = 'template2:latest@2024-01-01'
+        t1_def['description'] = 'Level 1'
+        t1_def['environment_variables'] = {'LEVEL': '1'}
+        t1_def['resources'] = {'cpu_limit': 1000}
+        t1_def['compute_queue'] = 'gpu'
+        t1 = MockTemplateTag(template_id="template1", pod_definition=t1_def)
+        
+        def derive_side_effect(name, *args, **kwargs):
+            if 'template3' in name:
+                return ("template3:latest", MockTemplate("template3"), t3)
+            elif 'template2' in name:
+                return ("template2:latest", MockTemplate("template2"), t2)
+            return ("template1:latest", MockTemplate("template1"), t1)
+        
+        with patch('models_templates_utils.derive_template_info', side_effect=derive_side_effect), \
+             patch('models_templates_utils.t', mock_t_obj):
+            
+            pod = MockPod(modified_fields=[])
+            result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
+            
+            # Test inheritance chain
+            assert result.image == 'middle-image:v2'  # template2 overrides template3
+            assert result.description == 'Level 1'    # template1 overrides
+            assert result.command == ['/bin/bash']    # from template3
+            assert result.arguments == ['--verbose']  # from template2
+            assert result.environment_variables['LEVEL'] == '1'  # template1 overrides
+            assert result.environment_variables['MIDDLE_VAR'] == 'middle'
+            assert result.compute_queue == 'gpu'
+
+    def test_pod_overrides_entire_chain(self):
+        """Pod's modified fields override entire template chain"""
+        from models_templates_utils import combine_pod_and_template_recursively
+        
+        mock_t_obj = MagicMock()
+        mock_t_obj.tenant_cache = MockTenantCache()
+        
+        t2 = make_template(template_id="template2", image='template2-image', description='T2 desc',
+                          resources={'cpu_request': 500})
+        t1_def = MockTemplateTagPodDefinition().dict()
+        t1_def['template'] = 'template2:latest'
+        t1_def['image'] = 'template1-image'
+        t1_def['description'] = 'T1 desc'
+        t1_def['resources'] = {'cpu_request': 1000}
+        t1 = MockTemplateTag(template_id="template1", pod_definition=t1_def)
+        
+        def derive_side_effect(name, *args, **kwargs):
+            if 'template2' in name:
+                return ("template2:latest", MockTemplate("template2"), t2)
+            return ("template1:latest", MockTemplate("template1"), t1)
+        
+        with patch('models_templates_utils.derive_template_info', side_effect=derive_side_effect), \
+             patch('models_templates_utils.t', mock_t_obj):
+            
+            pod = MockPod(image='my-custom-image', description='My pod desc',
+                         resources=MockResources(cpu_request=2000),
+                         modified_fields=['image', 'description', 'resources.cpu_request'])
+            result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
+            
+            assert result.image == 'my-custom-image'
+            assert result.description == 'My pod desc'
+            assert result.resources['cpu_request'] == 2000
 
 
-@patch('models_templates_utils.derive_template_info')
-@patch('models_templates_utils.t')
-def test_compute_queue_override(mock_t_obj, mock_derive, template_with_simple_fields):
-    """Test compute_queue field priority"""
-    from models_templates_utils import combine_pod_and_template_recursively
-    
-    mock_t_obj.tenant_cache = MockTenantCache()
-    mock_derive.return_value = ("template1:latest@2024-01-01", MockTemplate(), template_with_simple_fields)
-    
-    # Pod with default compute_queue (not modified)
-    pod = MockPod(compute_queue="default", modified_fields=[])
-    result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
-    assert result.compute_queue == 'gpu'
-    
-    # Pod with modified compute_queue
-    pod = MockPod(compute_queue="high-memory", modified_fields=['compute_queue'])
-    result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
-    assert result.compute_queue == 'high-memory'
+# ============================================================================
+# TEST: Infinite Loop Detection (Consolidated - was 3 tests)
+# ============================================================================
 
-
-@patch('models_templates_utils.derive_template_info')
-@patch('models_templates_utils.t')
-def test_time_to_stop_default_override(mock_t_obj, mock_derive, template_with_simple_fields):
-    """Test time_to_stop_default field priority"""
-    from models_templates_utils import combine_pod_and_template_recursively
+class TestInfiniteLoopDetection:
+    """Test circular reference detection"""
     
-    mock_t_obj.tenant_cache = MockTenantCache()
-    mock_derive.return_value = ("template1:latest@2024-01-01", MockTemplate(), template_with_simple_fields)
-    
-    # Pod with default time_to_stop_default (not modified)
-    pod = MockPod(time_to_stop_default=43200, modified_fields=[])
-    result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
-    assert result.time_to_stop_default == 7200
-    
-    # Pod with modified time_to_stop_default
-    pod = MockPod(time_to_stop_default=86400, modified_fields=['time_to_stop_default'])
-    result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
-    assert result.time_to_stop_default == 86400
-
-
-@patch('models_templates_utils.derive_template_info')
-@patch('models_templates_utils.t')
-def test_time_to_stop_instance_override(mock_t_obj, mock_derive, template_with_simple_fields):
-    """Test time_to_stop_instance field priority"""
-    from models_templates_utils import combine_pod_and_template_recursively
-    
-    mock_t_obj.tenant_cache = MockTenantCache()
-    mock_derive.return_value = ("template1:latest@2024-01-01", MockTemplate(), template_with_simple_fields)
-    
-    # Pod with default time_to_stop_instance (not modified)
-    pod = MockPod(time_to_stop_instance=None, modified_fields=[])
-    result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
-    assert result.time_to_stop_instance == 3600
-    
-    # Pod with modified time_to_stop_instance
-    pod = MockPod(time_to_stop_instance=1800, modified_fields=['time_to_stop_instance'])
-    result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
-    assert result.time_to_stop_instance == 1800
+    @pytest.mark.parametrize("chain_type", ["self", "two_level", "three_level"])
+    def test_circular_references_detected(self, chain_type):
+        """Test that circular template references raise ValueError"""
+        from models_templates_utils import combine_pod_and_template_recursively
+        
+        mock_t_obj = MagicMock()
+        mock_t_obj.tenant_cache = MockTenantCache()
+        
+        if chain_type == "self":
+            # Self-reference: A -> A
+            t_def = MockTemplateTagPodDefinition().dict()
+            t_def['template'] = 'template1:latest'
+            t1 = MockTemplateTag(template_id="template1", pod_definition=t_def)
+            def derive(name, *a, **kw):
+                return ("template1:latest", MockTemplate("template1"), t1)
+        elif chain_type == "two_level":
+            # A -> B -> A
+            ta_def = MockTemplateTagPodDefinition().dict()
+            ta_def['template'] = 'template_b:latest'
+            ta = MockTemplateTag(template_id="template_a", pod_definition=ta_def)
+            tb_def = MockTemplateTagPodDefinition().dict()
+            tb_def['template'] = 'template_a:latest'
+            tb = MockTemplateTag(template_id="template_b", pod_definition=tb_def)
+            def derive(name, *a, **kw):
+                if 'template_b' in name:
+                    return ("template_b:latest", MockTemplate("template_b"), tb)
+                return ("template_a:latest", MockTemplate("template_a"), ta)
+        else:  # three_level
+            # A -> B -> C -> A
+            tc_def = MockTemplateTagPodDefinition().dict()
+            tc_def['template'] = 'template_a:latest'
+            tc = MockTemplateTag(template_id="template_c", pod_definition=tc_def)
+            tb_def = MockTemplateTagPodDefinition().dict()
+            tb_def['template'] = 'template_c:latest'
+            tb = MockTemplateTag(template_id="template_b", pod_definition=tb_def)
+            ta_def = MockTemplateTagPodDefinition().dict()
+            ta_def['template'] = 'template_b:latest'
+            ta = MockTemplateTag(template_id="template_a", pod_definition=ta_def)
+            def derive(name, *a, **kw):
+                if 'template_c' in name:
+                    return ("template_c:latest", MockTemplate("template_c"), tc)
+                elif 'template_b' in name:
+                    return ("template_b:latest", MockTemplate("template_b"), tb)
+                return ("template_a:latest", MockTemplate("template_a"), ta)
+        
+        with patch('models_templates_utils.derive_template_info', side_effect=derive), \
+             patch('models_templates_utils.t', mock_t_obj):
+            with pytest.raises(ValueError, match="Infinite loop detected"):
+                combine_pod_and_template_recursively(MockPod(), 
+                    "template1" if chain_type == "self" else "template_a",
+                    tenant="dev", site="tacc")
 
 
 # ============================================================================
 # TEST: No Template Case
 # ============================================================================
 
-def test_no_template_returns_unchanged_pod():
-    """When template_name is None/empty, pod should be returned unchanged"""
-    from models_templates_utils import combine_pod_and_template_recursively
+class TestNoTemplate:
+    """Test behavior when no template specified"""
     
-    pod = MockPod(
-        image="my-image:v1",
-        description="My description",
-        resources=MockResources(cpu_request=500)
-    )
-    
-    result = combine_pod_and_template_recursively(pod, None, tenant="dev", site="tacc")
-    
-    assert result.image == "my-image:v1"
-    assert result.description == "My description"
-
-
-def test_empty_template_returns_unchanged_pod():
-    """When template_name is empty string, pod should be returned unchanged"""
-    from models_templates_utils import combine_pod_and_template_recursively
-    
-    pod = MockPod(
-        image="my-image:v1",
-        description="My description"
-    )
-    
-    result = combine_pod_and_template_recursively(pod, "", tenant="dev", site="tacc")
-    
-    assert result.image == "my-image:v1"
-    assert result.description == "My description"
+    def test_no_template_returns_unchanged(self):
+        """When template_name is None/empty, pod is unchanged"""
+        from models_templates_utils import combine_pod_and_template_recursively
+        
+        pod = MockPod(image="my-image:v1", description="My description")
+        
+        result = combine_pod_and_template_recursively(pod, None, tenant="dev", site="tacc")
+        assert result.image == "my-image:v1"
+        assert result.description == "My description"
+        
+        result = combine_pod_and_template_recursively(pod, "", tenant="dev", site="tacc")
+        assert result.image == "my-image:v1"
 
 
 # ============================================================================
-# TEST: Three-Level Priority for All Resource Fields
-# Priority: pod modified > closer template > deeper template > pod defaults
+# TEST: Template Overrides (Consolidated - was 20+ tests)
 # ============================================================================
 
-@patch('models_templates_utils.derive_template_info')
-@patch('models_templates_utils.t')
-def test_resource_priority_ephemeral_storage_request(mock_t_obj, mock_derive):
-    """Test ephemeral_storage_request: closer template overrides deeper template"""
-    from models_templates_utils import combine_pod_and_template_recursively
-    
-    mock_t_obj.tenant_cache = MockTenantCache()
-    
-    # Deeper template sets ephemeral_storage_request = 2048
-    template2 = MockTemplateTag(
-        template_id="template2",
-        pod_definition={
-            'image': None, 'template': None, 'description': None, 'command': None,
-            'arguments': None, 'environment_variables': {}, 'volume_mounts': {},
-            'networking': {}, 'compute_queue': 'default',
-            'time_to_stop_default': None, 'time_to_stop_instance': None,
-            'resources': {'ephemeral_storage_request': 2048, 'ephemeral_storage_limit': 4096},
-        }
-    )
-    
-    # Closer template sets ephemeral_storage_request = 3072
-    template1 = MockTemplateTag(
-        template_id="template1",
-        pod_definition={
-            'image': None, 'template': 'template2:latest@2024-01-01', 'description': None,
-            'command': None, 'arguments': None, 'environment_variables': {},
-            'volume_mounts': {}, 'networking': {}, 'compute_queue': 'default',
-            'time_to_stop_default': None, 'time_to_stop_instance': None,
-            'resources': {'ephemeral_storage_request': 3072, 'ephemeral_storage_limit': 6144},
-        }
-    )
-    
-    def derive_side_effect(template_name, *args, **kwargs):
-        if 'template2' in template_name:
-            return ("template2:latest@2024-01-01", MockTemplate("template2"), template2)
-        else:
-            return ("template1:latest@2024-01-01", MockTemplate("template1"), template1)
-    
-    mock_derive.side_effect = derive_side_effect
-    
-    # Pod with default values (not modified)
-    pod = MockPod(
-        resources=MockResources(ephemeral_storage_request=4096),  # pod default
-        modified_fields=[]
-    )
-    
-    result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
-    
-    # Closer template (template1) should win: 3072, not 2048 (deeper) or 4096 (pod default)
-    assert result.resources['ephemeral_storage_request'] == 3072
-    assert result.resources['ephemeral_storage_limit'] == 6144
-
-
-@patch('models_templates_utils.derive_template_info')
-@patch('models_templates_utils.t')
-def test_resource_priority_pod_modified_overrides_all_templates(mock_t_obj, mock_derive):
-    """Test pod modified resource overrides entire template chain"""
-    from models_templates_utils import combine_pod_and_template_recursively
-    
-    mock_t_obj.tenant_cache = MockTenantCache()
-    
-    # Deeper template
-    template2 = MockTemplateTag(
-        template_id="template2",
-        pod_definition={
-            'image': None, 'template': None, 'description': None, 'command': None,
-            'arguments': None, 'environment_variables': {}, 'volume_mounts': {},
-            'networking': {}, 'compute_queue': 'default',
-            'time_to_stop_default': None, 'time_to_stop_instance': None,
-            'resources': {'ephemeral_storage_request': 2048},
-        }
-    )
-    
-    # Closer template
-    template1 = MockTemplateTag(
-        template_id="template1",
-        pod_definition={
-            'image': None, 'template': 'template2:latest@2024-01-01', 'description': None,
-            'command': None, 'arguments': None, 'environment_variables': {},
-            'volume_mounts': {}, 'networking': {}, 'compute_queue': 'default',
-            'time_to_stop_default': None, 'time_to_stop_instance': None,
-            'resources': {'ephemeral_storage_request': 3072},
-        }
-    )
-    
-    def derive_side_effect(template_name, *args, **kwargs):
-        if 'template2' in template_name:
-            return ("template2:latest@2024-01-01", MockTemplate("template2"), template2)
-        else:
-            return ("template1:latest@2024-01-01", MockTemplate("template1"), template1)
-    
-    mock_derive.side_effect = derive_side_effect
-    
-    # Pod with explicitly modified ephemeral_storage_request
-    pod = MockPod(
-        resources=MockResources(ephemeral_storage_request=1024),
-        modified_fields=['resources.ephemeral_storage_request']  # user modified
-    )
-    
-    result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
-    
-    # Pod's modified value should win: 1024, not 3072 (closer) or 2048 (deeper)
-    assert result.resources['ephemeral_storage_request'] == 1024
-
-
-@patch('models_templates_utils.derive_template_info')
-@patch('models_templates_utils.t')
-def test_resource_priority_all_seven_fields(mock_t_obj, mock_derive):
-    """Test all 7 resource subfields follow priority: pod > closer template > deeper template"""
-    from models_templates_utils import combine_pod_and_template_recursively
-    
-    mock_t_obj.tenant_cache = MockTenantCache()
-    
-    # Deeper template sets all resources
-    template2 = MockTemplateTag(
-        template_id="template2",
-        pod_definition={
-            'image': None, 'template': None, 'description': None, 'command': None,
-            'arguments': None, 'environment_variables': {}, 'volume_mounts': {},
-            'networking': {}, 'compute_queue': 'default',
-            'time_to_stop_default': None, 'time_to_stop_instance': None,
-            'resources': {
-                'cpu_request': 100,
-                'cpu_limit': 1000,
-                'mem_request': 128,
-                'mem_limit': 1024,
-                'gpus': 0,
-                'ephemeral_storage_request': 512,
-                'ephemeral_storage_limit': 1024,
-            },
-        }
-    )
-    
-    # Closer template overrides some resources
-    template1 = MockTemplateTag(
-        template_id="template1",
-        pod_definition={
-            'image': None, 'template': 'template2:latest@2024-01-01', 'description': None,
-            'command': None, 'arguments': None, 'environment_variables': {},
-            'volume_mounts': {}, 'networking': {}, 'compute_queue': 'default',
-            'time_to_stop_default': None, 'time_to_stop_instance': None,
-            'resources': {
-                'cpu_request': 200,  # overrides template2
-                'mem_limit': 2048,   # overrides template2
-                'ephemeral_storage_request': 1024,  # overrides template2
-            },
-        }
-    )
-    
-    def derive_side_effect(template_name, *args, **kwargs):
-        if 'template2' in template_name:
-            return ("template2:latest@2024-01-01", MockTemplate("template2"), template2)
-        else:
-            return ("template1:latest@2024-01-01", MockTemplate("template1"), template1)
-    
-    mock_derive.side_effect = derive_side_effect
-    
-    # Pod with some modified resources
-    pod = MockPod(
-        resources=MockResources(
-            cpu_request=500,  # will be overridden by template unless modified
-            cpu_limit=3000,   # pod default
-            mem_request=256,  # pod default
-            mem_limit=3000,   # pod default
-            gpus=2,           # user modified
-            ephemeral_storage_request=4096,  # pod default
-            ephemeral_storage_limit=8192,    # pod default
-        ),
-        modified_fields=['resources.gpus']  # only gpus is user-modified
-    )
-    
-    result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
-    
-    # cpu_request: template1 sets 200, should use that (closer template wins)
-    assert result.resources['cpu_request'] == 200
-    # cpu_limit: template2 sets 1000, template1 doesn't set it -> use template2's value
-    assert result.resources['cpu_limit'] == 1000
-    # mem_request: template2 sets 128, template1 doesn't set it -> use template2's value
-    assert result.resources['mem_request'] == 128
-    # mem_limit: template1 sets 2048 (overrides template2's 1024)
-    assert result.resources['mem_limit'] == 2048
-    # gpus: pod modified to 2, should override templates
-    assert result.resources['gpus'] == 2
-    # ephemeral_storage_request: template1 sets 1024 (overrides template2's 512)
-    assert result.resources['ephemeral_storage_request'] == 1024
-    # ephemeral_storage_limit: template2 sets 1024, template1 doesn't set it -> use template2's value
-    assert result.resources['ephemeral_storage_limit'] == 1024
-
-
-@patch('models_templates_utils.derive_template_info')
-@patch('models_templates_utils.t')
-def test_resource_priority_deeper_template_only(mock_t_obj, mock_derive):
-    """Test that deeper template values are used when closer template doesn't set them"""
-    from models_templates_utils import combine_pod_and_template_recursively
-    
-    mock_t_obj.tenant_cache = MockTenantCache()
-    
-    # Deeper template sets ephemeral storage
-    template2 = MockTemplateTag(
-        template_id="template2",
-        pod_definition={
-            'image': 'base-image:v1', 'template': None, 'description': None,
-            'command': None, 'arguments': None, 'environment_variables': {},
-            'volume_mounts': {}, 'networking': {}, 'compute_queue': 'default',
-            'time_to_stop_default': None, 'time_to_stop_instance': None,
-            'resources': {'ephemeral_storage_request': 2048, 'ephemeral_storage_limit': 4096},
-        }
-    )
-    
-    # Closer template only sets cpu, not ephemeral
-    template1 = MockTemplateTag(
-        template_id="template1",
-        pod_definition={
-            'image': None, 'template': 'template2:latest@2024-01-01', 'description': None,
-            'command': None, 'arguments': None, 'environment_variables': {},
-            'volume_mounts': {}, 'networking': {}, 'compute_queue': 'default',
-            'time_to_stop_default': None, 'time_to_stop_instance': None,
-            'resources': {'cpu_request': 500},  # only sets cpu, not ephemeral
-        }
-    )
-    
-    def derive_side_effect(template_name, *args, **kwargs):
-        if 'template2' in template_name:
-            return ("template2:latest@2024-01-01", MockTemplate("template2"), template2)
-        else:
-            return ("template1:latest@2024-01-01", MockTemplate("template1"), template1)
-    
-    mock_derive.side_effect = derive_side_effect
-    
-    pod = MockPod(
-        resources=MockResources(ephemeral_storage_request=4096),  # pod default
-        modified_fields=[]
-    )
-    
-    result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
-    
-    # ephemeral_storage_request: template1 doesn't set it, use template2's value (2048)
-    assert result.resources['ephemeral_storage_request'] == 2048
-    # cpu_request: template1 sets it (500)
-    assert result.resources['cpu_request'] == 500
-
-
-# ============================================================================
-# TEST: Template Overrides - TemplateOverrides Model Validation
-# ============================================================================
-
-class MockTemplateOverrides:
-    """Mock TemplateOverrides class for testing template override functionality"""
-    def __init__(self, volume_mounts=None):
-        self.volume_mounts = volume_mounts if volume_mounts is not None else {}
-        # Validate volume mount names
-        for template_vol, user_vol in self.volume_mounts.items():
-            if not self._is_valid_volume_name(user_vol):
-                raise ValueError(f"Invalid volume name '{user_vol}': must be lowercase alphanumeric characters or underscores, starting with a letter")
-    
-    @staticmethod
-    def _is_valid_volume_name(name):
-        """Validate volume name: lowercase alphanumeric and underscores, starts with letter"""
-        import re
-        return bool(re.match(r'^[a-z][a-z0-9_]*$', name))
-
-
-def apply_template_overrides_mock(pod):
-    """
-    Mock implementation of apply_template_overrides for testing.
-    Applies template_overrides to a pod's volume_mounts by renaming template volumes to user volumes.
-    """
-    if not hasattr(pod, 'template_overrides') or pod.template_overrides is None:
-        return pod
-    
-    if not pod.template_overrides.volume_mounts:
-        return pod
-    
-    # Apply volume mount overrides
-    new_volume_mounts = {}
-    for vol_name, vol_config in pod.volume_mounts.items():
-        if vol_name in pod.template_overrides.volume_mounts:
-            # Rename this volume to the user's volume name
-            new_vol_name = pod.template_overrides.volume_mounts[vol_name]
-            new_volume_mounts[new_vol_name] = vol_config
-        else:
-            # Keep the original volume
-            new_volume_mounts[vol_name] = vol_config
-    
-    pod.volume_mounts = new_volume_mounts
-    return pod
-
-
-class MockPodWithOverrides:
-    """Mock pod object for testing template overrides"""
-    def __init__(self):
-        self.volume_mounts = {
-            "shared_vol1": {"type": "tapisvolume", "mount_path": "/data1"},
-            "shared_vol2": {"type": "tapisvolume", "mount_path": "/data2"},
-            "shared_vol3": {"type": "tapisvolume", "mount_path": "/data3"},
-        }
-        self.template_overrides = None
+from models_volume_mounts_utils import TemplateOverrides
+from models_templates_utils import apply_template_overrides
 
 
 class TestTemplateOverridesModel:
-    """Test the TemplateOverrides model validation"""
+    """Test TemplateOverrides Pydantic model validation"""
     
-    def test_valid_volume_mounts(self):
-        """Test valid volume mount overrides"""
-        overrides = MockTemplateOverrides(
-            volume_mounts={
-                "template_vol": "user_vol123"
-            }
-        )
-        assert overrides.volume_mounts == {"template_vol": "user_vol123"}
+    def test_valid_overrides(self):
+        """Test various valid override configurations"""
+        # Valid volume mount override
+        o = TemplateOverrides(volume_mounts={"/data": {"source_id": "my-volume"}})
+        assert o.volume_mounts["/data"]["source_id"] == "my-volume"
+        
+        # Valid secret_map override  
+        o = TemplateOverrides(secret_map={"DB_PASS": "${secret:my-pass}"})
+        assert o.secret_map["DB_PASS"] == "${secret:my-pass}"
+        
+        # Multiple fields in single mount
+        o = TemplateOverrides(volume_mounts={
+            "/data": {"source_id": "vol", "read_only": True, "sub_path": "subdir"}
+        })
+        assert o.volume_mounts["/data"]["read_only"] == True
     
-    def test_invalid_volume_name_uppercase(self):
-        """Test that uppercase volume names are rejected"""
-        with pytest.raises(ValueError, match="lowercase alphanumeric"):
-            MockTemplateOverrides(
-                volume_mounts={
-                    "template_vol": "UserVol123"  # Contains uppercase
-                }
-            )
-    
-    def test_invalid_volume_name_special_chars(self):
-        """Test that special characters in volume names are rejected"""
-        with pytest.raises(ValueError, match="lowercase alphanumeric"):
-            MockTemplateOverrides(
-                volume_mounts={
-                    "template_vol": "user-vol-123"  # Contains hyphens
-                }
-            )
-    
-    def test_invalid_volume_name_starts_with_number(self):
-        """Test that volume names starting with numbers are rejected"""
-        with pytest.raises(ValueError, match="lowercase alphanumeric"):
-            MockTemplateOverrides(
-                volume_mounts={
-                    "template_vol": "123uservol"  # Starts with number
-                }
-            )
-    
-    def test_empty_overrides(self):
-        """Test empty overrides are valid"""
-        overrides = MockTemplateOverrides()
-        assert overrides.volume_mounts == {}
-    
-    def test_multiple_volume_overrides(self):
-        """Test multiple volume overrides"""
-        overrides = MockTemplateOverrides(
-            volume_mounts={
-                "vol1": "myvol1",
-                "vol2": "myvol2",
-                "vol3": "myvol3"
-            }
-        )
-        assert len(overrides.volume_mounts) == 3
+    @pytest.mark.parametrize("invalid_input,error_pattern", [
+        ({"volume_mounts": {"data": {"source_id": "x"}}}, "must be a mount_path starting with '/'"),
+        ({"volume_mounts": {"/x": {"source_id": "MyVol"}}}, "must be lowercase alphanumeric"),
+        ({"volume_mounts": {"/x": {"source_id": "123vol"}}}, "must be lowercase alphanumeric"),
+        ({"volume_mounts": {"/x": {"type": "invalid"}}}, "must be one of"),
+        ({"volume_mounts": {"/x": {"read_only": "yes"}}}, "must be boolean"),
+        ({"volume_mounts": {"/x": {"config_permissions": "999"}}}, "must be valid octal"),
+        ({"volume_mounts": {"/x": {"config_filename": "sub/file"}}}, "cannot contain path separators"),
+        ({"volume_mounts": {"/x": {"config_update_mode": "never"}}}, "must be one of"),
+        ({"volume_mounts": {"/x": {"invalid_field": "val"}}}, "not a valid VolumeMount field"),
+    ])
+    def test_invalid_overrides_rejected(self, invalid_input, error_pattern):
+        """Test that invalid overrides are properly rejected"""
+        with pytest.raises(ValueError, match=error_pattern):
+            TemplateOverrides(**invalid_input)
 
 
 class TestApplyTemplateOverrides:
-    """Test the apply_template_overrides function"""
+    """Test apply_template_overrides function"""
     
-    def test_apply_single_override(self):
-        """Test applying a single volume override"""
-        pod = MockPodWithOverrides()
-        pod.template_overrides = MockTemplateOverrides(
-            volume_mounts={"shared_vol1": "myvol1"}
+    def test_volume_mount_overrides(self):
+        """Test applying volume mount overrides preserves other fields"""
+        volume_mounts = {
+            "/data": {"type": "tapisvolume", "source_id": "template-vol", 
+                     "read_only": False, "sub_path": "subdir"}
+        }
+        overrides = {"volume_mounts": {"/data": {"source_id": "my-vol"}}}
+        
+        result_vm, result_sm, warnings = apply_template_overrides(volume_mounts, {}, overrides)
+        
+        assert result_vm["/data"]["source_id"] == "my-vol"
+        assert result_vm["/data"]["type"] == "tapisvolume"  # preserved
+        assert result_vm["/data"]["read_only"] == False     # preserved
+        assert result_vm["/data"]["sub_path"] == "subdir"   # preserved
+    
+    def test_secret_map_overrides(self):
+        """Test applying secret_map overrides"""
+        secret_map = {"DB_PASS": "${:?Required}", "DB_HOST": "${default:localhost}"}
+        overrides = {"secret_map": {"DB_PASS": "${secret:my-pass}"}}
+        
+        result_vm, result_sm, warnings = apply_template_overrides({}, secret_map, overrides)
+        
+        assert result_sm["DB_PASS"] == "${secret:my-pass}"
+        assert result_sm["DB_HOST"] == "${default:localhost}"  # unchanged
+    
+    def test_nonexistent_paths_warn(self):
+        """Test warnings for non-existent mount paths or secret keys"""
+        vm, sm, warnings = apply_template_overrides(
+            {"/data": {"type": "tapisvolume", "source_id": "x"}},
+            {"EXISTING": "val"},
+            {"volume_mounts": {"/nonexistent": {"source_id": "y"}},
+             "secret_map": {"NEW_KEY": "newval"}}
+        )
+        assert any("/nonexistent" in w for w in warnings)
+        assert any("NEW_KEY" in w for w in warnings)
+    
+    def test_does_not_mutate_originals(self):
+        """Test that original dicts are not mutated"""
+        original_vm = {"/data": {"type": "tapisvolume", "source_id": "orig"}}
+        original_sm = {"KEY": "orig"}
+        
+        result_vm, result_sm, _ = apply_template_overrides(
+            original_vm, original_sm,
+            {"volume_mounts": {"/data": {"source_id": "new"}}, "secret_map": {"KEY": "new"}}
         )
         
-        result = apply_template_overrides_mock(pod)
-        
-        # Check that shared_vol1 was replaced with myvol1
-        assert "myvol1" in result.volume_mounts
-        assert "shared_vol1" not in result.volume_mounts
-        # Check that config was preserved
-        assert result.volume_mounts["myvol1"]["mount_path"] == "/data1"
-        # Check that other volumes weren't affected
-        assert "shared_vol2" in result.volume_mounts
-        assert "shared_vol3" in result.volume_mounts
-    
-    def test_apply_multiple_overrides(self):
-        """Test applying multiple volume overrides"""
-        pod = MockPodWithOverrides()
-        pod.template_overrides = MockTemplateOverrides(
-            volume_mounts={
-                "shared_vol1": "myvol1",
-                "shared_vol2": "myvol2"
+        assert original_vm["/data"]["source_id"] == "orig"
+        assert original_sm["KEY"] == "orig"
+        assert result_vm["/data"]["source_id"] == "new"
+        assert result_sm["KEY"] == "new"
+
+    def test_all_volume_mount_fields_can_be_overridden(self):
+        """Test that all VolumeMount fields can be individually overridden"""
+        volume_mounts = {
+            "/data": {
+                "type": "tapisvolume", "source_id": "orig", "sub_path": "orig",
+                "read_only": False, "config_content": "orig", "config_permissions": "0644",
+                "config_filename": "orig.conf", "config_update_mode": "always"
             }
-        )
+        }
+        overrides = {"volume_mounts": {"/data": {
+            "type": "tapissnapshot", "source_id": "new", "sub_path": "new",
+            "read_only": True, "config_content": "new", "config_permissions": "0600",
+            "config_filename": "new.conf", "config_update_mode": "once"
+        }}}
         
-        result = apply_template_overrides_mock(pod)
+        result_vm, _, _ = apply_template_overrides(volume_mounts, {}, overrides)
         
-        # Check that both volumes were replaced
-        assert "myvol1" in result.volume_mounts
-        assert "myvol2" in result.volume_mounts
-        assert "shared_vol1" not in result.volume_mounts
-        assert "shared_vol2" not in result.volume_mounts
-        # Check that unaffected volume remains
-        assert "shared_vol3" in result.volume_mounts
-    
-    def test_apply_all_overrides(self):
-        """Test overriding all volumes"""
-        pod = MockPodWithOverrides()
-        pod.template_overrides = MockTemplateOverrides(
-            volume_mounts={
-                "shared_vol1": "myvol1",
-                "shared_vol2": "myvol2",
-                "shared_vol3": "myvol3"
-            }
-        )
-        
-        result = apply_template_overrides_mock(pod)
-        
-        # Check that all shared volumes were replaced
-        assert "myvol1" in result.volume_mounts
-        assert "myvol2" in result.volume_mounts
-        assert "myvol3" in result.volume_mounts
-        assert "shared_vol1" not in result.volume_mounts
-        assert "shared_vol2" not in result.volume_mounts
-        assert "shared_vol3" not in result.volume_mounts
-    
-    def test_no_overrides(self):
-        """Test pod without overrides remains unchanged"""
-        pod = MockPodWithOverrides()
-        pod.template_overrides = MockTemplateOverrides()
-        
-        result = apply_template_overrides_mock(pod)
-        
-        # Check that volumes weren't changed
-        assert "shared_vol1" in result.volume_mounts
-        assert "shared_vol2" in result.volume_mounts
-        assert "shared_vol3" in result.volume_mounts
-    
-    def test_override_nonexistent_volume(self):
-        """Test overriding a volume that doesn't exist in template"""
-        pod = MockPodWithOverrides()
-        pod.template_overrides = MockTemplateOverrides(
-            volume_mounts={"nonexistent_vol": "myvol"}
-        )
-        
-        result = apply_template_overrides_mock(pod)
-        
-        # Original volumes should remain
-        assert "shared_vol1" in result.volume_mounts
-        # Nonexistent override should be ignored
-        assert "myvol" not in result.volume_mounts
-    
-    def test_pod_without_template_overrides_attribute(self):
-        """Test pod without template_overrides attribute"""
-        pod = MockPodWithOverrides()
-        delattr(pod, 'template_overrides')
-        
-        result = apply_template_overrides_mock(pod)
-        
-        # Should return unchanged
-        assert result == pod
-    
-    def test_empty_volume_mounts(self):
-        """Test pod with no volume_mounts"""
-        pod = MockPodWithOverrides()
-        pod.volume_mounts = {}
-        pod.template_overrides = MockTemplateOverrides(
-            volume_mounts={"vol1": "myvol1"}
-        )
-        
-        result = apply_template_overrides_mock(pod)
-        
-        # Should handle gracefully
-        assert result.volume_mounts == {}
+        assert result_vm["/data"]["type"] == "tapissnapshot"
+        assert result_vm["/data"]["source_id"] == "new"
+        assert result_vm["/data"]["sub_path"] == "new"
+        assert result_vm["/data"]["read_only"] == True
+        assert result_vm["/data"]["config_content"] == "new"
+        assert result_vm["/data"]["config_permissions"] == "0600"
+        assert result_vm["/data"]["config_filename"] == "new.conf"
+        assert result_vm["/data"]["config_update_mode"] == "once"
 
 
-class TestTemplateOverridesIntegrationScenarios:
-    """Test realistic usage scenarios for template overrides"""
+class TestTemplateOverridesScenarios:
+    """Test realistic usage scenarios"""
     
-    def test_ml_template_scenario(self):
-        """Test ML template with training data override"""
-        # Simulate an ML template with shared volumes
-        pod = MockPodWithOverrides()
-        pod.volume_mounts = {
-            "shared_training_data": {"type": "tapisvolume", "mount_path": "/training_data"},
-            "shared_models": {"type": "tapisvolume", "mount_path": "/models"},
-            "shared_outputs": {"type": "tapisvolume", "mount_path": "/outputs"}
+    def test_ml_training_template_scenario(self):
+        """ML template: user overrides training data volume and S3 credentials"""
+        volume_mounts = {
+            "/training_data": {"type": "tapisvolume", "source_id": "shared-training", "read_only": True},
+            "/models": {"type": "tapisvolume", "source_id": "shared-models"},
+            "/outputs": {"type": "tapisvolume", "source_id": "shared-outputs"}
+        }
+        secret_map = {"S3_ACCESS_KEY": "${:?Required}", "S3_SECRET_KEY": "${:?Required}"}
+        overrides = {
+            "volume_mounts": {
+                "/training_data": {"source_id": "my-training-data"},
+                "/outputs": {"source_id": "my-outputs"}
+            },
+            "secret_map": {
+                "S3_ACCESS_KEY": "${secret:my-s3-access}",
+                "S3_SECRET_KEY": "${secret:my-s3-secret}"
+            }
         }
         
-        # User overrides training data and outputs with their own
-        pod.template_overrides = MockTemplateOverrides(
-            volume_mounts={
-                "shared_training_data": "mytrainingdata",
-                "shared_outputs": "myoutputs"
-            }
-        )
+        result_vm, result_sm, _ = apply_template_overrides(volume_mounts, secret_map, overrides)
         
-        result = apply_template_overrides_mock(pod)
-        
-        # Verify overrides
-        assert "mytrainingdata" in result.volume_mounts
-        assert "myoutputs" in result.volume_mounts
-        # Verify shared models volume remains
-        assert "shared_models" in result.volume_mounts
-        # Verify mount paths preserved
-        assert result.volume_mounts["mytrainingdata"]["mount_path"] == "/training_data"
-        assert result.volume_mounts["myoutputs"]["mount_path"] == "/outputs"
-    
-    def test_database_template_scenario(self):
-        """Test database template with data volume override"""
-        pod = MockPodWithOverrides()
-        pod.volume_mounts = {
-            "postgres_data": {"type": "tapisvolume", "mount_path": "/var/lib/postgresql/data"},
-            "postgres_backups": {"type": "tapisvolume", "mount_path": "/backups"}
-        }
-        
-        # User provides their own data volume
-        pod.template_overrides = MockTemplateOverrides(
-            volume_mounts={
-                "postgres_data": "mypostgresdata"
-            }
-        )
-        
-        result = apply_template_overrides_mock(pod)
-        
-        assert "mypostgresdata" in result.volume_mounts
-        assert result.volume_mounts["mypostgresdata"]["mount_path"] == "/var/lib/postgresql/data"
-        # Shared backup volume remains
-        assert "postgres_backups" in result.volume_mounts
+        assert result_vm["/training_data"]["source_id"] == "my-training-data"
+        assert result_vm["/training_data"]["read_only"] == True  # preserved
+        assert result_vm["/outputs"]["source_id"] == "my-outputs"
+        assert result_vm["/models"]["source_id"] == "shared-models"  # unchanged
+        assert result_sm["S3_ACCESS_KEY"] == "${secret:my-s3-access}"

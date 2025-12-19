@@ -211,6 +211,77 @@ def files_delete(path: str = "", tenant_id: str = "", base_path: str = "") -> No
 
     logger.info(f"Successfully deleted file. path: {path}")
 
+
+def file_exists(path: str, tenant_id: str = "", base_path: str = "") -> bool:
+    """
+    Check if a file exists in NFS.
+    
+    Args:
+        path: Path to check (relative to base_path)
+        tenant_id: Tenant ID for path resolution
+        base_path: Optional explicit base path
+        
+    Returns:
+        True if file exists, False otherwise
+    """
+    logger.debug(f"top of volume_utils.file_exists() - path: {path}")
+    
+    # Normalize path
+    path = os.path.abspath(path)
+    
+    # Establish base_path w/ tenant
+    base_path = base_path or f"{conf.nfs_base_path}/{tenant_id or g.tenant_id}"
+    base_path = os.path.abspath(base_path)
+    
+    full_path = f"{base_path}/{path}"
+    return os.path.isfile(full_path)
+
+
+def files_write_content(content: str, path: str, tenant_id: str = "", base_path: str = "", permissions: str = "0644") -> None:
+    """
+    Write string content directly to a file in NFS.
+    
+    Args:
+        content: String content to write
+        path: Path to write to (relative to base_path)
+        tenant_id: Tenant ID for path resolution
+        base_path: Optional explicit base path
+        permissions: Unix file permissions as octal string (e.g., '0644')
+    """
+    logger.debug(f"top of volume_utils.files_write_content() - path: {path}")
+    
+    # Normalize path
+    path = os.path.abspath(path)
+    
+    # Establish base_path w/ tenant
+    base_path = base_path or f"{conf.nfs_base_path}/{tenant_id or g.tenant_id}"
+    base_path = os.path.abspath(base_path)
+    
+    full_path = f"{base_path}/{path}"
+    
+    # Ensure parent directory exists
+    parent_dir = os.path.dirname(full_path)
+    os.makedirs(parent_dir, exist_ok=True)
+    
+    try:
+        # Write content to file
+        with open(full_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        
+        # Set file permissions
+        try:
+            mode = int(permissions, 8)
+            os.chmod(full_path, mode)
+        except (ValueError, OSError) as e:
+            logger.warning(f"Failed to set permissions {permissions} on {path}: {e}")
+            
+        logger.info(f"Successfully wrote content to path: {path}")
+    except Exception as e:
+        msg = f"Got exception trying to write content to file. path: {path}. Error: {e}"
+        logger.error(msg)
+        raise VolumesError(msg)
+
+
 def files_insert(file, path: str, tenant_id: str = "", base_path: str = "") -> None:
     logger.debug("top of volume_utils.files_insert().")
     # Normalize path

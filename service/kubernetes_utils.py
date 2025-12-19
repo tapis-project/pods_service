@@ -830,9 +830,148 @@ def create_pvc(name):
         msg = f"Got exception trying to start pvc with name: {name}. {e}"
         logger.info(msg)
         k8_pvc = True
-        #raise KubernetesError(msg)
+        raise KubernetesError(msg)
     logger.info(f"Pod pvc started successfully.")
     return k8_pvc
+
+
+def create_configmap(name: str, data: Dict[str, str], namespace: str = None):
+    """
+    Create a ConfigMap for ephemeral config volumes.
+    
+    Args:
+        name: Name of the ConfigMap (must be lowercase, alphanumeric, max 63 chars)
+        data: Dict of filename -> content
+        namespace: Kubernetes namespace (defaults to NAMESPACE)
+    
+    Returns:
+        The created ConfigMap object
+    """
+    logger.debug(f"top of kubernetes_utils.create_configmap() - name: {name}")
+    
+    if namespace is None:
+        namespace = NAMESPACE
+    
+    # Ensure name is valid for K8s (lowercase, alphanumeric with dashes)
+    k8_name = re.sub(r'[^a-z0-9-]', '-', name.lower())[:63]
+    
+    try:
+        # Check if ConfigMap already exists
+        try:
+            existing = k8.read_namespaced_config_map(name=k8_name, namespace=namespace)
+            # Update existing ConfigMap
+            existing.data = data
+            k8_configmap = k8.replace_namespaced_config_map(
+                name=k8_name,
+                namespace=namespace,
+                body=existing
+            )
+            logger.info(f"ConfigMap {k8_name} updated successfully.")
+            return k8_configmap
+        except client.exceptions.ApiException as e:
+            if e.status != 404:
+                raise
+            # ConfigMap doesn't exist, create it
+            
+        configmap_body = client.V1ConfigMap(
+            metadata=client.V1ObjectMeta(name=k8_name),
+            data=data,
+            kind="ConfigMap",
+            api_version="v1"
+        )
+        k8_configmap = k8.create_namespaced_config_map(
+            namespace=namespace,
+            body=configmap_body
+        )
+        logger.info(f"ConfigMap {k8_name} created successfully.")
+        return k8_configmap
+    except Exception as e:
+        msg = f"Got exception trying to create ConfigMap with name: {k8_name}. {e}"
+        logger.error(msg)
+        raise KubernetesError(msg)
+
+
+def delete_configmap(name: str, namespace: str = None):
+    """
+    Delete a ConfigMap.
+    
+    Args:
+        name: Name of the ConfigMap
+        namespace: Kubernetes namespace (defaults to NAMESPACE)
+    """
+    logger.debug(f"top of kubernetes_utils.delete_configmap() - name: {name}")
+    
+    if namespace is None:
+        namespace = NAMESPACE
+    
+    k8_name = re.sub(r'[^a-z0-9-]', '-', name.lower())[:63]
+    
+    try:
+        k8.delete_namespaced_config_map(name=k8_name, namespace=namespace)
+        logger.info(f"ConfigMap {k8_name} deleted successfully.")
+    except client.exceptions.ApiException as e:
+        if e.status == 404:
+            logger.debug(f"ConfigMap {k8_name} not found, nothing to delete.")
+        else:
+            msg = f"Got exception trying to delete ConfigMap with name: {k8_name}. {e}"
+            logger.error(msg)
+            raise KubernetesError(msg)
+
+
+def configmap_exists(name: str, namespace: str = None) -> bool:
+    """
+    Check if a ConfigMap exists.
+    
+    Args:
+        name: Name of the ConfigMap
+        namespace: Kubernetes namespace (defaults to NAMESPACE)
+        
+    Returns:
+        True if ConfigMap exists, False otherwise
+    """
+    logger.debug(f"top of kubernetes_utils.configmap_exists() - name: {name}")
+    
+    if namespace is None:
+        namespace = NAMESPACE
+    
+    k8_name = re.sub(r'[^a-z0-9-]', '-', name.lower())[:63]
+    
+    try:
+        k8.read_namespaced_config_map(name=k8_name, namespace=namespace)
+        return True
+    except client.exceptions.ApiException as e:
+        if e.status == 404:
+            return False
+        else:
+            msg = f"Got exception trying to check ConfigMap existence: {k8_name}. {e}"
+            logger.error(msg)
+            raise KubernetesError(msg)
+
+
+def list_configmaps_by_prefix(prefix: str, namespace: str = None) -> List[str]:
+    """
+    List ConfigMaps that start with a given prefix.
+    
+    Args:
+        prefix: Prefix to filter ConfigMaps by
+        namespace: Kubernetes namespace (defaults to NAMESPACE)
+        
+    Returns:
+        List of ConfigMap names matching the prefix
+    """
+    logger.debug(f"top of kubernetes_utils.list_configmaps_by_prefix() - prefix: {prefix}")
+    
+    if namespace is None:
+        namespace = NAMESPACE
+    
+    try:
+        configmaps = k8.list_namespaced_config_map(namespace=namespace)
+        matching = [cm.metadata.name for cm in configmaps.items if cm.metadata.name.startswith(prefix)]
+        return matching
+    except Exception as e:
+        msg = f"Got exception trying to list ConfigMaps with prefix: {prefix}. {e}"
+        logger.error(msg)
+        raise KubernetesError(msg)
 
 
 def update_traefik_configmap(tcp_proxy_info: Dict[str, Dict[str, str]],
