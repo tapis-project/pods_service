@@ -70,6 +70,8 @@ def start_generic_pod(input_pod, revision: int):
     volumes = []
     volume_mounts = []
 
+    # Track PVCs that have been created for pod_id + source_id to avoid duplicates
+    created_pvc_volumes = {}
 
     # Process volume mounts (dict-based structure keyed by mount_path)
     if pod.volume_mounts:
@@ -239,9 +241,23 @@ def start_generic_pod(input_pod, revision: int):
                     ))
                     
                 case "pvc":
-                    create_pvc(name=full_k8_name)
-                    persistent_volume = client.V1PersistentVolumeClaimVolumeSource(claim_name=full_k8_name)
-                    volumes.append(client.V1Volume(name=full_k8_name, persistent_volume_claim=persistent_volume))
+                    # For PVC mounts, create one PVC per source_id and reuse it for multiple mounts
+                    # This allows mounting the same PVC at different paths with different sub_paths
+                    if source_id in created_pvc_volumes:
+                        # Reuse existing PVC volume
+                        pvc_volume_name = created_pvc_volumes[source_id]
+                    else:
+                        # Create new PVC for this source_id
+                        # PVC name format: {k8_name}--pvc--{source_id[:20]}
+                        source_name_truncated = source_id[:20] if source_id else "pvc"
+                        pvc_volume_name = f"{pod.k8_name}--pvc--{source_name_truncated}"
+                        if len(pvc_volume_name) > 62:
+                            pvc_volume_name = pvc_volume_name[:62]
+                        
+                        create_pvc(name=pvc_volume_name)
+                        persistent_volume = client.V1PersistentVolumeClaimVolumeSource(claim_name=pvc_volume_name)
+                        volumes.append(client.V1Volume(name=pvc_volume_name, persistent_volume_claim=persistent_volume))
+                        created_pvc_volumes[source_id] = pvc_volume_name
                     
                     # Build sub_path for PVC mount
                     if sub_path:
@@ -250,7 +266,7 @@ def start_generic_pod(input_pod, revision: int):
                         pvc_sub_path = f"{pod.tenant_id}/volumes/{source_id}"
                     
                     volume_mounts.append(client.V1VolumeMount(
-                        name=full_k8_name,
+                        name=pvc_volume_name,
                         mount_path=mount_path,
                         sub_path=pvc_sub_path,
                         read_only=read_only

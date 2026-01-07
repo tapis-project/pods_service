@@ -804,10 +804,23 @@ def create_service(name, ports_dict={}):
 
 
 def create_pvc(name):
+    """
+    Create pvc. If pvc exists (on restart) for particular pod + source_id combo, said pvc is reused rather than creating a new one.
+    """
     logger.debug("top of kubernetes_utils.create_pvc().")
 
     ### Define and create the pvc
     try:
+        # Check if PVC already exists (from previous startup)
+        try:
+            existing_pvc = k8.read_namespaced_persistent_volume_claim(name=name, namespace=NAMESPACE)
+            logger.info(f"PVC {name} already exists, reusing it.")
+            return existing_pvc
+        except client.exceptions.ApiException as e:
+            if e.status != 404:
+                raise
+            # PVC doesn't exist, create it
+        
         pvc_resources = client.V1ResourceRequirements(
             requests={"storage": "10Gi"}
         )
@@ -826,13 +839,12 @@ def create_pvc(name):
             namespace=NAMESPACE,
             body=pvc_body
         )
+        logger.info(f"Pod pvc {name} created successfully.")
+        return k8_pvc
     except Exception as e:
-        msg = f"Got exception trying to start pvc with name: {name}. {e}"
+        msg = f"Got exception trying to create/reuse PVC with name: {name}. {e}"
         logger.info(msg)
-        k8_pvc = True
         raise KubernetesError(msg)
-    logger.info(f"Pod pvc started successfully.")
-    return k8_pvc
 
 
 def create_configmap(name: str, data: Dict[str, str], namespace: str = None):

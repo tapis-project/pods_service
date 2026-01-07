@@ -5,6 +5,7 @@ from models_pods import Pod, UpdatePod, PodResponse, Password, PodDeleteResponse
 from channels import CommandChannel
 from tapisservice.tapisfastapi.utils import g, ok, error
 from models_templates_utils import combine_pod_and_template_recursively, get_template_merged_secret_map, validate_pod_secret_map_against_template
+from kubernetes_utils import rm_pvc, KubernetesError
 
 from tapisservice.logs import get_logger
 logger = get_logger(__name__)
@@ -77,6 +78,43 @@ async def delete_pod(pod_id):
     # Needs to delete pod, service, db_pod, db_password
     pod = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
     password = Password.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
+
+    # Clean up any PVCs associated with this pod (created for 'pvc' type volume mounts)
+    # PVC name format: {k8_name}--pvc--{source_id[:20]}
+    # One PVC per unique source_id, so track which we've already deleted
+    if pod.volume_mounts:
+        deleted_pvc_sources = set()
+        for mount_path, vol_mount in pod.volume_mounts.items():
+            if vol_mount is None:
+                continue
+            # Handle both dict and VolumeMount objects
+            if hasattr(vol_mount, 'dict'):
+                vol_info = vol_mount.dict()
+            elif hasattr(vol_mount, 'model_dump'):
+                vol_info = vol_mount.model_dump()
+            elif isinstance(vol_mount, dict):
+                vol_info = vol_mount
+            else:
+                vol_info = dict(vol_mount)
+            
+            if vol_info.get("type", "").lower() == "pvc":
+                source_id = vol_info.get("source_id", "")
+                # Skip if we've already deleted the PVC for this source_id
+                if source_id in deleted_pvc_sources:
+                    continue
+                deleted_pvc_sources.add(source_id)
+                
+                # Reconstruct the PVC name using the same logic as kubernetes_templates.py
+                source_name_truncated = source_id[:20] if source_id else "pvc"
+                pvc_name = f"{pod.k8_name}--pvc--{source_name_truncated}"
+                if len(pvc_name) > 62:
+                    pvc_name = pvc_name[:62]
+                
+                try:
+                    rm_pvc(pvc_name)
+                    logger.info(f"Deleted PVC {pvc_name} for pod {pod_id}")
+                except KubernetesError as e:
+                    logger.warning(f"Failed to delete PVC {pvc_name}: {e}")
 
     pod.db_delete()
     password.db_delete()

@@ -19,6 +19,7 @@ client = TestClient(api, base_url="https://dev.develop.tapis.io", raise_server_e
 
 # Set up test variables
 test_pod_1 = "testssnapshotsneo4j"
+test_pod_multi_mount = "testsnapsmultimount"
 test_volume_1 = "testsnapshotsvolume"
 test_snapshot_1 = "testsnapshotssnapshot"
 test_snapshot_error_1 = "testsnapshotssnapshoterror"
@@ -36,7 +37,7 @@ def teardown(headers):
     yield None
 
     # Delete all objects after the tests are done.
-    pods = [test_pod_1]
+    pods = [test_pod_1, test_pod_multi_mount]
     volumes = [test_volume_1]
     snapshots = [test_snapshot_1]
     for pod_id in pods:
@@ -262,6 +263,85 @@ def test_pod_with_snapshot_startup(headers):
     assert result['status'] == "AVAILABLE"
     assert result['pod_id'] == test_pod_1
     assert any(vm.get('source_id') == test_snapshot_1 for vm in result['volume_mounts'].values())
+
+
+### Pod with Multiple Mounts from Same Snapshot (directory + individual files)
+def test_create_pod_with_multiple_snapshot_mounts(headers):
+    """Test creating a pod with multiple mounts from the same snapshot:
+    - One directory mount
+    - Two individual file mounts using sub_path
+    This verifies that a single snapshot can be mounted multiple times.
+    Note: All snapshot mounts are read-only by default.
+    """
+    pod_def = {
+        "pod_id": test_pod_multi_mount,
+        "image": "notchristiangarcia/testserver:fastapi",
+        "description": "Test pod with multiple mounts from same snapshot",
+        "networking": {
+            "default": {
+                "port": 5000,
+                "protocol": "http"
+            }
+        },
+        "volume_mounts": {
+            "/data": {
+                "type": "tapissnapshot",
+                "source_id": test_snapshot_1
+            },
+            "/etc/app/config.json": {
+                "type": "tapissnapshot",
+                "source_id": test_snapshot_1,
+                "sub_path": "config.json"
+            },
+            "/var/reference/data.csv": {
+                "type": "tapissnapshot",
+                "source_id": test_snapshot_1,
+                "sub_path": "exports/data.csv"
+            }
+        }
+    }
+    rsp = client.post("/pods", data=json.dumps(pod_def), headers=headers)
+    result = basic_response_checks(rsp)
+
+    # Check the pod object has all three mounts
+    assert result['pod_id'] == test_pod_multi_mount
+    assert "/data" in result['volume_mounts']
+    assert "/etc/app/config.json" in result['volume_mounts']
+    assert "/var/reference/data.csv" in result['volume_mounts']
+    
+    # Verify all mounts reference the same snapshot
+    for mount_path, mount_config in result['volume_mounts'].items():
+        assert mount_config['source_id'] == test_snapshot_1
+        assert mount_config['type'] == 'tapissnapshot'
+        # Snapshots should default to read_only=True
+        assert mount_config.get('read_only', True) == True
+
+
+def test_pod_with_multiple_snapshot_mounts_startup(headers):
+    """Wait for multi-mount snapshot pod to become available."""
+    i = 0
+    while i < 30:
+        rsp = client.get(f"/pods/{test_pod_multi_mount}", headers=headers)
+        result = basic_response_checks(rsp)
+        if result['status'] == "AVAILABLE":
+            break
+        time.sleep(2)
+        i += 1
+    else:
+        # pod never became available
+        assert False
+
+    # Check the pod has all mounts and is running
+    assert result['status'] == "AVAILABLE"
+    assert result['pod_id'] == test_pod_multi_mount
+    assert len(result['volume_mounts']) == 3
+
+
+def test_delete_pod_with_multiple_snapshot_mounts(headers):
+    """Delete the multi-mount snapshot pod to clean up."""
+    rsp = client.delete(f'/pods/{test_pod_multi_mount}', headers=headers)
+    # Just verify no server error
+    assert rsp.status_code < 500
 
 
 ##### Error testing

@@ -24,7 +24,7 @@ rules:
   verbs: ["list", "get", "watch"]
 - apiGroups: [""]
   resources: ["persistentvolumeclaims"]
-  verbs: ["list", "get", "create"]
+  verbs: ["list", "get", "create", "delete"]
 - apiGroups: [""]
   resources: ["pods/exec"]
   verbs: ["get", "create"]
