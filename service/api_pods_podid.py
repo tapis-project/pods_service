@@ -5,7 +5,7 @@ from models_pods import Pod, UpdatePod, PodResponse, Password, PodDeleteResponse
 from channels import CommandChannel
 from tapisservice.tapisfastapi.utils import g, ok, error
 from models_templates_utils import combine_pod_and_template_recursively, get_template_merged_secret_map, validate_pod_secret_map_against_template
-from kubernetes_utils import rm_pvc, KubernetesError
+from kubernetes_utils import rm_pvc, KubernetesError, delete_configmap, NAMESPACE
 
 from tapisservice.logs import get_logger
 logger = get_logger(__name__)
@@ -84,6 +84,8 @@ async def delete_pod(pod_id):
     # One PVC per unique source_id, so track which we've already deleted
     if pod.volume_mounts:
         deleted_pvc_sources = set()
+        deleted_configmaps = set()
+        
         for mount_path, vol_mount in pod.volume_mounts.items():
             if vol_mount is None:
                 continue
@@ -97,9 +99,11 @@ async def delete_pod(pod_id):
             else:
                 vol_info = dict(vol_mount)
             
-            if vol_info.get("type", "").lower() == "pvc":
+            vol_type = vol_info.get("type", "").lower()
+            
+            if vol_type == "pvc":
+                # Clean up PVCs (one per unique source_id)
                 source_id = vol_info.get("source_id", "")
-                # Skip if we've already deleted the PVC for this source_id
                 if source_id in deleted_pvc_sources:
                     continue
                 deleted_pvc_sources.add(source_id)
@@ -115,6 +119,25 @@ async def delete_pod(pod_id):
                     logger.info(f"Deleted PVC {pvc_name} for pod {pod_id}")
                 except KubernetesError as e:
                     logger.warning(f"Failed to delete PVC {pvc_name}: {e}")
+                    
+            elif vol_type == "ephemeral":
+                # Clean up ConfigMaps for ephemeral mounts
+                import hashlib
+                mount_hash = hashlib.md5(mount_path.encode()).hexdigest()[:8]
+                source_name = "ephemeral"[:9]
+                configmap_name = f"{pod.k8_name}--{source_name}--{mount_hash}".lower()
+                if len(configmap_name) > 62:
+                    configmap_name = configmap_name[:62]
+                
+                if configmap_name in deleted_configmaps:
+                    continue
+                deleted_configmaps.add(configmap_name)
+                
+                try:
+                    delete_configmap(configmap_name, namespace=NAMESPACE)
+                    logger.info(f"Deleted ConfigMap {configmap_name} for pod {pod_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to delete ConfigMap {configmap_name}: {e}")
 
     pod.db_delete()
     password.db_delete()

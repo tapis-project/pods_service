@@ -169,7 +169,7 @@ https://tapis-project.github.io/live-docs
 - Automatic creation of nfs backend with Files along with secure PKI access throughout.
 - New model schema to reduce replicated code and have a consolidated method to update models.
 - Rewrote nfs health code to reduce number of calls to Files from each tenant + volume to once per health check run.
-- Added siteadmintenant to allow for site wide database configs.
+- Added siteadmintable to allow for site wide database configs.
 - Added database allowlist
 - Added `develop_mode` config to easily turn nfs/other features off and on.
 

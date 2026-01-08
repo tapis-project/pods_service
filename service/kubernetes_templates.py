@@ -4,7 +4,7 @@ from models_pods import Pod, Password, PodBaseFull
 from models_templates_tags import TemplateTag, TemplateTagPodDefinition
 from models_templates_utils import combine_pod_and_template_recursively
 from models_volume_mounts_utils import interpolate_legacy_secrets
-from kubernetes_utils import create_pod, create_service, create_pvc, create_configmap, KubernetesError
+from kubernetes_utils import create_pod, create_service, create_pvc, create_configmap, configmap_exists, KubernetesError, NAMESPACE
 from kubernetes import client, config
 
 from tapisservice.config import conf
@@ -195,11 +195,9 @@ def start_generic_pod(input_pod, revision: int):
                     configmap_name = full_k8_name.lower()[:63]  # K8s name length limit
                     
                     # Check config_update_mode
-                    from kubernetes_utils import create_configmap, configmap_exists
-                    
                     should_create = True
                     if config_update_mode == "once":
-                        if configmap_exists(configmap_name, namespace=conf.spawner_host_id):
+                        if configmap_exists(configmap_name, namespace=NAMESPACE):
                             logger.info(f"ConfigMap '{configmap_name}' already exists, skipping creation (config_update_mode=once)")
                             should_create = False
                     
@@ -212,10 +210,11 @@ def start_generic_pod(input_pod, revision: int):
                             create_configmap(
                                 name=configmap_name,
                                 data={cfg_filename: interpolated_content},
-                                namespace=conf.spawner_host_id
+                                namespace=NAMESPACE
                             )
+                            logger.info(f"Created ConfigMap '{configmap_name}' in namespace '{NAMESPACE}'")
                         except Exception as e:
-                            logger.error(f"Failed to create ConfigMap {configmap_name}: {e}")
+                            logger.error(f"Failed to create ConfigMap {configmap_name} in namespace {NAMESPACE}: {e}")
                             continue
                     
                     # Create volume referencing the ConfigMap

@@ -63,10 +63,10 @@ def upgrade_alltenants():
     sa.Column('permissions', postgresql.ARRAY(sa.String(), dimensions=1), nullable=True),
     sa.PrimaryKeyConstraint('secret_id')
     )
-    op.add_column('pod', sa.Column('secret_map', sa.JSON(), nullable=True))
+    op.add_column('pod', sa.Column('secret_map', sa.JSON(), nullable=True, server_default='{}'))
     op.alter_column('template', 'archive_message',
                existing_type=sa.VARCHAR(),
-               nullable=False)
+               nullable=True)
     # ### end Alembic commands ###
 
 

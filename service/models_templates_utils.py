@@ -271,7 +271,7 @@ def get_modified_template_fields(original_template, modified_template_def):
     changed_fields = {}
     for key, value in original_template.items():
         if key not in modified_template_def or value != modified_template_def[key]:
-            changed_fields[key] = modified_template_def[key]
+            changed_fields[key] = modified_template_def.get(key)
     if changed_fields.get('resources'):
         ### resources.gpus, resources.mem_Limit, etc exists.
         # Only return resources in dict if subfield not null, so we delete null subfields

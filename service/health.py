@@ -38,7 +38,7 @@ from datetime import datetime, timedelta
 from channels import CommandChannel
 from kubernetes import client, config
 from kubernetes_utils import get_current_k8_services, get_current_k8_pods, rm_container, rm_pvc, \
-    rm_service, KubernetesError, get_k8_logs, list_all_containers, run_k8_exec, list_configmaps_by_prefix, delete_configmap
+    rm_service, KubernetesError, get_k8_logs, list_all_containers, run_k8_exec, list_configmaps_by_prefix, delete_configmap, NAMESPACE
 from codes import AVAILABLE, DELETING, STOPPED, ERROR, REQUESTED, COMPLETE, RESTART, ON, OFF
 from stores import pg_store, SITE_TENANT_DICT
 from models_pods import Pod
@@ -86,11 +86,11 @@ def rm_pod_configmaps(k8_name):
     """    
     try:
         # List ConfigMaps that start with the pod's k8_name
-        configmap_names = list_configmaps_by_prefix(k8_name.lower(), namespace=conf.spawner_host_id)
+        configmap_names = list_configmaps_by_prefix(k8_name.lower(), namespace=NAMESPACE)
         
         for cm_name in configmap_names:
             try:
-                delete_configmap(cm_name, namespace=conf.spawner_host_id)
+                delete_configmap(cm_name, namespace=NAMESPACE)
                 logger.info(f"Deleted ConfigMap {cm_name} for pod {k8_name}")
             except Exception as e:
                 logger.warning(f"Failed to delete ConfigMap {cm_name}: {e}")
