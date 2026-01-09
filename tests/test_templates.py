@@ -703,13 +703,13 @@ def test_create_template_for_secrets(headers):
 
 
 def test_add_template_tag_with_default_placeholder(headers):
-    """Template tag with ${default:value:?description} placeholder should succeed."""
+    """Template tag with ${pods:default:value:?description} placeholder should succeed."""
     tag_def = {
         "pod_definition": {
             "image": "postgres:15",
             "secret_map": {
-                "DB_HOST": "${default:localhost:?Database hostname}",
-                "DB_PORT": "${default:5432:?Database port number}"
+                "DB_HOST": "${pods:default:localhost:?Database hostname}",
+                "DB_PORT": "${pods:default:5432:?Database port number}"
             },
             "environment_variables": {
                 "POSTGRES_HOST": "${pods:secrets:DB_HOST}",
@@ -819,7 +819,7 @@ def test_add_template_tag_with_invalid_env_var_ref_fails(headers):
         "pod_definition": {
             "image": "postgres:15",
             "secret_map": {
-                "DB_HOST": "${default:localhost:?Database host}"
+                "DB_HOST": "${pods:default:localhost:?Database host}"
             },
             "environment_variables": {
                 "DATABASE_URL": "postgres://${pods:secrets:MISSING_KEY}@host/db"  # MISSING_KEY not in secret_map
@@ -940,10 +940,10 @@ def test_add_template_tag_with_volume_mounts_and_secrets(headers):
                 }
             },
             "secret_map": {
-                "DB_HOST": "${default:localhost:?Database hostname}",
-                "DB_PORT": "${default:5432:?Database port}",
+                "DB_HOST": "${pods:default:localhost:?Database hostname}",
+                "DB_PORT": "${pods:default:5432:?Database port}",
                 "DB_PASSWORD": "${:?Database password - required}",
-                "API_KEY": "${default:test-key:?API key}"
+                "API_KEY": "${pods:default:test-key:?API key}"
             },
             "environment_variables": {
                 "POSTGRES_HOST": "${pods:secrets:DB_HOST}",
@@ -1056,7 +1056,7 @@ def test_get_derived_pod_with_secret_map_override(headers):
         # DB_PORT should have template default value
         if 'DB_PORT' in sm:
             # Either the default value or the placeholder
-            assert sm['DB_PORT'] in ["5432", "${default:5432:?Database port}"]
+            assert sm['DB_PORT'] in ["5432", "${pods:default:5432:?Database port}"]
 
 
 def test_create_pod_with_both_overrides(headers):

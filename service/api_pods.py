@@ -10,7 +10,7 @@ from models_volume_mounts_utils import (
     get_template_merged_volume_mounts,
     validate_volume_mounts_permissions
 )
-from secret_utils import get_placeholder_warnings
+from secret_utils import get_placeholder_warnings, resolve_secret_map, resolve_random_passwords, resolve_pod_networking, expand_short_secret_references, get_config_secret_map_warnings, check_pod_unresolved_patterns
 from tapisservice.tapisfastapi.utils import g, ok
 from tapisservice.logs import get_logger
 logger = get_logger(__name__)
@@ -168,6 +168,16 @@ async def create_pod(new_pod: NewPod):
                     "optional": optional
                 }
     
+    # Check environment_variables for secret_map-only patterns and warn
+    if pod.environment_variables:
+        config_warnings = get_config_secret_map_warnings(pod.environment_variables)
+        if config_warnings:
+            warning_messages = [
+                f"WARNING: '{w['env_var']}' uses {w['pattern']} syntax. {w['message']}"
+                for w in config_warnings
+            ]
+            placeholder_metadata["config_syntax_warnings"] = warning_messages
+    
     # Validate pod's own volume_mounts permissions (not from template)
     if pod.volume_mounts and not pod.template:
         pod_volume_mounts = pod.volume_mounts or []
@@ -193,6 +203,40 @@ async def create_pod(new_pod: NewPod):
     if volume_mount_metadata:
         final_metadata.update(volume_mount_metadata)
 
+    # Resolve random passwords and pod networking BEFORE db_create
+    # These need to be persisted immediately, regardless of status_requested
+    # Track generated random passwords for action_log after db_create
+    generated_random_keys = []
+    if pod.secret_map:
+        working_map = dict(pod.secret_map)
+        
+        # Expand short secret references ${secret:name} -> ${secret:username:name}
+        # This persists the owner so later resolution doesn't need to know who created the pod
+        working_map = expand_short_secret_references(working_map, g.username)
+        
+        # Resolve random passwords (generates and stores in working_map)
+        # Pass pod=None since pod isn't in DB yet; we'll log after db_create
+        # Track which keys had random patterns for logging
+        import re
+        RANDOM_PASSWORD_PATTERN = re.compile(r'\$\{pods:random:(\d+)\}')
+        for key, value in working_map.items():
+            if isinstance(value, str):
+                match = RANDOM_PASSWORD_PATTERN.fullmatch(value)
+                if match:
+                    generated_random_keys.append((key, int(match.group(1))))
+        
+        working_map, random_errors, _ = resolve_random_passwords(working_map, pod=None, actor=g.username)
+        if random_errors:
+            raise ValueError(f"Failed to generate random passwords: {'; '.join(random_errors)}")
+        
+        # Resolve pod networking references
+        working_map, networking_errors = resolve_pod_networking(working_map, pod)
+        if networking_errors:
+            raise ValueError(f"Failed to resolve pod networking: {'; '.join(networking_errors)}")
+        
+        # Update pod's secret_map with resolved values
+        pod.secret_map = working_map
+
     # Create pod password db entry. If it's successful, we continue.
     password = Password(pod_id=pod.pod_id)
     password.db_create()
@@ -200,8 +244,35 @@ async def create_pod(new_pod: NewPod):
     # Create pod database entry
     pod.db_create()
     logger.debug(f"New pod saved in db. pod_id: {pod.pod_id}; image: {pod.image}; tenant: {g.request_tenant_id}.")
+    
+    # Log random password generation to action_logs now that pod is in DB
+    if generated_random_keys:
+        log_entries = [f"{key} (length: {length})" for key, length in generated_random_keys]
+        pod.db_update(log=f"Generated random password(s): {', '.join(log_entries)}")
     # If status_requested = On, then we request pod and put a command. Else leave in default STOPPED state. 
     if pod.status_requested == ON:
+        # Resolve secrets at API layer before sending to spawner
+        # This allows edge spawners to work without direct SK access
+        resolved_secrets = {}
+        if pod.secret_map:
+            resolved_secrets, secret_errors = resolve_secret_map(
+                pod.secret_map,
+                site_id=g.site_id,
+                tenant_id=g.request_tenant_id,
+                actor=g.username,
+                pod_id=pod.pod_id,
+                pod=pod
+            )
+            if secret_errors:
+                # Required secrets missing - fail the create
+                # Clean up the created resources
+                try:
+                    pod.db_delete()
+                    password.db_delete()
+                except Exception as e:
+                    logger.warning(f"Failed to cleanup after secret resolution error: {e}")
+                raise ValueError(f"Failed to resolve secrets: {'; '.join(secret_errors)}")
+        
         pod.status = REQUESTED
         pod.db_update()
         # Send command to start new pod
@@ -209,8 +280,18 @@ async def create_pod(new_pod: NewPod):
         ch.put_cmd(object_id=pod.pod_id,
                    object_type="pod",
                    tenant_id=pod.tenant_id,
-                   site_id=pod.site_id)
+                   site_id=pod.site_id,
+                   resolved_secrets=resolved_secrets)
         ch.close()
         logger.debug(f"Command Channel - Added msg for pod_id: {pod.pod_id}.")
     
+    # Check for unresolved patterns in the created pod
+    unresolved = check_pod_unresolved_patterns(
+        secret_map=pod.secret_map,
+        environment_variables=pod.environment_variables,
+        volume_mounts=pod.volume_mounts
+    )
+    if unresolved:
+        final_metadata["unresolved_patterns"] = unresolved
+
     return ok(result=pod.display(), metadata=final_metadata, msg="Pod created successfully.")

@@ -44,6 +44,7 @@ from stores import pg_store, SITE_TENANT_DICT
 from models_pods import Pod
 from models_volumes import Volume
 from models_snapshots import Snapshot
+from secret_utils import resolve_secret_map
 from psycopg2 import ProgrammingError
 from sqlmodel import select
 from tapisservice.config import conf
@@ -414,6 +415,31 @@ def check_db_pods(k8_pods):
                     logger.info(f"pod_id: {pod.pod_id} in RESTART and STOPPED, so switching status_requested back to ON.")
                     pod.status_requested = ON
 
+                # Resolve secrets at central health layer before sending to spawner
+                # This allows edge spawners to work without direct SK access
+                resolved_secrets = {}
+                if pod.secret_map:
+                    try:
+                        resolved_secrets, secret_errors = resolve_secret_map(
+                            pod.secret_map,
+                            site_id=pod.site_id,
+                            tenant_id=pod.tenant_id,
+                            actor=pod.pod_owner or "pods_service",
+                            pod_id=pod.pod_id,
+                            pod=pod
+                        )
+                        if secret_errors:
+                            logger.error(f"Failed to resolve secrets for pod {pod.pod_id}: {'; '.join(secret_errors)}")
+                            # Set to error state rather than failing silently
+                            pod.status = ERROR
+                            pod.db_update(f"health failed to resolve secrets: {'; '.join(secret_errors)}")
+                            continue
+                    except Exception as e:
+                        logger.error(f"Exception resolving secrets for pod {pod.pod_id}: {e}")
+                        pod.status = ERROR
+                        pod.db_update(f"health exception resolving secrets: {str(e)}")
+                        continue
+
                 pod.status = REQUESTED
                 pod.db_update(f"health found {original_pod_status} pod set to STOPPED, set status to REQUESTED")
 
@@ -422,7 +448,8 @@ def check_db_pods(k8_pods):
                 ch.put_cmd(object_id=pod.pod_id,
                            object_type="pod",
                            tenant_id=pod.tenant_id,
-                           site_id=pod.site_id)
+                           site_id=pod.site_id,
+                           resolved_secrets=resolved_secrets)
                 ch.close()
                 logger.debug(f"Command Channel - Added msg for pod_id: {pod.pod_id}.")
 

@@ -18,11 +18,18 @@ from secret_utils import (
     get_placeholder_warnings,
     validate_template_secret_map,
     validate_environment_placeholders,
+    resolve_random_passwords,
+    resolve_pod_networking,
+    detect_unresolved_patterns,
+    check_pod_unresolved_patterns,
     SecretReference,
     SECRET_SHORT_PATTERN,
     SECRET_EXPLICIT_PATTERN,
     PLACEHOLDER_DEFAULT_PATTERN,
     PLACEHOLDER_REQUIRED_PATTERN,
+    POD_NETWORKING_PATTERN,
+    POD_URL_SHORTHAND_PATTERN,
+    RANDOM_PASSWORD_PATTERN,
 )
 
 
@@ -96,11 +103,25 @@ class TestParseSecretReferenceExplicitForm:
         assert ref.secret_id == "theirsecret"
     
     def test_explicit_secret_alphanumeric_username(self):
-        """Username should be alphanumeric only."""
+        """Username should be alphanumeric with underscores and @."""
         ref, error = parse_secret_reference("${secret:user123:secret}", actor="test")
         
         assert error is None
         assert ref.secret_owner == "user123"
+    
+    def test_explicit_secret_with_underscore_in_username(self):
+        """Username can have underscores (e.g., service accounts)."""
+        ref, error = parse_secret_reference("${secret:_pods_testuser_admin:secret}", actor="test")
+        
+        assert error is None
+        assert ref.secret_owner == "_pods_testuser_admin"
+    
+    def test_explicit_secret_with_at_in_username(self):
+        """Username can have @ (e.g., user@domain)."""
+        ref, error = parse_secret_reference("${secret:user@domain:secret}", actor="test")
+        
+        assert error is None
+        assert ref.secret_owner == "user@domain"
     
     def test_explicit_secret_with_underscore_in_secretname(self):
         """Secret name can have underscores."""
@@ -146,15 +167,15 @@ class TestParseSecretReferenceRequiredPlaceholder:
 
 
 # ============================================================================
-# TEST: parse_secret_reference() - Default placeholder ${default:value:?desc}
+# TEST: parse_secret_reference() - Default placeholder ${pods:default:value:?desc}
 # ============================================================================
 
 class TestParseSecretReferenceDefaultPlaceholder:
-    """Tests for parsing ${default:value:?description} placeholders."""
+    """Tests for parsing ${pods:default:value:?description} placeholders."""
     
     def test_default_placeholder_basic(self):
-        """${default:redis:?Redis hostname} should parse with default value."""
-        ref, error = parse_secret_reference("${default:redis:?Redis hostname}")
+        """${pods:default:redis:?Redis hostname} should parse with default value."""
+        ref, error = parse_secret_reference("${pods:default:redis:?Redis hostname}")
         
         assert error is None
         assert ref.is_placeholder is True
@@ -163,8 +184,8 @@ class TestParseSecretReferenceDefaultPlaceholder:
         assert ref.description == "Redis hostname"
     
     def test_default_placeholder_empty_default(self):
-        """${default::?description} with empty default should be marked required."""
-        ref, error = parse_secret_reference("${default::?Optional cache host}")
+        """${pods:default::?description} with empty default should be marked required."""
+        ref, error = parse_secret_reference("${pods:default::?Optional cache host}")
         
         assert error is None
         assert ref.is_placeholder is True
@@ -174,7 +195,7 @@ class TestParseSecretReferenceDefaultPlaceholder:
     
     def test_default_placeholder_numeric_value(self):
         """Default value can be numeric."""
-        ref, error = parse_secret_reference("${default:5432:?PostgreSQL port}")
+        ref, error = parse_secret_reference("${pods:default:5432:?PostgreSQL port}")
         
         assert error is None
         assert ref.default_value == "5432"
@@ -182,7 +203,7 @@ class TestParseSecretReferenceDefaultPlaceholder:
     
     def test_default_placeholder_missing_question_mark(self):
         """Description without ? prefix should return an error."""
-        ref, error = parse_secret_reference("${default:value:missing question mark}")
+        ref, error = parse_secret_reference("${pods:default:value:missing question mark}")
         
         # The pattern matches, but validation fails because description doesn't start with ?
         assert error is not None
@@ -219,8 +240,8 @@ class TestParseSecretReferenceLiteral:
         assert ref.inline_placeholders[0]['description'] == 'put your answer'
     
     def test_literal_with_inline_default_placeholder(self):
-        """Literal with inline ${default:val:?desc} should capture it."""
-        ref, error = parse_secret_reference("Connect to ${default:localhost:?hostname}:5432")
+        """Literal with inline ${pods:default:val:?desc} should capture it."""
+        ref, error = parse_secret_reference("Connect to ${pods:default:localhost:?hostname}:5432")
         
         assert error is None
         assert ref.is_literal is True
@@ -231,7 +252,7 @@ class TestParseSecretReferenceLiteral:
     
     def test_literal_with_multiple_placeholders(self):
         """Multiple inline placeholders should all be captured."""
-        ref, error = parse_secret_reference("${:?user}:${:?password}@${default:localhost:?host}")
+        ref, error = parse_secret_reference("${:?user}:${:?password}@${pods:default:localhost:?host}")
         
         assert error is None
         assert ref.is_literal is True
@@ -268,7 +289,7 @@ class TestGetPlaceholderWarnings:
     def test_secret_map_with_default_placeholder(self):
         """Default placeholder should show has_default=True."""
         secret_map = {
-            "CACHE_HOST": "${default:redis:?Redis hostname}"
+            "CACHE_HOST": "${pods:default:redis:?Redis hostname}"
         }
         warnings, errors = get_placeholder_warnings(secret_map, actor="testuser")
         
@@ -302,8 +323,8 @@ class TestGetPlaceholderWarnings:
         """Multiple placeholders should generate multiple warnings."""
         secret_map = {
             "API_KEY": "${:?Your API key}",
-            "DB_HOST": "${default:localhost:?Database host}",
-            "CACHE_HOST": "${default:redis:?Cache host}"
+            "DB_HOST": "${pods:default:localhost:?Database host}",
+            "CACHE_HOST": "${pods:default:redis:?Cache host}"
         }
         warnings, errors = get_placeholder_warnings(secret_map, actor="testuser")
         
@@ -346,9 +367,9 @@ class TestValidateTemplateSecretMap:
         assert errors == []
     
     def test_template_with_default_placeholder_valid(self):
-        """${default:value:?desc} placeholder should be valid in template."""
+        """${pods:default:value:?desc} placeholder should be valid in template."""
         secret_map = {
-            "CACHE_HOST": "${default:redis:?Redis hostname}"
+            "CACHE_HOST": "${pods:default:redis:?Redis hostname}"
         }
         is_valid, errors = validate_template_secret_map(secret_map, actor="testuser")
         
@@ -394,7 +415,7 @@ class TestValidateTemplateSecretMap:
         """Mixed placeholders and secret refs should catch all invalid ones."""
         secret_map = {
             "VALID_PLACEHOLDER": "${:?Required value}",
-            "VALID_DEFAULT": "${default:myval:?Optional value}",
+            "VALID_DEFAULT": "${pods:default:myval:?Optional value}",
             "INVALID_SECRET": "${secret:mydbsecret}",
             "VALID_LITERAL": "just-a-string"
         }
@@ -486,7 +507,7 @@ class TestValidateEnvironmentPlaceholders:
             "CONN_STRING": "Server=${pods:secrets:HOST};User=${pods:secrets:USER};Pass=${pods:secrets:PASS}"
         }
         secret_map = {
-            "HOST": "${default:localhost:?Server host}",
+            "HOST": "${pods:default:localhost:?Server host}",
             "USER": "${:?Username}",
             "PASS": "${:?Password}"
         }
@@ -500,7 +521,7 @@ class TestValidateEnvironmentPlaceholders:
             "CONN_STRING": "Server=${pods:secrets:HOST};User=${pods:secrets:MISSING};Pass=${pods:secrets:PASS}"
         }
         secret_map = {
-            "HOST": "${default:localhost:?Server host}",
+            "HOST": "${pods:default:localhost:?Server host}",
             "PASS": "${:?Password}"
         }
         is_valid, errors = validate_environment_placeholders(env_vars, secret_map)
@@ -543,12 +564,17 @@ class TestRegexPatterns:
         """EXPLICIT pattern should match ${secret:user:name}."""
         assert SECRET_EXPLICIT_PATTERN.match("${secret:jsmith:mysecret}")
         assert SECRET_EXPLICIT_PATTERN.match("${secret:user123:my_secret}")
+        # Underscores in username (service accounts)
+        assert SECRET_EXPLICIT_PATTERN.match("${secret:_pods_testuser_admin:mysecret}")
+        # @ in username (user@domain)
+        assert SECRET_EXPLICIT_PATTERN.match("${secret:user@domain:mysecret}")
     
     def test_explicit_pattern_invalid(self):
         """EXPLICIT pattern should NOT match short form."""
         assert SECRET_EXPLICIT_PATTERN.match("${secret:mysecret}") is None
-        # Username with underscore should not match (alphanumeric only)
-        assert SECRET_EXPLICIT_PATTERN.match("${secret:user_name:secret}") is None
+        # Invalid characters (spaces, special chars other than _ and @) should not match
+        assert SECRET_EXPLICIT_PATTERN.match("${secret:user name:secret}") is None
+        assert SECRET_EXPLICIT_PATTERN.match("${secret:user!name:secret}") is None
     
     def test_required_pattern_valid(self):
         """REQUIRED pattern should match ${:?description}."""
@@ -557,14 +583,14 @@ class TestRegexPatterns:
     
     def test_required_pattern_invalid(self):
         """REQUIRED pattern should NOT match default form."""
-        assert PLACEHOLDER_REQUIRED_PATTERN.match("${default:val:?desc}") is None
+        assert PLACEHOLDER_REQUIRED_PATTERN.match("${pods:default:val:?desc}") is None
         assert PLACEHOLDER_REQUIRED_PATTERN.match("${:missing question mark}") is None
     
     def test_default_pattern_valid(self):
-        """DEFAULT pattern should match ${default:value:?description}."""
-        assert PLACEHOLDER_DEFAULT_PATTERN.match("${default:redis:?Redis host}")
-        assert PLACEHOLDER_DEFAULT_PATTERN.match("${default::?Empty default}")
-        assert PLACEHOLDER_DEFAULT_PATTERN.match("${default:5432:?Port number}")
+        """DEFAULT pattern should match ${pods:default:value:?description}."""
+        assert PLACEHOLDER_DEFAULT_PATTERN.match("${pods:default:redis:?Redis host}")
+        assert PLACEHOLDER_DEFAULT_PATTERN.match("${pods:default::?Empty default}")
+        assert PLACEHOLDER_DEFAULT_PATTERN.match("${pods:default:5432:?Port number}")
     
     def test_default_pattern_invalid(self):
         """DEFAULT pattern should NOT match required form."""
@@ -612,3 +638,544 @@ class TestEdgeCases:
         
         assert error is None
         assert ref.is_placeholder is True
+
+
+# ============================================================================
+# TEST: New Pattern Matching - Networking and Random Password
+# ============================================================================
+
+class TestNewPatterns:
+    """Tests for new regex patterns: networking and random password."""
+    
+    def test_pod_networking_pattern_valid(self):
+        """POD_NETWORKING_PATTERN should match ${pods:networking:name:field}."""
+        match = POD_NETWORKING_PATTERN.search("${pods:networking:default:url}")
+        assert match is not None
+        assert match.group(1) == "default"
+        assert match.group(2) == "url"
+        
+        match = POD_NETWORKING_PATTERN.search("${pods:networking:api:port}")
+        assert match is not None
+        assert match.group(1) == "api"
+        assert match.group(2) == "port"
+    
+    def test_pod_networking_pattern_with_hyphen(self):
+        """Networking name can contain hyphens."""
+        match = POD_NETWORKING_PATTERN.search("${pods:networking:my-api:hostname}")
+        assert match is not None
+        assert match.group(1) == "my-api"
+    
+    def test_pod_url_shorthand_pattern(self):
+        """POD_URL_SHORTHAND_PATTERN should match ${pods:url}."""
+        match = POD_URL_SHORTHAND_PATTERN.search("${pods:url}")
+        assert match is not None
+        
+        # Should not match longer patterns
+        assert POD_URL_SHORTHAND_PATTERN.search("${pods:urls}") is None
+    
+    def test_random_password_pattern_valid(self):
+        """RANDOM_PASSWORD_PATTERN should match ${pods:random:N}."""
+        match = RANDOM_PASSWORD_PATTERN.fullmatch("${pods:random:32}")
+        assert match is not None
+        assert match.group(1) == "32"
+        
+        match = RANDOM_PASSWORD_PATTERN.fullmatch("${pods:random:128}")
+        assert match is not None
+        assert match.group(1) == "128"
+    
+    def test_random_password_pattern_invalid(self):
+        """RANDOM_PASSWORD_PATTERN should not match invalid formats."""
+        assert RANDOM_PASSWORD_PATTERN.fullmatch("${pods:random}") is None
+        assert RANDOM_PASSWORD_PATTERN.fullmatch("${pods:random:abc}") is None
+
+
+# ============================================================================
+# TEST: resolve_random_passwords()
+# ============================================================================
+
+class MockPod:
+    """Mock pod object for testing."""
+    def __init__(self, pod_id="testpod", secret_map=None, networking=None):
+        self.pod_id = pod_id
+        self.secret_map = secret_map or {}
+        self.networking = networking or {"default": {"url": "testpod.pods.tacc.tapis.io", "port": 5000, "protocol": "http"}}
+        self._db_updated = False
+        self._update_msg = None
+        self.action_logs = []
+    
+    def db_update(self, msg="", log=None):
+        self._db_updated = True
+        self._update_msg = log or msg
+        if log:
+            self.action_logs.append(log)
+
+
+class TestResolveRandomPasswords:
+    """Tests for resolve_random_passwords() function."""
+    
+    def test_generates_password_correct_length(self):
+        """Should generate password of requested length."""
+        secret_map = {"DB_PASS": "${pods:random:32}"}
+        pod = MockPod(secret_map=secret_map)
+        
+        resolved, errors, updated = resolve_random_passwords(secret_map, pod, "testuser")
+        
+        assert len(errors) == 0
+        assert "DB_PASS" in resolved
+        assert len(resolved["DB_PASS"]) == 32
+        assert updated is True
+    
+    def test_generates_different_passwords(self):
+        """Each call should generate different passwords (for different pods)."""
+        secret_map = {"PASS": "${pods:random:16}"}
+        
+        pod1 = MockPod(pod_id="pod1", secret_map=secret_map.copy())
+        pod2 = MockPod(pod_id="pod2", secret_map=secret_map.copy())
+        
+        resolved1, _, _ = resolve_random_passwords(secret_map.copy(), pod1, "user")
+        resolved2, _, _ = resolve_random_passwords(secret_map.copy(), pod2, "user")
+        
+        # Extremely unlikely to be equal
+        assert resolved1["PASS"] != resolved2["PASS"]
+    
+    def test_password_min_length_validation(self):
+        """Should reject passwords shorter than 8 characters."""
+        secret_map = {"PASS": "${pods:random:5}"}
+        pod = MockPod(secret_map=secret_map)
+        
+        resolved, errors, updated = resolve_random_passwords(secret_map, pod, "testuser")
+        
+        assert len(errors) == 1
+        assert "at least 8 characters" in errors[0]
+        # Key remains with original pattern value on error
+        assert resolved["PASS"] == "${pods:random:5}"
+    
+    def test_password_max_length_validation(self):
+        """Should reject passwords longer than 128 characters."""
+        secret_map = {"PASS": "${pods:random:200}"}
+        pod = MockPod(secret_map=secret_map)
+        
+        resolved, errors, updated = resolve_random_passwords(secret_map, pod, "testuser")
+        
+        assert len(errors) == 1
+        assert "not exceed 128" in errors[0]
+        # Key remains with original pattern value on error
+        assert resolved["PASS"] == "${pods:random:200}"
+    
+    def test_persists_to_database(self):
+        """Should call pod.db_update() to persist generated password."""
+        secret_map = {"SECRET": "${pods:random:16}"}
+        pod = MockPod(secret_map=secret_map)
+        
+        resolved, errors, updated = resolve_random_passwords(secret_map, pod, "testuser")
+        
+        assert pod._db_updated is True
+        assert "SECRET" in str(pod._update_msg)
+    
+    def test_passes_through_non_random_values(self):
+        """Non-random values should pass through unchanged."""
+        secret_map = {
+            "RANDOM": "${pods:random:16}",
+            "LITERAL": "plain_value",
+            "SECRET_REF": "${secret:mysecret}"
+        }
+        pod = MockPod(secret_map=secret_map)
+        
+        resolved, errors, _ = resolve_random_passwords(secret_map, pod, "testuser")
+        
+        assert len(resolved["RANDOM"]) == 16
+        assert resolved["LITERAL"] == "plain_value"
+        assert resolved["SECRET_REF"] == "${secret:mysecret}"
+    
+    def test_multiple_random_passwords(self):
+        """Should handle multiple random password fields."""
+        secret_map = {
+            "PASS1": "${pods:random:16}",
+            "PASS2": "${pods:random:32}",
+            "PASS3": "${pods:random:8}"
+        }
+        pod = MockPod(secret_map=secret_map)
+        
+        resolved, errors, _ = resolve_random_passwords(secret_map, pod, "testuser")
+        
+        assert len(errors) == 0
+        assert len(resolved["PASS1"]) == 16
+        assert len(resolved["PASS2"]) == 32
+        assert len(resolved["PASS3"]) == 8
+    
+    def test_password_character_set(self):
+        """Generated password should contain expected character types."""
+        secret_map = {"PASS": "${pods:random:64}"}
+        pod = MockPod(secret_map=secret_map)
+        
+        resolved, _, _ = resolve_random_passwords(secret_map, pod, "testuser")
+        password = resolved["PASS"]
+        
+        # Should only contain allowed characters
+        allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*")
+        assert all(c in allowed for c in password)
+
+
+# ============================================================================
+# TEST: resolve_pod_networking()
+# ============================================================================
+
+class TestResolvePodNetworking:
+    """Tests for resolve_pod_networking() function."""
+    
+    def test_resolves_pods_url_shorthand(self):
+        """${pods:url} should resolve to default networking URL."""
+        secret_map = {"CALLBACK": "https://${pods:url}/callback"}
+        pod = MockPod(networking={"default": {"url": "mypod.pods.tacc.tapis.io", "port": 5000}})
+        
+        resolved, errors = resolve_pod_networking(secret_map, pod)
+        
+        assert len(errors) == 0
+        assert resolved["CALLBACK"] == "https://mypod.pods.tacc.tapis.io/callback"
+    
+    def test_resolves_networking_url(self):
+        """${pods:networking:default:url} should resolve to URL."""
+        secret_map = {"URL": "${pods:networking:default:url}"}
+        pod = MockPod(networking={"default": {"url": "test.pods.tapis.io"}})
+        
+        resolved, errors = resolve_pod_networking(secret_map, pod)
+        
+        assert len(errors) == 0
+        assert resolved["URL"] == "test.pods.tapis.io"
+    
+    def test_resolves_networking_hostname(self):
+        """${pods:networking:default:hostname} should resolve same as url."""
+        secret_map = {"HOST": "${pods:networking:default:hostname}"}
+        pod = MockPod(networking={"default": {"url": "test.pods.tapis.io"}})
+        
+        resolved, errors = resolve_pod_networking(secret_map, pod)
+        
+        assert len(errors) == 0
+        assert resolved["HOST"] == "test.pods.tapis.io"
+    
+    def test_resolves_networking_port(self):
+        """${pods:networking:default:port} should resolve to port number."""
+        secret_map = {"PORT": "${pods:networking:default:port}"}
+        pod = MockPod(networking={"default": {"url": "test.tapis.io", "port": 8080}})
+        
+        resolved, errors = resolve_pod_networking(secret_map, pod)
+        
+        assert len(errors) == 0
+        assert resolved["PORT"] == "8080"
+    
+    def test_resolves_networking_protocol(self):
+        """${pods:networking:default:protocol} should resolve to protocol."""
+        secret_map = {"PROTO": "${pods:networking:default:protocol}"}
+        pod = MockPod(networking={"default": {"url": "test.tapis.io", "protocol": "tcp"}})
+        
+        resolved, errors = resolve_pod_networking(secret_map, pod)
+        
+        assert len(errors) == 0
+        assert resolved["PROTO"] == "tcp"
+    
+    def test_resolves_named_network(self):
+        """Should resolve non-default network names."""
+        secret_map = {"API_URL": "${pods:networking:api:url}"}
+        pod = MockPod(networking={
+            "default": {"url": "main.tapis.io"},
+            "api": {"url": "api.tapis.io", "port": 8000}
+        })
+        
+        resolved, errors = resolve_pod_networking(secret_map, pod)
+        
+        assert len(errors) == 0
+        assert resolved["API_URL"] == "api.tapis.io"
+    
+    def test_error_on_missing_network(self):
+        """Should return error for non-existent network name."""
+        secret_map = {"URL": "${pods:networking:nonexistent:url}"}
+        pod = MockPod(networking={"default": {"url": "test.tapis.io"}})
+        
+        resolved, errors = resolve_pod_networking(secret_map, pod)
+        
+        assert len(errors) == 1
+        assert "nonexistent" in errors[0]
+        assert "not found" in errors[0]
+    
+    def test_error_on_invalid_field(self):
+        """Should return error for invalid field name."""
+        secret_map = {"X": "${pods:networking:default:invalid_field}"}
+        pod = MockPod(networking={"default": {"url": "test.tapis.io"}})
+        
+        resolved, errors = resolve_pod_networking(secret_map, pod)
+        
+        assert len(errors) == 1
+        assert "invalid_field" in errors[0]
+        assert "Unknown networking field" in errors[0]
+    
+    def test_error_on_missing_default_url(self):
+        """Should return error when ${pods:url} used but no default URL."""
+        secret_map = {"URL": "${pods:url}"}
+        pod = MockPod(networking={"default": {}})
+        
+        resolved, errors = resolve_pod_networking(secret_map, pod)
+        
+        assert len(errors) == 1
+        assert "no default networking URL" in errors[0]
+    
+    def test_multiple_networking_refs_in_one_value(self):
+        """Should resolve multiple networking refs in single value."""
+        secret_map = {"CONN": "${pods:networking:default:protocol}://${pods:networking:default:url}:${pods:networking:default:port}"}
+        pod = MockPod(networking={"default": {"url": "db.tapis.io", "port": 5432, "protocol": "postgres"}})
+        
+        resolved, errors = resolve_pod_networking(secret_map, pod)
+        
+        assert len(errors) == 0
+        assert resolved["CONN"] == "postgres://db.tapis.io:5432"
+    
+    def test_passes_through_non_networking_values(self):
+        """Non-networking values should pass through unchanged."""
+        secret_map = {
+            "NET": "${pods:url}",
+            "LITERAL": "plain_value",
+            "SECRET_REF": "${secret:mysecret}"
+        }
+        pod = MockPod(networking={"default": {"url": "test.tapis.io"}})
+        
+        resolved, errors = resolve_pod_networking(secret_map, pod)
+        
+        assert resolved["NET"] == "test.tapis.io"
+        assert resolved["LITERAL"] == "plain_value"
+        assert resolved["SECRET_REF"] == "${secret:mysecret}"
+    
+    def test_handles_none_pod(self):
+        """Should handle None pod gracefully."""
+        secret_map = {"URL": "${pods:url}"}
+        
+        resolved, errors = resolve_pod_networking(secret_map, None)
+        
+        # Should pass through unchanged when no pod
+        assert resolved["URL"] == "${pods:url}"
+        assert len(errors) == 0
+
+
+# ============================================================================
+# TEST: Integration - Combined Random + Networking
+# ============================================================================
+
+class TestCombinedResolution:
+    """Tests for combined random password and networking resolution."""
+    
+    def test_both_random_and_networking(self):
+        """Should resolve both random passwords and networking refs."""
+        secret_map = {
+            "SESSION_SECRET": "${pods:random:32}",
+            "CALLBACK_URL": "https://${pods:url}/auth/callback"
+        }
+        pod = MockPod(
+            secret_map=secret_map,
+            networking={"default": {"url": "myapp.pods.tapis.io"}}
+        )
+        
+        # Resolve random first
+        resolved, rand_errors, _ = resolve_random_passwords(secret_map, pod, "testuser")
+        # Then networking
+        resolved, net_errors = resolve_pod_networking(resolved, pod)
+        
+        assert len(rand_errors) == 0
+        assert len(net_errors) == 0
+        assert len(resolved["SESSION_SECRET"]) == 32
+        assert resolved["CALLBACK_URL"] == "https://myapp.pods.tapis.io/auth/callback"
+
+
+# ============================================================================
+# TEST: detect_unresolved_patterns()
+# ============================================================================
+
+class TestDetectUnresolvedPatterns:
+    """Tests for detect_unresolved_patterns function."""
+    
+    def test_empty_inputs_no_unresolved(self):
+        """Empty inputs should report no unresolved patterns."""
+        result = detect_unresolved_patterns()
+        
+        assert result["has_unresolved"] is False
+        assert result["secret_map_unresolved"] == []
+        assert result["env_vars_unresolved"] == []
+        assert result["config_unresolved"] == []
+    
+    def test_resolved_values_no_unresolved(self):
+        """Fully resolved values should report no unresolved patterns."""
+        result = detect_unresolved_patterns(
+            secret_map={"DB_PASS": "actualpassword123"},
+            environment_variables={"APP_NAME": "myapp"},
+            config_contents=["host=localhost\nport=5432"]
+        )
+        
+        assert result["has_unresolved"] is False
+    
+    def test_detects_secret_map_placeholders(self):
+        """Should detect unresolved placeholders in secret_map."""
+        result = detect_unresolved_patterns(
+            secret_map={
+                "API_KEY": "${:?API key required}",
+                "DB_HOST": "${pods:default:localhost:?Database host}"
+            }
+        )
+        
+        assert result["has_unresolved"] is True
+        assert len(result["secret_map_unresolved"]) == 2
+        
+        # Check types are classified correctly
+        api_key_entry = next(e for e in result["secret_map_unresolved"] if e["key"] == "API_KEY")
+        assert api_key_entry["patterns"][0]["type"] == "required_placeholder"
+        
+        db_host_entry = next(e for e in result["secret_map_unresolved"] if e["key"] == "DB_HOST")
+        assert db_host_entry["patterns"][0]["type"] == "default_placeholder"
+    
+    def test_detects_env_var_secret_refs(self):
+        """Should detect unresolved ${pods:secrets:KEY} in environment_variables."""
+        result = detect_unresolved_patterns(
+            environment_variables={
+                "DATABASE_URL": "postgres://user:${pods:secrets:DB_PASS}@localhost/db"
+            }
+        )
+        
+        assert result["has_unresolved"] is True
+        assert len(result["env_vars_unresolved"]) == 1
+        assert result["env_vars_unresolved"][0]["patterns"][0]["type"] == "secret_map_reference"
+    
+    def test_detects_config_unresolved(self):
+        """Should detect unresolved patterns in config_content."""
+        result = detect_unresolved_patterns(
+            config_contents=[
+                "api_key=${pods:secrets:API_KEY}\nhost=localhost"
+            ]
+        )
+        
+        assert result["has_unresolved"] is True
+        assert len(result["config_unresolved"]) == 1
+    
+    def test_detects_user_secret_patterns(self):
+        """Should detect unresolved user secret references."""
+        result = detect_unresolved_patterns(
+            secret_map={"PASSWORD": "${secret:jsmith:mydbsecret}"}
+        )
+        
+        assert result["has_unresolved"] is True
+        assert result["secret_map_unresolved"][0]["patterns"][0]["type"] == "user_secret"
+    
+    def test_detects_networking_patterns(self):
+        """Should detect unresolved networking references."""
+        result = detect_unresolved_patterns(
+            secret_map={
+                "URL": "${pods:url}",
+                "TAPIS": "${pods:tapis_url}",
+                "PORT": "${pods:networking:default:port}"
+            }
+        )
+        
+        assert result["has_unresolved"] is True
+        assert len(result["secret_map_unresolved"]) == 3
+        
+        types = [entry["patterns"][0]["type"] for entry in result["secret_map_unresolved"]]
+        assert "pod_url" in types
+        assert "tapis_url" in types
+        assert "networking_reference" in types
+    
+    def test_detects_random_password_pattern(self):
+        """Should detect unresolved random password patterns."""
+        result = detect_unresolved_patterns(
+            secret_map={"SESSION_KEY": "${pods:random:32}"}
+        )
+        
+        assert result["has_unresolved"] is True
+        assert result["secret_map_unresolved"][0]["patterns"][0]["type"] == "random_password"
+    
+    def test_summary_message(self):
+        """Should provide human-readable summary."""
+        result = detect_unresolved_patterns(
+            secret_map={"KEY1": "${:?required}"},
+            environment_variables={"VAR1": "${pods:secrets:MISSING}"},
+            config_contents=["value=${pods:secrets:ALSO_MISSING}"]
+        )
+        
+        assert result["has_unresolved"] is True
+        assert "secret_map keys" in result["summary"]
+        assert "environment_variables" in result["summary"]
+        assert "config_content" in result["summary"]
+    
+    def test_multiple_patterns_in_one_value(self):
+        """Should detect multiple patterns in a single value."""
+        result = detect_unresolved_patterns(
+            environment_variables={
+                "CONN_STR": "host=${pods:secrets:HOST};pass=${pods:secrets:PASS}"
+            }
+        )
+        
+        assert result["has_unresolved"] is True
+        assert len(result["env_vars_unresolved"]) == 1
+        assert len(result["env_vars_unresolved"][0]["patterns"]) == 2
+
+
+# ============================================================================
+# TEST: check_pod_unresolved_patterns()
+# ============================================================================
+
+class TestCheckPodUnresolvedPatterns:
+    """Tests for check_pod_unresolved_patterns helper function."""
+    
+    def test_returns_none_when_all_resolved(self):
+        """Should return None when no unresolved patterns."""
+        result = check_pod_unresolved_patterns(
+            secret_map={"DB_PASS": "actualpassword"},
+            environment_variables={"APP_NAME": "myapp"},
+            volume_mounts={}
+        )
+        
+        assert result is None
+    
+    def test_returns_dict_when_unresolved(self):
+        """Should return unresolved dict when patterns found."""
+        result = check_pod_unresolved_patterns(
+            secret_map={"API_KEY": "${:?required}"},
+            environment_variables={},
+            volume_mounts={}
+        )
+        
+        assert result is not None
+        assert result["has_unresolved"] is True
+    
+    def test_extracts_config_from_volume_mounts_dict(self):
+        """Should extract config_content from dict-style volume_mounts."""
+        result = check_pod_unresolved_patterns(
+            secret_map={},
+            environment_variables={},
+            volume_mounts={
+                "/etc/config": {
+                    "type": "ephemeral",
+                    "config_content": "password=${pods:secrets:MISSING}"
+                }
+            }
+        )
+        
+        assert result is not None
+        assert len(result["config_unresolved"]) == 1
+    
+    def test_handles_none_volume_mount_entries(self):
+        """Should handle None entries in volume_mounts (removed mounts)."""
+        result = check_pod_unresolved_patterns(
+            secret_map={"RESOLVED": "value"},
+            environment_variables={},
+            volume_mounts={
+                "/removed": None,
+                "/valid": {"type": "ephemeral", "config_content": "clean=true"}
+            }
+        )
+        
+        assert result is None
+    
+    def test_handles_all_none_inputs(self):
+        """Should handle all None inputs gracefully."""
+        result = check_pod_unresolved_patterns(
+            secret_map=None,
+            environment_variables=None,
+            volume_mounts=None
+        )
+        
+        assert result is None

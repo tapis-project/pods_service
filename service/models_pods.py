@@ -776,7 +776,7 @@ class Pod(TapisPodBaseFull, table=True, validate=True):
 
             logger.debug(f"Bottom of check_image(). image: {image}, custom_allow_list: {custom_allow_list}")
             if image not in custom_allow_list:
-                raise ValueError(f"Custom pod.image images must be in allowlist. Check /pods/images or speak to admin. Image derived: {image}")
+                raise ValueError(f"Custom pod.image images must be in allowlist. View available images at /pods/images or contact admin via github issue or slack (cgarcia). Image derived: {image}")
 
         return values
 

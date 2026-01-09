@@ -59,16 +59,17 @@ class Spawner(object):
         object_type = cmd["object_type"]
         tenant_id = cmd["tenant_id"]
         site_id = cmd["site_id"]
+        resolved_secrets = cmd.get("resolved_secrets", {})
 
         match object_type:
             case "pod":
-                spawn_pod(object_id, tenant_id, site_id)
+                spawn_pod(object_id, tenant_id, site_id, resolved_secrets)
             case "volume":
                 spawn_pvc(object_id, tenant_id, site_id)
             case _:
                 logger.critical(f"Got spawner message with object_type not in 'pod' or 'volume'. Got: {object_type}")
 
-def spawn_pod(pod_id, tenant_id, site_id):
+def spawn_pod(pod_id, tenant_id, site_id, resolved_secrets=None):
     # Get pod while in spawner. Expect REQUESTED. If status_requested = OFF then request was started while waiting
     # for command to startup in queue. In that case, we simply abort and wait for health to delete pod.
     try:
@@ -95,7 +96,7 @@ def spawn_pod(pod_id, tenant_id, site_id):
     logger.debug(f"spawner has updated pod status to SPAWNER_SETUP")
 
     try:
-        start_generic_pod(pod, revision=1)
+        start_generic_pod(pod, revision=1, resolved_secrets=resolved_secrets or {})
     except Exception as e:
         logger.critical(f"Got error when creating pod. Running graceful_rm_pod. e: {e}")
         graceful_rm_pod(pod, f"spawner got error when creating pod, set status to DELETING")

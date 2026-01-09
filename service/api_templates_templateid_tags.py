@@ -57,7 +57,7 @@ async def add_template_tag(template_id: str, new_template_tag: NewTemplateTag):
     that users must or can optionally override when creating pods from this template.
     
     Secret Placeholders (25Q4 Feature):
-    - ``${default:value:?description}`` - Placeholder with a default value
+    - ``${pods:default:value:?description}`` - Placeholder with a default value
     - ``${:?description}`` - Required placeholder (pod creation fails if not overridden)
     - ``${secret:name}`` - Direct secret reference (for templates with pre-configured secrets)
     

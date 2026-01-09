@@ -20,7 +20,7 @@ sys.path.append('/home/tapis/service')
 from api import api
 
 # Import test utilities like test_pods.py
-from tests.test_utils import headers, response_format, basic_response_checks
+from tests.test_utils import headers, response_format, basic_response_checks, regular_headers
 
 # Import volume_mounts utilities at module level
 from models_volume_mounts_utils import (
@@ -39,11 +39,22 @@ from models_volume_mounts_utils import (
 from fastapi.testclient import TestClient
 client = TestClient(api, base_url="https://dev.develop.tapis.io", raise_server_exceptions=False)
 
+import time
+from datetime import datetime
+
 # Test IDs
 test_pod_ephemeral = "testpodephconfig"
 test_pod_tapisvol = "testpodvolconfig"
 test_volume_config = "testvolforconfig"
 test_template_vm = "testtemplatevolmounts"
+
+# Secret map integration test IDs (timestamped to avoid conflicts)
+test_timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+test_secret_for_env = f"testsecretenv{test_timestamp}"
+test_secret_for_config = f"testsecretcfg{test_timestamp}"
+test_pod_secret_env = f"testpodsecretenv{test_timestamp}"
+test_pod_secret_config = f"testpodsecretcfg{test_timestamp}"
+test_pod_secret_both = f"testpodsecretboth{test_timestamp}"
 
 
 # ============================================================================
@@ -56,9 +67,12 @@ def teardown(headers):
     yield None
     
     pods = [test_pod_ephemeral, test_pod_tapisvol, "testpodephonce", "testpodvolonce",
-            "testpodtmpleph", "testpodoverride", "testpodremove"]
+            "testpodtmpleph", "testpodoverride", "testpodremove",
+            "testpodrandompass", "testpodrandommulti", "testpodnetref", "testpodnetcfg",
+            test_pod_secret_env, test_pod_secret_config, test_pod_secret_both]
     volumes = [test_volume_config]
     templates = [test_template_vm]
+    secrets = [test_secret_for_env, test_secret_for_config]
     
     for pod_id in pods:
         client.delete(f'/pods/{pod_id}', headers=headers)
@@ -66,6 +80,10 @@ def teardown(headers):
         client.delete(f'/pods/volumes/{vol_id}', headers=headers)
     for template_id in templates:
         client.delete(f'/pods/templates/{template_id}', headers=headers)
+    
+    time.sleep(3)  # Wait for pods to be deleted before deleting secrets
+    for secret_id in secrets:
+        client.delete(f'/pods/secrets/{secret_id}', headers=headers)
 
 
 # ============================================================================
@@ -522,3 +540,486 @@ class TestVolumeMountsValidationErrors:
         assert rsp.status_code == 400
         data = response_format(rsp)
         assert any(error_substr in msg.lower() for msg in data['message'])
+
+
+# ============================================================================
+# Secret Map Integration Tests
+# ============================================================================
+
+
+class TestSecretMapIntegration:
+    """Tests for secret_map injection into env vars and config_content."""
+    
+    @pytest.fixture(scope="class", autouse=True)
+    def setup_secrets(self, headers):
+        """Create test secrets before tests run."""
+        secret_defs = [
+            {"secret_id": test_secret_for_env, "secret_value": "env_secret_value_12345"},
+            {"secret_id": test_secret_for_config, "secret_value": "config_secret_value_67890"},
+        ]
+        for secret_def in secret_defs:
+            rsp = client.post("/pods/secrets", data=json.dumps(secret_def), headers=headers)
+            if rsp.status_code == 409:
+                rsp = client.put(f"/pods/secrets/{secret_def['secret_id']}", 
+                               data=json.dumps({"secret_value": secret_def['secret_value']}), 
+                               headers=headers)
+        yield None
+    
+    def test_create_pod_with_secret_map_env(self, headers):
+        """Create pod with secret_map referenced in environment_variables."""
+        pod_def = {
+            "pod_id": test_pod_secret_env,
+            "image": "notchristiangarcia/testserver:fastapi",
+            "description": "Test pod with secret_map env injection",
+            "secret_map": {
+                "DB_PASS": f"${{secret:{test_secret_for_env}}}"
+            },
+            "environment_variables": {
+                "DATABASE_PASSWORD": "${pods:secrets:DB_PASS}",
+                "COMBINED_URL": "postgres://user:${pods:secrets:DB_PASS}@localhost/db"
+            }
+        }
+        rsp = client.post("/pods", data=json.dumps(pod_def), headers=headers)
+        result = basic_response_checks(rsp)
+        
+        assert result['pod_id'] == test_pod_secret_env
+        assert 'DB_PASS' in result.get('secret_map', {})
+        assert '${pods:secrets:DB_PASS}' in result['environment_variables'].get('DATABASE_PASSWORD', '')
+    
+    def test_pod_secret_env_startup(self, headers):
+        """Wait for secret env pod to become available."""
+        i = 0
+        while i < 30:
+            rsp = client.get(f"/pods/{test_pod_secret_env}", headers=headers)
+            result = basic_response_checks(rsp)
+            if result['status'] == "AVAILABLE":
+                break
+            time.sleep(2)
+            i += 1
+        else:
+            assert False, f"Pod {test_pod_secret_env} never became available"
+        
+        assert result['status'] == "AVAILABLE"
+    
+    def test_verify_secret_injected_in_env_via_exec(self, headers):
+        """Verify secret is injected into pod env via exec printenv."""
+        rsp = client.get(f"/pods/{test_pod_secret_env}", headers=headers)
+        result = basic_response_checks(rsp)
+        if result['status'] != "AVAILABLE":
+            pytest.skip(f"Pod not available, status: {result['status']}")
+        
+        exec_def = {"commands": [["printenv", "DATABASE_PASSWORD"]]}
+        rsp = client.post(f"/pods/{test_pod_secret_env}/exec", 
+                         data=json.dumps(exec_def), headers=headers)
+        result = basic_response_checks(rsp)
+        
+        exec_results = result.get('execution_results', [])
+        assert len(exec_results) > 0, f"No execution results: {result}"
+        stdout = exec_results[0].get('stdout', '')
+        assert exec_results[0].get('success', False), f"Command failed: {exec_results[0]}"
+        assert "env_secret_value_12345" in stdout, f"Secret not found. Got: {stdout}"
+    
+    def test_verify_combined_url_secret_in_env(self, headers):
+        """Verify inline secret interpolation in COMBINED_URL env var."""
+        rsp = client.get(f"/pods/{test_pod_secret_env}", headers=headers)
+        result = basic_response_checks(rsp)
+        if result['status'] != "AVAILABLE":
+            pytest.skip(f"Pod not available, status: {result['status']}")
+        
+        exec_def = {"commands": [["printenv", "COMBINED_URL"]]}
+        rsp = client.post(f"/pods/{test_pod_secret_env}/exec", 
+                         data=json.dumps(exec_def), headers=headers)
+        result = basic_response_checks(rsp)
+        
+        exec_results = result.get('execution_results', [])
+        assert len(exec_results) > 0, f"No execution results: {result}"
+        stdout = exec_results[0].get('stdout', '')
+        assert exec_results[0].get('success', False), f"Command failed: {exec_results[0]}"
+        assert "env_secret_value_12345" in stdout, f"Secret not interpolated. Got: {stdout}"
+        assert "postgres://user:" in stdout, f"URL prefix missing. Got: {stdout}"
+    
+    def test_derived_endpoint_shows_secret_map(self, headers):
+        """Verify /derived returns secret_map but NOT resolved values by default."""
+        rsp = client.get(f"/pods/{test_pod_secret_env}/derived", headers=headers)
+        result = basic_response_checks(rsp)
+        
+        assert 'secret_map' in result
+        assert 'DB_PASS' in result['secret_map']
+        assert "env_secret_value_12345" not in str(result['secret_map'])
+    
+    def test_create_pod_with_secret_in_config_content(self, headers):
+        """Create pod with secret_map referenced in ephemeral config_content."""
+        pod_def = {
+            "pod_id": test_pod_secret_config,
+            "image": "notchristiangarcia/testserver:fastapi",
+            "description": "Test pod with secret in config_content",
+            "secret_map": {
+                "API_KEY": f"${{secret:{test_secret_for_config}}}"
+            },
+            "volume_mounts": {
+                "/etc/app/config.ini": {
+                    "type": "ephemeral",
+                    "config_content": "[api]\nkey=${pods:secrets:API_KEY}\nhost=localhost",
+                    "config_permissions": "0600"
+                }
+            }
+        }
+        rsp = client.post("/pods", data=json.dumps(pod_def), headers=headers)
+        result = basic_response_checks(rsp)
+        
+        assert result['pod_id'] == test_pod_secret_config
+        assert '/etc/app/config.ini' in result.get('volume_mounts', {})
+    
+    def test_pod_secret_config_startup(self, headers):
+        """Wait for secret config pod to become available."""
+        i = 0
+        while i < 30:
+            rsp = client.get(f"/pods/{test_pod_secret_config}", headers=headers)
+            result = basic_response_checks(rsp)
+            if result['status'] == "AVAILABLE":
+                break
+            time.sleep(2)
+            i += 1
+        else:
+            assert False, f"Pod {test_pod_secret_config} never became available"
+        
+        assert result['status'] == "AVAILABLE"
+    
+    def test_verify_secret_injected_in_config_file(self, headers):
+        """Verify secret is injected into mounted config file via exec cat."""
+        rsp = client.get(f"/pods/{test_pod_secret_config}", headers=headers)
+        result = basic_response_checks(rsp)
+        if result['status'] != "AVAILABLE":
+            pytest.skip(f"Pod not available, status: {result['status']}")
+        
+        exec_def = {"commands": [["cat", "/etc/app/config.ini"]]}
+        rsp = client.post(f"/pods/{test_pod_secret_config}/exec", 
+                         data=json.dumps(exec_def), headers=headers)
+        result = basic_response_checks(rsp)
+        
+        exec_results = result.get('execution_results', [])
+        assert len(exec_results) > 0, f"No execution results: {result}"
+        stdout = exec_results[0].get('stdout', '')
+        assert exec_results[0].get('success', False), f"Command failed: {exec_results[0]}"
+        
+        assert "config_secret_value_67890" in stdout, f"Secret not found. Got: {stdout}"
+        assert "[api]" in stdout, f"Config section missing. Got: {stdout}"
+        assert "host=localhost" in stdout, f"Static config missing. Got: {stdout}"
+    
+    def test_derived_with_include_configs_shows_placeholders(self, headers):
+        """Verify /derived?include_configs=true shows placeholders, not resolved values."""
+        rsp = client.get(f"/pods/{test_pod_secret_config}/derived?include_configs=true", headers=headers)
+        result = basic_response_checks(rsp)
+        
+        mount = result.get('volume_mounts', {}).get('/etc/app/config.ini', {})
+        config_content = mount.get('config_content', '')
+        
+        assert "[api]" in config_content
+        assert "host=localhost" in config_content
+        assert "config_secret_value_67890" not in config_content
+    
+    def test_create_pod_with_both_env_and_config_secrets(self, headers):
+        """Create pod using secret_map in both env vars and config_content."""
+        pod_def = {
+            "pod_id": test_pod_secret_both,
+            "image": "notchristiangarcia/testserver:fastapi",
+            "description": "Test pod with secrets in both env and config",
+            "secret_map": {
+                "SHARED_SECRET": f"${{secret:{test_secret_for_env}}}"
+            },
+            "environment_variables": {
+                "ENV_SECRET": "${pods:secrets:SHARED_SECRET}"
+            },
+            "volume_mounts": {
+                "/etc/app/shared.conf": {
+                    "type": "ephemeral",
+                    "config_content": "shared_key=${pods:secrets:SHARED_SECRET}"
+                }
+            }
+        }
+        rsp = client.post("/pods", data=json.dumps(pod_def), headers=headers)
+        result = basic_response_checks(rsp)
+        
+        assert result['pod_id'] == test_pod_secret_both
+    
+    def test_pod_secret_both_startup(self, headers):
+        """Wait for combined secrets pod to become available."""
+        i = 0
+        while i < 30:
+            rsp = client.get(f"/pods/{test_pod_secret_both}", headers=headers)
+            result = basic_response_checks(rsp)
+            if result['status'] == "AVAILABLE":
+                break
+            time.sleep(2)
+            i += 1
+        else:
+            assert False, f"Pod {test_pod_secret_both} never became available"
+    
+    def test_verify_same_secret_in_both_env_and_config(self, headers):
+        """Verify same secret_map key resolves consistently in env and config."""
+        rsp = client.get(f"/pods/{test_pod_secret_both}", headers=headers)
+        result = basic_response_checks(rsp)
+        if result['status'] != "AVAILABLE":
+            pytest.skip(f"Pod not available, status: {result['status']}")
+        
+        # Check env var
+        exec_def = {"commands": [["printenv", "ENV_SECRET"]]}
+        rsp = client.post(f"/pods/{test_pod_secret_both}/exec", 
+                         data=json.dumps(exec_def), headers=headers)
+        result = basic_response_checks(rsp)
+        exec_results = result.get('execution_results', [])
+        assert len(exec_results) > 0, f"No execution results: {result}"
+        env_value = exec_results[0].get('stdout', '').strip()
+        
+        # Check config file
+        exec_def = {"commands": [["cat", "/etc/app/shared.conf"]]}
+        rsp = client.post(f"/pods/{test_pod_secret_both}/exec", 
+                         data=json.dumps(exec_def), headers=headers)
+        result = basic_response_checks(rsp)
+        exec_results = result.get('execution_results', [])
+        assert len(exec_results) > 0, f"No execution results: {result}"
+        config_content = exec_results[0].get('stdout', '')
+        
+        assert "env_secret_value_12345" in env_value, f"Secret not in env. Got: {env_value}"
+        assert "env_secret_value_12345" in config_content, f"Secret not in config. Got: {config_content}"
+
+
+class TestDerivedEndpointResolveSecrets:
+    """Tests for /derived endpoint with resolve_secrets parameter (admin-only)."""
+    
+    def test_derived_without_resolve_secrets_hides_values(self, headers):
+        """Default /derived should NOT show resolved secret values."""
+        rsp = client.get(f"/pods/{test_pod_secret_env}", headers=headers)
+        if rsp.status_code == 404:
+            pytest.skip(f"Pod {test_pod_secret_env} not found")
+        
+        rsp = client.get(f"/pods/{test_pod_secret_env}/derived", headers=headers)
+        result = basic_response_checks(rsp)
+        
+        env_vars = result.get('environment_variables', {})
+        db_password = env_vars.get('DATABASE_PASSWORD', '')
+        
+        assert "env_secret_value_12345" not in db_password
+        assert "${pods:secrets:" in db_password or "DB_PASS" in str(result.get('secret_map', {}))
+    
+    def test_derived_resolve_secrets_requires_admin(self, headers, regular_headers):
+        """resolve_secrets=true should be rejected for non-admin users."""
+        rsp = client.get(f"/pods/{test_pod_secret_env}", headers=headers)
+        if rsp.status_code == 404:
+            pytest.skip(f"Pod {test_pod_secret_env} not found")
+        
+        rsp = client.get(f"/pods/{test_pod_secret_env}/derived?resolve_secrets=true", 
+                        headers=regular_headers)
+        
+        # 400/403 for admin error, 404 if no READ permission
+        assert rsp.status_code in [400, 403, 404], f"Expected 400/403/404, got {rsp.status_code}"
+        
+        if rsp.status_code in [400, 403]:
+            data = rsp.json()
+            error_msg = data.get('message', '').lower()
+            assert "not authorized" in error_msg
+    
+    def test_derived_resolve_secrets_shows_values_for_admin(self, headers):
+        """resolve_secrets=true should show resolved values for admins."""
+        rsp = client.get(f"/pods/{test_pod_secret_env}", headers=headers)
+        if rsp.status_code == 404:
+            pytest.skip(f"Pod {test_pod_secret_env} not found")
+        
+        rsp = client.get(
+            f"/pods/{test_pod_secret_env}/derived?resolve_secrets=true&include_configs=true", 
+            headers=headers
+        )
+        result = basic_response_checks(rsp)
+        
+        env_vars = result.get('environment_variables', {})
+        db_password = env_vars.get('DATABASE_PASSWORD', '')
+        
+        assert "env_secret_value_12345" in db_password, \
+            f"Admin should see resolved secret. Got: {db_password}"
+        
+        metadata = rsp.json().get('metadata', {})
+        assert metadata.get('secrets_resolved') == True
+    
+    def test_derived_resolve_secrets_interpolates_config_content(self, headers):
+        """resolve_secrets=true should also interpolate secrets in config_content."""
+        rsp = client.get(f"/pods/{test_pod_secret_config}", headers=headers)
+        if rsp.status_code == 404:
+            pytest.skip(f"Pod {test_pod_secret_config} not found")
+        
+        rsp = client.get(
+            f"/pods/{test_pod_secret_config}/derived?resolve_secrets=true&include_configs=true", 
+            headers=headers
+        )
+        result = basic_response_checks(rsp)
+        
+        mount = result.get('volume_mounts', {}).get('/etc/app/config.ini', {})
+        config_content = mount.get('config_content', '')
+        
+        assert "config_secret_value_67890" in config_content, \
+            f"Config should have resolved secret. Got: {config_content}"
+    
+    def test_derived_without_resolve_secrets_preserves_placeholders_in_config(self, headers):
+        """Without resolve_secrets, config_content should show placeholders."""
+        rsp = client.get(f"/pods/{test_pod_secret_config}", headers=headers)
+        if rsp.status_code == 404:
+            pytest.skip(f"Pod {test_pod_secret_config} not found")
+        
+        rsp = client.get(
+            f"/pods/{test_pod_secret_config}/derived?include_configs=true", 
+            headers=headers
+        )
+        result = basic_response_checks(rsp)
+        
+        mount = result.get('volume_mounts', {}).get('/etc/app/config.ini', {})
+        config_content = mount.get('config_content', '')
+        
+        assert "config_secret_value_67890" not in config_content
+        assert "${pods:secrets:API_KEY}" in config_content
+
+
+# ============================================================================
+# Random Password & Pod Networking Integration Tests
+# ============================================================================
+
+class TestRandomPasswordIntegration:
+    """Integration tests for ${pods:random:N} feature."""
+    
+    def test_random_password_generation_and_persistence(self, headers):
+        """Create pod with random password, verify generation and persistence."""
+        pod_def = {
+            "pod_id": "testpodrandompass",
+            "image": "notchristiangarcia/testserver:fastapi",
+            "description": "Test random password",
+            "status_requested": "OFF",
+            "secret_map": {
+                "PASS_32": "${pods:random:32}",
+                "PASS_16": "${pods:random:16}"
+            },
+            "environment_variables": {
+                "MY_PASSWORD": "${pods:secrets:PASS_32}",
+                "SHORT_PASS": "${pods:secrets:PASS_16}"
+            }
+        }
+        rsp = client.post("/pods", data=json.dumps(pod_def), headers=headers)
+        result = basic_response_checks(rsp)
+        
+        secret_map = result.get('secret_map', {})
+        # Verify passwords generated with correct lengths
+        assert len(secret_map.get('PASS_32', '')) == 32
+        assert len(secret_map.get('PASS_16', '')) == 16
+        # Verify pattern is replaced (persisted)
+        assert "${pods:random:" not in secret_map.get('PASS_32', '')
+        # Verify passwords are different
+        assert secret_map['PASS_32'] != secret_map['PASS_16']
+        
+        # Verify /derived shows env vars reference the secret_map keys
+        rsp = client.get("/pods/testpodrandompass/derived", headers=headers)
+        derived = basic_response_checks(rsp)
+        env_vars = derived.get('environment_variables', {})
+        assert env_vars.get('MY_PASSWORD') == "${pods:secrets:PASS_32}"
+        assert env_vars.get('SHORT_PASS') == "${pods:secrets:PASS_16}"
+        
+        # Verify secret_map in derived still has resolved values
+        derived_sm = derived.get('secret_map', {})
+        assert derived_sm.get('PASS_32') == secret_map['PASS_32']
+        assert derived_sm.get('PASS_16') == secret_map['PASS_16']
+    
+    def test_random_password_multiple_lengths(self, headers):
+        """Test multiple random passwords of varying lengths."""
+        pod_def = {
+            "pod_id": "testpodrandommulti",
+            "image": "notchristiangarcia/testserver:fastapi",
+            "status_requested": "OFF",
+            "secret_map": {
+                "SHORT": "${pods:random:8}",
+                "LONG": "${pods:random:64}"
+            },
+            "environment_variables": {
+                "ENV_SHORT": "${pods:secrets:SHORT}",
+                "ENV_LONG": "${pods:secrets:LONG}"
+            }
+        }
+        rsp = client.post("/pods", data=json.dumps(pod_def), headers=headers)
+        result = basic_response_checks(rsp)
+        
+        secret_map = result.get('secret_map', {})
+        assert len(secret_map.get('SHORT', '')) == 8
+        assert len(secret_map.get('LONG', '')) == 64
+        
+        # Verify persistence via GET
+        rsp = client.get("/pods/testpodrandommulti", headers=headers)
+        result = basic_response_checks(rsp)
+        assert result.get('secret_map', {}).get('SHORT') == secret_map['SHORT']
+
+
+class TestPodNetworkingIntegration:
+    """Integration tests for ${pods:url} and ${pods:networking:*} features."""
+    
+    def test_pods_url_shorthand_resolution(self, headers):
+        """Test ${pods:url} shorthand resolves to full URL."""
+        pod_def = {
+            "pod_id": "testpodnetref",
+            "image": "notchristiangarcia/testserver:fastapi",
+            "status_requested": "OFF",
+            "secret_map": {
+                "MY_URL": "${pods:url}",
+                "CALLBACK": "https://${pods:url}/callback"
+            },
+            "environment_variables": {
+                "POD_URL": "${pods:secrets:MY_URL}",
+                "OAUTH_CALLBACK": "${pods:secrets:CALLBACK}"
+            }
+        }
+        rsp = client.post("/pods", data=json.dumps(pod_def), headers=headers)
+        result = basic_response_checks(rsp)
+        
+        secret_map = result.get('secret_map', {})
+        my_url = secret_map.get('MY_URL', '')
+        
+        # Should be resolved, not the pattern
+        assert "${pods:url}" not in my_url
+        assert "testpodnetref" in my_url
+        assert ".pods." in my_url
+        # Callback should be properly constructed
+        assert secret_map.get('CALLBACK', '').endswith('/callback')
+        assert "testpodnetref" in secret_map.get('CALLBACK', '')
+        
+        # Verify persistence via GET
+        rsp = client.get("/pods/testpodnetref", headers=headers)
+        result = basic_response_checks(rsp)
+        assert result.get('secret_map', {}).get('MY_URL') == my_url
+    
+    def test_pods_networking_explicit_fields(self, headers):
+        """Test ${pods:networking:default:field} explicit syntax."""
+        pod_def = {
+            "pod_id": "testpodnetcfg",
+            "image": "notchristiangarcia/testserver:fastapi",
+            "status_requested": "OFF",
+            "secret_map": {
+                "HOST": "${pods:networking:default:url}",
+                "PORT": "${pods:networking:default:port}",
+                "PROTO": "${pods:networking:default:protocol}"
+            },
+            "environment_variables": {
+                "SERVER_HOST": "${pods:secrets:HOST}",
+                "SERVER_PORT": "${pods:secrets:PORT}",
+                "SERVER_PROTO": "${pods:secrets:PROTO}"
+            }
+        }
+        rsp = client.post("/pods", data=json.dumps(pod_def), headers=headers)
+        result = basic_response_checks(rsp)
+        
+        secret_map = result.get('secret_map', {})
+        # URL should contain pod_id
+        assert "testpodnetcfg" in secret_map.get('HOST', '')
+        # Port should be 5000 (default)
+        assert secret_map.get('PORT', '') == "5000"
+        # Protocol should be http (default networking protocol)
+        assert secret_map.get('PROTO', '') == "http"
+        
+        # Verify /derived shows env var references
+        rsp = client.get("/pods/testpodnetcfg/derived", headers=headers)
+        derived = basic_response_checks(rsp)
+        env_vars = derived.get('environment_variables', {})
+        assert env_vars.get('SERVER_HOST') == "${pods:secrets:HOST}"
+        assert env_vars.get('SERVER_PORT') == "${pods:secrets:PORT}"

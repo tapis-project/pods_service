@@ -414,8 +414,8 @@ class TestSecretMapMerge:
         template = make_template(
             image='postgres:15',
             secret_map={'DB_PASSWORD': '${:?Database password}', 
-                       'DB_HOST': '${default:localhost:?Database host}',
-                       'DB_PORT': '${default:5432:?Database port}'}
+                       'DB_HOST': '${pods:default:localhost:?Database host}',
+                       'DB_PORT': '${pods:default:5432:?Database port}'}
         )
         
         with patch('models_templates_utils.derive_template_info') as mock_derive, \
@@ -437,7 +437,7 @@ class TestSecretMapMerge:
             result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
             assert result.secret_map['DB_PASSWORD'] == '${secret:myactualpassword}'
             assert result.secret_map['DB_HOST'] == 'production.db.example.com'
-            assert result.secret_map['DB_PORT'] == '${default:5432:?Database port}'  # inherited
+            assert result.secret_map['DB_PORT'] == '${pods:default:5432:?Database port}'  # inherited
 
 
 # ============================================================================
@@ -678,13 +678,13 @@ class TestApplyTemplateOverrides:
     
     def test_secret_map_overrides(self):
         """Test applying secret_map overrides"""
-        secret_map = {"DB_PASS": "${:?Required}", "DB_HOST": "${default:localhost}"}
+        secret_map = {"DB_PASS": "${:?Required}", "DB_HOST": "${pods:default:localhost}"}
         overrides = {"secret_map": {"DB_PASS": "${secret:my-pass}"}}
         
         result_vm, result_sm, warnings = apply_template_overrides({}, secret_map, overrides)
         
         assert result_sm["DB_PASS"] == "${secret:my-pass}"
-        assert result_sm["DB_HOST"] == "${default:localhost}"  # unchanged
+        assert result_sm["DB_HOST"] == "${pods:default:localhost}"  # unchanged
     
     def test_nonexistent_paths_warn(self):
         """Test warnings for non-existent mount paths or secret keys"""

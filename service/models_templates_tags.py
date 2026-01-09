@@ -362,7 +362,7 @@ class TemplateTagPodDefinition(TapisModel):
     command: List[str] | None = Field(None, description = 'Command to run in pod. ex. `["sleep", "5000"]` or `["/bin/bash", "-c", "(exec myscript.sh)"]`', sa_column=Column(ARRAY(String)))
     arguments: List[str] | None = Field(None, description = "Arguments for the Pod's command.", sa_column=Column(ARRAY(String)))
     environment_variables: Dict[str, Any] = Field({}, description = "Environment variables to inject into pod. Use `${pods:secrets:KEY}` to reference secret_map entries.", sa_column=Column(JSON))
-    secret_map: Dict[str, str] = Field({}, description = "Map of keys to secret references or placeholders. Use ${secret:name} for user secrets, ${default:val:?desc} for placeholders with defaults, ${:?desc} for required placeholders. Secrets resolved at pod start.", sa_column=Column(JSON))
+    secret_map: Dict[str, str] = Field({}, description = "Map of keys to secret references or placeholders. Use ${secret:name} for user secrets, ${pods:default:val:?desc} for placeholders with defaults, ${:?desc} for required placeholders. Secrets resolved at pod start.", sa_column=Column(JSON))
     volume_mounts: Dict[str, Any] = Field({}, description = 'Volume mounts keyed by mount_path. Ex: {"/data": {"type": "tapisvolume", "source_id": "myvolume"}, "/etc/config.ini": {"type": "ephemeral", "config_content": "key=value"}}', sa_column=Column(JSON))
     time_to_stop_default: int | None = Field(None, description = "Default time (sec) for pod to run from instance start. -1 for unlimited. 12 hour default.")
     time_to_stop_instance: int | None = Field(None, description = "Time (sec) for pod to run from instance start. Reset each time instance is started. -1 for unlimited. None uses default.")
@@ -407,7 +407,7 @@ class TemplateTagPodDefinition(TapisModel):
         """Validate secret_map format at template level.
         
         Template secret_map can contain (NO direct secret references):
-        - Placeholders with defaults: ${default:value:?description}
+        - Placeholders with defaults: ${pods:default:value:?description}
         - Required placeholders: ${:?description}
         - Literal strings for non-secret configuration values
         
@@ -520,7 +520,7 @@ class TemplateTagPodDefinition(TapisModel):
         custom_allow_list += conf.get('image_allow_list', [])
 
         if v.split(':')[0] not in custom_allow_list:
-            raise ValueError(f"Custom template_tag.image images must be in allowlist. List available images with /pods/images; alternatively, speak to admin")
+            raise ValueError(f"Custom pod.image images must be in allowlist. View available images at /pods/images or contact admin via github issue or slack (cgarcia). Image derived: {image}")
 
         return v
 

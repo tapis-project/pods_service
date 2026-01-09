@@ -35,7 +35,7 @@ def validate_template_tag_secret_map(secret_map: Dict[str, str], actor: str = No
     2. Template tags define structure - pods provide the actual secret bindings
     
     Valid template secret_map values:
-        - ${default:value:?description} - Placeholder with default value
+        - ${pods:default:value:?description} - Placeholder with default value
         - ${:?description} - Required placeholder (no default)
         - Literal strings (no ${} at root)
     
@@ -131,7 +131,7 @@ def validate_pod_secret_map_against_template(pod_secret_map: Dict[str, str],
     
     When a pod uses a template with placeholders:
     - Required placeholders (${:?description}) MUST be overridden by pod
-    - Optional placeholders (${default:value:?description}) can use default or be overridden
+    - Optional placeholders (${pods:default:value:?description}) can use default or be overridden
     - Pod can provide actual secret references (${secret:name})
     
     Args:
@@ -476,7 +476,7 @@ def combine_pod_and_template_recursively(input_obj, template_name, seen_template
                         logger.debug(f"_TAPIS_INTERNAL_USE_TEMPLATE_ENVS is False - input_obj.environment_variables: {input_obj.environment_variables}")
                 elif mod_key == "secret_map":
                     # Merge secret_maps with proper priority: pod > closer template > deeper template
-                    # Template defines placeholders (${default:...} or ${:?...}) that users can override
+                    # Template defines placeholders (${pods:default:...} or ${:?...}) that users can override
                     # with actual secret references (${secret:...}) at pod creation
                     # 
                     # At this point:

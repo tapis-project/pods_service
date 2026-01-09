@@ -3,7 +3,8 @@ from codes import ERROR, SPAWNER_SETUP, CREATING, \
 from models_pods import Pod, Password, PodBaseFull
 from models_templates_tags import TemplateTag, TemplateTagPodDefinition
 from models_templates_utils import combine_pod_and_template_recursively
-from models_volume_mounts_utils import interpolate_legacy_secrets
+from models_volume_mounts_utils import interpolate_legacy_secrets, interpolate_config_content
+from secret_utils import inject_secrets_into_env_vars
 from kubernetes_utils import create_pod, create_service, create_pvc, create_configmap, configmap_exists, KubernetesError, NAMESPACE
 from kubernetes import client, config
 
@@ -22,7 +23,9 @@ k8 = client.CoreV1Api()
 
 
 ### This is quite an important function
-def start_generic_pod(input_pod, revision: int):
+def start_generic_pod(input_pod, revision: int, resolved_secrets: dict = None):
+    resolved_secrets = resolved_secrets or {}
+    
     ###
     ### Templates
     ###
@@ -42,16 +45,29 @@ def start_generic_pod(input_pod, revision: int):
     ###
     ### SECRETS
     ###
-    # Need to replace all "<<TAPIS_vars>>"(legacy) or "<<tapissecret_vars>>" with vals from secrets
-    # currently just the passwords db table. Eventually that'll become pods_env which itself could reference sk if that's needed.
+    # Get legacy pods_env from Password table for legacy <<TAPIS_vars>> and <<tapissecret_vars>> placeholders
     pods_env = Password.db_get_with_pk(pod.pod_id, pod.tenant_id, pod.site_id)
     pods_env = pods_env.dict()
     
-    # Interpolate legacy secrets in environment_variables
+    # Process environment_variables:
+    # 1. Inject resolved secrets and process ${pods:secrets:KEY} references
+    # 2. Then interpolate legacy <<TAPIS_*>> and <<tapissecret_*>> placeholders
     if pod.environment_variables:
-        for key, val in pod.environment_variables.items():
+        # First inject resolved secrets into env vars (handles ${pods:secrets:KEY})
+        processed_env, env_errors = inject_secrets_into_env_vars(
+            pod.environment_variables,
+            resolved_secrets,
+            fail_on_missing=False  # Don't fail on spawner - validation happened at API layer
+        )
+        if env_errors:
+            logger.warning(f"Secret injection warnings for pod {pod.pod_id}: {env_errors}")
+        
+        # Then interpolate legacy secrets for backward compatibility
+        for key, val in processed_env.items():
             if isinstance(val, str):
-                pod.environment_variables[key] = interpolate_legacy_secrets(val, pods_env)
+                processed_env[key] = interpolate_legacy_secrets(val, pods_env)
+        
+        pod.environment_variables = processed_env
 
     # Interpolate legacy secrets in command
     if pod.command and isinstance(pod.command, list):
@@ -130,8 +146,11 @@ def start_generic_pod(input_pod, revision: int):
                     if config_content:
                         from volume_utils import file_exists, files_write_content
                         
-                        # Interpolate secrets in config_content
-                        interpolated_content = interpolate_legacy_secrets(config_content, pods_env)
+                        # Interpolate secrets in config_content:
+                        # 1. First interpolate ${pods:secrets:KEY} with resolved_secrets
+                        # 2. Then interpolate legacy <<TAPIS_*>> placeholders for backward compatibility
+                        interpolated_content = interpolate_config_content(config_content, resolved_secrets, fail_on_missing=False)
+                        interpolated_content = interpolate_legacy_secrets(interpolated_content, pods_env)
                         
                         # Determine config filename
                         cfg_filename = config_filename or os.path.basename(mount_path)
@@ -202,8 +221,11 @@ def start_generic_pod(input_pod, revision: int):
                             should_create = False
                     
                     if should_create:
-                        # Interpolate secrets in config_content
-                        interpolated_content = interpolate_legacy_secrets(config_content, pods_env)
+                        # Interpolate secrets in config_content:
+                        # 1. First interpolate ${pods:secrets:KEY} with resolved_secrets
+                        # 2. Then interpolate legacy <<TAPIS_*>> placeholders for backward compatibility
+                        interpolated_content = interpolate_config_content(config_content, resolved_secrets, fail_on_missing=False)
+                        interpolated_content = interpolate_legacy_secrets(interpolated_content, pods_env)
                         
                         # Create a ConfigMap for this ephemeral config
                         try:

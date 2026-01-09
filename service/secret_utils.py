@@ -8,8 +8,10 @@ Notation Reference:
     secret_map values use ${} wrapper for ALL dynamic content:
         - KEY: "${secret:mysecret}"              - User secret (auto-adds your username)
         - KEY: "${secret:username:secretname}"   - Explicit user secret
-        - KEY: "${default:value:?description}"   - Placeholder with default value
+        - KEY: "${pods:default:value}"           - Placeholder with default value (no description)
+        - KEY: "${pods:default:value:?desc}"     - Placeholder with default value and optional description
         - KEY: "${:?description}"                - Required placeholder (no default)
+        - KEY: "${pods:random:32}"               - Generate random 32-char password
         - KEY: "literal_string"                  - Plain literal (no $ processing)
     
     environment_variables:
@@ -20,7 +22,7 @@ Notation Reference:
 Format Requirements:
     - Short secret: ${secret:secretname} - Auto-expands to ${secret:username:secretname} in backend
     - Explicit secret: ${secret:username:secretname} - Username must match actor
-    - Username: alphanumeric only [a-zA-Z0-9]+ (no underscores)
+    - Username: alphanumeric, underscores, and @ [a-zA-Z0-9_@]+
     - Secret name: alphanumeric, underscores, hyphens [a-zA-Z0-9_-]+
     - Anything without ${} is a literal string (safe)
 
@@ -30,7 +32,9 @@ Examples:
         "DB_PASSWORD": "${secret:mydbsecret}",            # Your secret (auto-adds username)
         "DB_PASSWORD2": "${secret:jsmith:mydbsecret}",    # Explicit form (same result for user jsmith)
         "API_KEY": "${:?API key for service}",            # Required, no default
-        "CACHE_HOST": "${default:redis:?Redis hostname}", # With default
+        "CACHE_HOST": "${pods:default:redis:?Redis hostname}", # With default and description
+        "CACHE_PORT": "${pods:default:6379}",             # With default, no description
+        "RANDOM_PASS": "${pods:random:32}",               # Generate 32-char random password
         "NOTE": "my question is ${:?put your answer}",    # Literal with placeholder
     }
     
@@ -60,22 +64,79 @@ logger = get_logger(__name__)
 SECRET_SHORT_PATTERN = re.compile(r'^\$\{secret:([a-zA-Z0-9_-]+)\}$')
 
 # Pattern for explicit user secret reference: ${secret:username:secretname}
-# Username: alphanumeric only (no underscores to avoid parsing ambiguity)
+# Username: alphanumeric, underscores, and @ (for service accounts like _pods_testuser_admin or user@domain)
 # Secret name: alphanumeric, underscores, hyphens
-SECRET_EXPLICIT_PATTERN = re.compile(r'^\$\{secret:([a-zA-Z0-9]+):([a-zA-Z0-9_-]+)\}$')
+SECRET_EXPLICIT_PATTERN = re.compile(r'^\$\{secret:([a-zA-Z0-9_@]+):([a-zA-Z0-9_-]+)\}$')
 
-# Pattern for placeholder with default: ${default:value:?description}
-# Description MUST start with ? for consistency
-PLACEHOLDER_DEFAULT_PATTERN = re.compile(r'^\$\{default:([^:]*):([^}]+)\}$')
+# Pattern for placeholder with default: ${pods:default:value} or ${pods:default:value:?description}
+# Description is optional and MUST start with ? if provided
+# Group 1: default value (can be empty), Group 2: optional ?description (may be None)
+PLACEHOLDER_DEFAULT_PATTERN = re.compile(r'^\$\{pods:default:([^:}]*)(?::([^}]+))?\}$')
 
 # Pattern for required placeholder: ${:?description}
 PLACEHOLDER_REQUIRED_PATTERN = re.compile(r'^\$\{:\?([^}]+)\}$')
 
-# Pattern for inline placeholders within literal strings: ${:?description} or ${default:val:?desc}
-INLINE_PLACEHOLDER_PATTERN = re.compile(r'\$\{(default:[^:]*:\?[^}]+|:\?[^}]+)\}')
+# Pattern for inline placeholders within literal strings: ${:?description} or ${pods:default:val} or ${pods:default:val:?desc}
+# Note: default value can be empty, e.g., ${pods:default::?description}
+INLINE_PLACEHOLDER_PATTERN = re.compile(r'\$\{(pods:default:[^:}]*(?::\?[^}]+)?|:\?[^}]+)\}')
 
 # Pattern for inline secret references in strings: ${pods:secrets:key}
 INLINE_SECRET_PATTERN = re.compile(r'\$\{pods:secrets:([a-zA-Z0-9_-]+)\}')
+
+# Pattern for pod networking references: ${pods:networking:netname:field}
+# Fields: url, hostname, port, protocol, tapis_url
+POD_NETWORKING_PATTERN = re.compile(r'\$\{pods:networking:([a-zA-Z0-9_-]+):([a-zA-Z_]+)\}')
+
+# Shorthand for ${pods:networking:default:url}
+POD_URL_SHORTHAND_PATTERN = re.compile(r'\$\{pods:url\}')
+
+# Shorthand for ${pods:networking:default:tapis_url}
+POD_TAPIS_URL_SHORTHAND_PATTERN = re.compile(r'\$\{pods:tapis_url\}')
+
+# Pattern for random password generation: ${pods:random:length}
+# Length must be 8-128 characters
+RANDOM_PASSWORD_PATTERN = re.compile(r'\$\{pods:random:(\d+)\}')
+
+# Inline pattern for short secret reference (for use in strings, not just full match)
+SECRET_SHORT_INLINE_PATTERN = re.compile(r'\$\{secret:([a-zA-Z0-9_-]+)\}')
+
+
+def expand_short_secret_references(secret_map: Dict[str, str], actor: str) -> Dict[str, str]:
+    """
+    Expand short secret references ${secret:name} to explicit form ${secret:username:name}.
+    
+    This should be called at pod creation/update time to persist the explicit form,
+    so later resolution doesn't need to know who created the pod.
+    
+    Args:
+        secret_map: Dict mapping keys to values (may contain ${secret:name} patterns)
+        actor: Username to use for expansion
+        
+    Returns:
+        Dict with short references expanded to explicit form
+        
+    Example:
+        secret_map = {"DB_PASS": "${secret:mydbpass}"}
+        expanded = expand_short_secret_references(secret_map, "jsmith")
+        # expanded = {"DB_PASS": "${secret:jsmith:mydbpass}"}
+    """
+    if not secret_map or not actor:
+        return secret_map or {}
+    
+    expanded = {}
+    for key, value in secret_map.items():
+        if not isinstance(value, str):
+            expanded[key] = value
+            continue
+        
+        # Replace all ${secret:name} with ${secret:actor:name}
+        def replace_short(match):
+            secret_name = match.group(1)
+            return f"${{secret:{actor}:{secret_name}}}"
+        
+        expanded[key] = SECRET_SHORT_INLINE_PATTERN.sub(replace_short, value)
+    
+    return expanded
 
 
 @dataclass
@@ -100,7 +161,7 @@ def parse_secret_reference(value: str, actor: str = None) -> Tuple[Optional[Secr
     All dynamic content must use ${} wrapper:
         - ${secret:name} - Short form, auto-expands with actor's username
         - ${secret:user:name} - Explicit user (must match actor)
-        - ${default:value:?description} - Placeholder with default
+        - ${pods:default:value:?description} - Placeholder with default
         - ${:?description} - Required placeholder
         - Anything else is a literal string (may contain inline placeholders)
     
@@ -124,7 +185,7 @@ def parse_secret_reference(value: str, actor: str = None) -> Tuple[Optional[Secr
         >>> parse_secret_reference("${:?API key}")
         (SecretReference(..., is_placeholder=True, is_required=True, ...), None)
         
-        >>> parse_secret_reference("${default:redis:?Redis URL}")
+        >>> parse_secret_reference("${pods:default:redis:?Redis URL}")
         (SecretReference(..., is_placeholder=True, is_required=False,
                         default_value='redis', ...), None)
         
@@ -179,15 +240,17 @@ def parse_secret_reference(value: str, actor: str = None) -> Tuple[Optional[Secr
             secret_owner=None
         ), None)
     
-    # Check for placeholder with default: ${default:value:?description}
+    # Check for placeholder with default: ${pods:default:value} or ${pods:default:value:?description}
     default_match = PLACEHOLDER_DEFAULT_PATTERN.match(value)
     if default_match:
         default_value = default_match.group(1)
-        desc_part = default_match.group(2)
-        # Description must start with ? for consistency
-        if not desc_part.startswith('?'):
-            return (None, f"Invalid placeholder format: '{value}'. Description must start with '?' (e.g., ${{default:value:?description}}).")
-        description = desc_part[1:]  # Strip the leading ?
+        desc_part = default_match.group(2)  # May be None if description not provided
+        description = None
+        if desc_part:
+            # Description must start with ? for consistency
+            if not desc_part.startswith('?'):
+                return (None, f"Invalid placeholder format: '{value}'. Description must start with '?' (e.g., ${{pods:default:value:?description}}).")
+            description = desc_part[1:]  # Strip the leading ?
         return (SecretReference(
             raw_value=value,
             is_placeholder=True,
@@ -212,16 +275,18 @@ def parse_secret_reference(value: str, actor: str = None) -> Tuple[Optional[Secr
                 'description': content[2:],
                 'default_value': None
             })
-        elif content.startswith('default:'):
-            # Default placeholder: ${default:value:?description}
-            parts = content[8:].split(':?', 1)
-            if len(parts) == 2:
-                inline_placeholders.append({
-                    'match': match.group(0),
-                    'type': 'default',
-                    'default_value': parts[0],
-                    'description': parts[1]
-                })
+        elif content.startswith('pods:default:'):
+            # Default placeholder: ${pods:default:value} or ${pods:default:value:?description}
+            rest = content[13:]  # Strip 'pods:default:'
+            parts = rest.split(':?', 1)
+            default_val = parts[0]
+            desc = parts[1] if len(parts) == 2 else None
+            inline_placeholders.append({
+                'match': match.group(0),
+                'type': 'default',
+                'default_value': default_val,
+                'description': desc
+            })
     
     # Return as literal with optional inline placeholders
     return (SecretReference(
@@ -282,55 +347,6 @@ def get_placeholder_warnings(secret_map: Dict[str, str], actor: str = None) -> T
     return (warnings, errors)
 
 
-def validate_secret_map_entry(
-    key: str,
-    value: str,
-    context: str = "pod",
-    actor: str = None
-) -> Tuple[bool, Optional[str]]:
-    """
-    Validate a single secret_map entry based on context (pod or template).
-    
-    Args:
-        key: The secret_map key (env var name)
-        value: The secret_map value (secret reference or placeholder)
-        context: 'pod' or 'template' - determines allowed syntax
-        actor: Current user for parsing (required for pod context short form)
-        
-    Returns:
-        Tuple of (is_valid, error_message or None)
-        
-    Allowed syntax by context:
-        Pod:
-            - ${secret:name} - Short form (auto-fills owner from actor)
-            - ${secret:user:name} - Explicit owner
-            - Literal strings
-            
-        Template:
-            - ${default:value:?description} - Placeholder with default
-            - ${:?description} - Required placeholder
-            - Literal strings (may contain inline placeholders)
-    """
-    if not isinstance(key, str):
-        return (False, f"Key must be string, got {type(key).__name__}")
-    if not isinstance(value, str):
-        return (False, f"Value must be string, got {type(value).__name__}")
-    if not key.replace('_', '').replace('-', '').isalnum():
-        return (False, f"Key must be alphanumeric (may include '_' or '-'). Got: {key}")
-    
-    ref, parse_error = parse_secret_reference(value, actor=actor)
-    
-    if parse_error:
-        return (False, parse_error)
-    
-    if context == "template" and ref.is_user_secret:
-        # Templates cannot contain direct secret references
-        return (False, f"Templates cannot contain direct secret references like '{value}'. "
-                       f"Use '${{:?description}}' for required or '${{default:value:?description}}' for optional.")
-    
-    return (True, None)
-
-
 def validate_template_secret_map(
     secret_map: Dict[str, str],
     actor: str = None
@@ -344,7 +360,7 @@ def validate_template_secret_map(
     2. Templates define structure - pods provide the actual secret bindings
     
     Valid template secret_map values:
-        - ${default:value:?description} - Placeholder with default value
+        - ${pods:default:value:?description} - Placeholder with default value
         - ${:?description} - Required placeholder (no default)
         - Literal strings with inline placeholders
     
@@ -459,6 +475,60 @@ def validate_environment_placeholders(
                 )
     
     return (len(errors) == 0, errors)
+
+
+# Patterns that are only valid in secret_map, not in environment_variables or config
+SECRET_MAP_ONLY_PATTERNS = [
+    (re.compile(r'\$\{pods:default:[^}]*\}'), 'pods:default', 'default value placeholders'),
+    (re.compile(r'\$\{pods:networking:[^}]+\}'), 'pods:networking', 'pod networking references'),
+    (re.compile(r'\$\{pods:url\}'), 'pods:url', 'pod URL shorthand'),
+    (re.compile(r'\$\{pods:tapis_url\}'), 'pods:tapis_url', 'Tapis base URL shorthand'),
+    (re.compile(r'\$\{pods:random:\d+\}'), 'pods:random', 'random password generation'),
+]
+
+
+def get_config_secret_map_warnings(
+    environment_variables: Dict[str, Any]
+) -> List[Dict[str, str]]:
+    """
+    Check environment_variables (config values) for patterns that are only valid in secret_map.
+    
+    These patterns are resolved in secret_map and should be referenced via ${pods:secrets:KEY}
+    in environment_variables. Using them directly in environment_variables won't work.
+    
+    Args:
+        environment_variables: Dict of environment variables to check
+        
+    Returns:
+        List of warning dicts with env_var, pattern, and suggestion
+        
+    Patterns that generate warnings:
+        - ${pods:default:...} - Use in secret_map, reference via ${pods:secrets:KEY}
+        - ${pods:networking:...} - Use in secret_map, reference via ${pods:secrets:KEY}
+        - ${pods:url} - Use in secret_map, reference via ${pods:secrets:KEY}
+        - ${pods:random:N} - Use in secret_map, reference via ${pods:secrets:KEY}
+    """
+    warnings = []
+    
+    if not environment_variables:
+        return warnings
+    
+    for var_name, value in environment_variables.items():
+        if not isinstance(value, str):
+            continue
+        
+        for pattern, pattern_name, description in SECRET_MAP_ONLY_PATTERNS:
+            if pattern.search(value):
+                warnings.append({
+                    "env_var": var_name,
+                    "pattern": pattern_name,
+                    "value": value,
+                    "message": f"'{pattern_name}' syntax ({description}) is only valid in secret_map, "
+                               f"not environment_variables. Define the value in secret_map and reference "
+                               f"it here using ${{pods:secrets:KEY}}."
+                })
+    
+    return warnings
 
 
 def validate_secret_map(
@@ -587,7 +657,8 @@ def resolve_secret_map(
     site_id: str,
     tenant_id: str,
     actor: str,
-    pod_id: str
+    pod_id: str,
+    pod: Any = None
 ) -> Tuple[Dict[str, str], List[str]]:
     """
     Resolve all secret references in secret_map to their actual values.
@@ -595,12 +666,18 @@ def resolve_secret_map(
     This is called at pod start time to fetch actual secret values from SK.
     Results are passed to the spawner for injection into the pod.
     
+    Resolution order:
+    1. Random passwords (${pods:random:N}) - generates and persists to DB
+    2. Pod networking (${pods:networking:name:field}, ${pods:url}) - resolves pod URLs
+    3. SK secrets (${secret:name}) - fetches from Security Kernel
+    
     Args:
         secret_map: Dict mapping env var names to secret references
         site_id: Site ID for secret lookup
         tenant_id: Tenant ID of the pod owner
         actor: Username performing the action
         pod_id: Pod ID for logging
+        pod: Optional Pod object for networking resolution and random password persistence
         
     Returns:
         Tuple of (resolved_secrets dict, list of error messages)
@@ -609,7 +686,21 @@ def resolve_secret_map(
     resolved = {}
     errors = []
     
-    for env_var, value in secret_map.items():
+    # Working copy of secret_map that gets progressively resolved
+    working_map = dict(secret_map)
+    
+    # Step 1: Resolve random passwords first (persists to DB)
+    if pod:
+        working_map, random_errors, _ = resolve_random_passwords(working_map, pod, actor)
+        errors.extend(random_errors)
+    
+    # Step 2: Resolve pod networking references
+    if pod:
+        working_map, networking_errors = resolve_pod_networking(working_map, pod)
+        errors.extend(networking_errors)
+    
+    # Step 3: Resolve SK secrets and other patterns
+    for env_var, value in working_map.items():
         ref, parse_error = parse_secret_reference(value, actor=actor)
         
         if parse_error:
@@ -755,16 +846,264 @@ def resolve_secret_map(
     return (resolved, errors)
 
 
+def resolve_random_passwords(
+    secret_map: Dict[str, str],
+    pod: Any,
+    actor: str
+) -> Tuple[Dict[str, str], List[str], bool]:
+    """
+    Resolve ${pods:random:N} patterns in secret_map by generating random passwords.
+    
+    Random passwords are a ONE-TIME resolution. Once generated and persisted to
+    pod.secret_map, subsequent calls will return the persisted value rather than
+    generating new passwords.
+    
+    Args:
+        secret_map: Dict mapping keys to values (may contain ${pods:random:N})
+        pod: Pod object for DB persistence and checking existing resolved values
+        actor: Username for logging
+        
+    Returns:
+        Tuple of (resolved dict, list of errors, bool indicating if DB was updated)
+        
+    Example:
+        secret_map = {"DB_PASS": "${pods:random:32}"}
+        resolved, errors, updated = resolve_random_passwords(secret_map, pod, "user")
+        # resolved = {"DB_PASS": "aB3xK9..."}  (32 char random string)
+        # pod.secret_map is now {"DB_PASS": "aB3xK9..."} in DB
+        # Subsequent calls return the same password, not a new one
+    """
+    import secrets
+    import string
+    
+    resolved = dict(secret_map)
+    errors = []
+    db_updates_needed = False
+    generated_keys = []  # List of (key, length) tuples for logging
+    
+    # Get already-resolved values from pod.secret_map if available
+    # This prevents regenerating passwords on subsequent calls
+    existing_resolved = {}
+    if pod and pod.secret_map:
+        existing_resolved = dict(pod.secret_map)
+    
+    for key, value in secret_map.items():
+        if not isinstance(value, str):
+            continue
+            
+        match = RANDOM_PASSWORD_PATTERN.fullmatch(value)
+        if match:
+            length = int(match.group(1))
+            
+            # Check if this key was already resolved in pod.secret_map
+            # If the stored value doesn't match the random pattern, it's already resolved
+            if key in existing_resolved:
+                existing_value = existing_resolved[key]
+                if not RANDOM_PASSWORD_PATTERN.fullmatch(str(existing_value)):
+                    # Already resolved - use the existing value
+                    resolved[key] = existing_value
+                    logger.debug(f"Using existing resolved random password for key '{key}' in pod '{pod.pod_id}'")
+                    continue
+            
+            # Validate length
+            if length < 8:
+                errors.append(f"Key '{key}': Random password length must be at least 8 characters, got {length}")
+                continue
+            if length > 128:
+                errors.append(f"Key '{key}': Random password length must not exceed 128 characters, got {length}")
+                continue
+            
+            # Generate secure random password
+            alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
+            password = ''.join(secrets.choice(alphabet) for _ in range(length))
+            
+            resolved[key] = password
+            generated_keys.append((key, length))
+            db_updates_needed = True
+            
+            pod_id = pod.pod_id if pod else 'unknown'
+            logger.info(f"Generated random password for key '{key}' (length={length}) in pod '{pod_id}'")
+    
+    # Bulk update pod.secret_map in DB if randomized password(s) generated
+    if db_updates_needed and pod:
+        try:
+            new_secret_map = dict(pod.secret_map) if pod.secret_map else {}
+            for key, length in generated_keys:
+                new_secret_map[key] = resolved[key]
+            
+            pod.secret_map = new_secret_map
+            # Create detailed action log with key names and lengths
+            log_entries = [f"{key} (length: {length})" for key, length in generated_keys]
+            pod.db_update(log=f"Generated random password(s): {', '.join(log_entries)}")
+            logger.debug(f"Persisted random passwords to pod '{pod.pod_id}' secret_map")
+        except Exception as e:
+            errors.append(f"Failed to persist random passwords to database: {str(e)}")
+            logger.error(f"Failed to persist random passwords for pod '{pod.pod_id}': {e}")
+    
+    return (resolved, errors, db_updates_needed)
+
+
+def resolve_pod_networking(
+    secret_map: Dict[str, str],
+    pod: Any
+) -> Tuple[Dict[str, str], List[str]]:
+    """
+    Resolve ${pods:networking:name:field}, ${pods:url}, and ${pods:tapis_url} patterns in secret_map.
+    
+    Replaces networking references with actual values from the pod's networking config.
+    
+    Args:
+        secret_map: Dict mapping keys to values (may contain networking patterns)
+        pod: Pod object with networking configuration
+        
+    Returns:
+        Tuple of (resolved dict, list of errors)
+        
+    Supported patterns:
+        ${pods:networking:default:url}       -> "mypod.pods.tenant.tapis.io"
+        ${pods:networking:default:hostname}  -> "mypod.pods.tenant.tapis.io"
+        ${pods:networking:default:port}      -> "5000"
+        ${pods:networking:default:protocol}  -> "http"
+        ${pods:networking:default:tapis_url} -> "tenant.tapis.io" (base Tapis URL)
+        ${pods:url}                          -> shorthand for ${pods:networking:default:url}
+        ${pods:tapis_url}                    -> shorthand for ${pods:networking:default:tapis_url}
+        
+    Example:
+        secret_map = {"CALLBACK": "https://${pods:url}/callback"}
+        resolved, errors = resolve_pod_networking(secret_map, pod)
+        # resolved = {"CALLBACK": "https://mypod.pods.tacc.tapis.io/callback"}
+        
+        secret_map = {"TAPIS_BASE": "${pods:tapis_url}"}
+        resolved, errors = resolve_pod_networking(secret_map, pod)
+        # resolved = {"TAPIS_BASE": "tacc.tapis.io"}
+    """
+    resolved = dict(secret_map)
+    errors = []
+    
+    if not pod or not hasattr(pod, 'networking'):
+        return (resolved, errors)
+    
+    # Get networking config (handle both dict and object)
+    networking = pod.networking
+    if hasattr(networking, 'dict'):
+        networking = networking.dict()
+    elif hasattr(networking, 'model_dump'):
+        networking = networking.model_dump()
+    
+    for key, value in secret_map.items():
+        if not isinstance(value, str):
+            continue
+        
+        new_value = value
+        
+        # Replace ${pods:url} shorthand first
+        if POD_URL_SHORTHAND_PATTERN.search(new_value):
+            default_net = networking.get('default', {})
+            if hasattr(default_net, 'dict'):
+                default_net = default_net.dict()
+            elif hasattr(default_net, 'model_dump'):
+                default_net = default_net.model_dump()
+            elif not isinstance(default_net, dict):
+                default_net = dict(default_net) if default_net else {}
+                
+            url = default_net.get('url', '')
+            if not url:
+                errors.append(f"Key '{key}': Pod has no default networking URL configured")
+            else:
+                new_value = POD_URL_SHORTHAND_PATTERN.sub(url, new_value)
+        
+        # Replace ${pods:tapis_url} shorthand
+        if POD_TAPIS_URL_SHORTHAND_PATTERN.search(new_value):
+            default_net = networking.get('default', {})
+            if hasattr(default_net, 'dict'):
+                default_net = default_net.dict()
+            elif hasattr(default_net, 'model_dump'):
+                default_net = default_net.model_dump()
+            elif not isinstance(default_net, dict):
+                default_net = dict(default_net) if default_net else {}
+                
+            url = default_net.get('url', '')
+            if not url:
+                errors.append(f"Key '{key}': Pod has no default networking URL configured")
+            elif '.pods.' not in url:
+                errors.append(f"Key '{key}': Cannot extract tapis_url from '{url}' - expected format: <pod>.pods.<tapis_base_url>")
+            else:
+                # Extract base Tapis URL (everything after "pods.")
+                tapis_url = url.split('.pods.', 1)[1]
+                new_value = POD_TAPIS_URL_SHORTHAND_PATTERN.sub(tapis_url, new_value)
+        
+        # Replace ${pods:networking:name:field} patterns
+        for match in POD_NETWORKING_PATTERN.finditer(new_value):
+            net_name = match.group(1)
+            field = match.group(2)
+            
+            net_config = networking.get(net_name)
+            if not net_config:
+                errors.append(f"Key '{key}': Networking '{net_name}' not found in pod")
+                continue
+            
+            # Convert to dict if needed
+            if hasattr(net_config, 'dict'):
+                net_config = net_config.dict()
+            elif hasattr(net_config, 'model_dump'):
+                net_config = net_config.model_dump()
+            elif not isinstance(net_config, dict):
+                net_config = dict(net_config)
+            
+            # Map field names - most map directly to net_config keys
+            # Special case: tapis_url extracts base URL from full pod URL
+            field_mapping = {
+                'url': 'url',
+                'hostname': 'url',  # hostname is same as url (no protocol prefix)
+                'port': 'port',
+                'protocol': 'protocol',
+                'tapis_url': 'url'  # Will be post-processed to extract base URL
+            }
+            
+            if field not in field_mapping:
+                errors.append(f"Key '{key}': Unknown networking field '{field}'. Valid fields: url, hostname, port, protocol, tapis_url")
+                continue
+            
+            field_value = net_config.get(field_mapping[field])
+            if field_value is None:
+                errors.append(f"Key '{key}': Networking '{net_name}' has no '{field}' configured")
+                continue
+            
+            # Convert to string
+            field_value = str(field_value)
+            
+            # Special handling for tapis_url: extract base URL after "pods."
+            # e.g., "mypod.pods.tacc.tapis.io" -> "tacc.tapis.io"
+            if field == 'tapis_url':
+                if '.pods.' in field_value:
+                    # Extract everything after "pods."
+                    field_value = field_value.split('.pods.', 1)[1]
+                else:
+                    errors.append(f"Key '{key}': Cannot extract tapis_url from '{field_value}' - expected format: <pod>.pods.<tapis_base_url>")
+                    continue
+            
+            # Replace the match
+            new_value = new_value.replace(match.group(0), field_value)
+        
+        resolved[key] = new_value
+    
+    return (resolved, errors)
+
+
 def inject_secrets_into_env_vars(
     environment_variables: Dict[str, Any],
     resolved_secrets: Dict[str, str],
     fail_on_missing: bool = True
 ) -> Tuple[Dict[str, Any], List[str]]:
     """
-    Merge resolved secrets into environment variables and process inline references.
+    Process inline secret references in environment variables.
     
-    All secrets must be defined in secret_map first, then referenced in
+    Secrets must be defined in secret_map first, then referenced in
     environment_variables using ${pods:secrets:KEY} notation.
+    
+    NOTE: This function only processes ${pods:secrets:KEY} references.
+    It does NOT automatically add all secret_map keys to environment_variables.
+    Users must explicitly reference secrets they want as env vars.
     
     Args:
         environment_variables: Existing environment variables dict
@@ -785,9 +1124,8 @@ def inject_secrets_into_env_vars(
     result = dict(environment_variables) if environment_variables else {}
     errors = []
     
-    # Add resolved secrets as env vars (for direct injection)
-    if resolved_secrets:
-        result.update(resolved_secrets)
+    # NOTE: We intentionally do NOT auto-add all resolved_secrets to result.
+    # Secrets are only injected when explicitly referenced via ${pods:secrets:KEY}.
     
     # Replace inline ${pods:secrets:KEY} references in all values
     for key, value in list(result.items()):
@@ -942,3 +1280,174 @@ def detect_ownership_transfers(
             })
     
     return transfers
+
+
+# Generic pattern to detect ANY remaining ${...} syntax after resolution
+UNRESOLVED_PATTERN = re.compile(r'\$\{([^}]+)\}')
+
+
+def detect_unresolved_patterns(
+    secret_map: Dict[str, str] = None,
+    environment_variables: Dict[str, Any] = None,
+    config_contents: List[str] = None
+) -> Dict[str, Any]:
+    """
+    Detect any remaining unresolved ${...} patterns across pod configuration.
+    
+    This function scans secret_map, environment_variables, and config_content
+    for any ${...} patterns that weren't resolved. These indicate:
+    - Placeholders that still need values
+    - Secret references that failed to resolve  
+    - Syntax errors in pattern usage
+    
+    Args:
+        secret_map: Dict of secret_map entries (already "resolved" or with placeholders)
+        environment_variables: Dict of environment variables
+        config_contents: List of config_content strings from volume_mounts
+        
+    Returns:
+        Dict with:
+        - has_unresolved: bool - True if any unresolved patterns found
+        - secret_map_unresolved: List of {key, patterns: [{pattern, type}]}
+        - env_vars_unresolved: List of {key, patterns: [{pattern, type}]}
+        - config_unresolved: List of {index, patterns: [{pattern, type}]}
+        - summary: Human-readable summary string
+    """
+    result = {
+        "has_unresolved": False,
+        "secret_map_unresolved": [],
+        "env_vars_unresolved": [],
+        "config_unresolved": [],
+        "summary": ""
+    }
+    
+    def classify_pattern(pattern_content: str) -> str:
+        """Classify what type of unresolved pattern this is."""
+        if pattern_content.startswith('secret:'):
+            return 'user_secret'
+        elif pattern_content.startswith('pods:secrets:'):
+            return 'secret_map_reference'
+        elif pattern_content.startswith('pods:default:'):
+            return 'default_placeholder'
+        elif pattern_content.startswith(':?'):
+            return 'required_placeholder'
+        elif pattern_content.startswith('pods:networking:'):
+            return 'networking_reference'
+        elif pattern_content == 'pods:url':
+            return 'pod_url'
+        elif pattern_content == 'pods:tapis_url':
+            return 'tapis_url'
+        elif pattern_content.startswith('pods:random:'):
+            return 'random_password'
+        else:
+            return 'unknown'
+    
+    def find_patterns(value: str) -> List[Dict[str, str]]:
+        """Find all ${...} patterns in a string."""
+        if not isinstance(value, str):
+            return []
+        patterns = []
+        for match in UNRESOLVED_PATTERN.finditer(value):
+            content = match.group(1)
+            patterns.append({
+                "pattern": match.group(0),
+                "type": classify_pattern(content)
+            })
+        return patterns
+    
+    # Check secret_map
+    if secret_map:
+        for key, value in secret_map.items():
+            patterns = find_patterns(value)
+            if patterns:
+                result["secret_map_unresolved"].append({
+                    "key": key,
+                    "patterns": patterns
+                })
+    
+    # Check environment_variables
+    if environment_variables:
+        for key, value in environment_variables.items():
+            patterns = find_patterns(value)
+            if patterns:
+                result["env_vars_unresolved"].append({
+                    "key": key,
+                    "patterns": patterns
+                })
+    
+    # Check config_contents
+    if config_contents:
+        for idx, content in enumerate(config_contents):
+            patterns = find_patterns(content)
+            if patterns:
+                result["config_unresolved"].append({
+                    "index": idx,
+                    "patterns": patterns
+                })
+    
+    # Set has_unresolved flag
+    total_unresolved = (
+        len(result["secret_map_unresolved"]) + 
+        len(result["env_vars_unresolved"]) + 
+        len(result["config_unresolved"])
+    )
+    result["has_unresolved"] = total_unresolved > 0
+    
+    # Build summary
+    if result["has_unresolved"]:
+        parts = []
+        if result["secret_map_unresolved"]:
+            keys = [item["key"] for item in result["secret_map_unresolved"]]
+            parts.append(f"secret_map keys with unresolved patterns: {', '.join(keys)}")
+        if result["env_vars_unresolved"]:
+            keys = [item["key"] for item in result["env_vars_unresolved"]]
+            parts.append(f"environment_variables with unresolved patterns: {', '.join(keys)}")
+        if result["config_unresolved"]:
+            parts.append(f"{len(result['config_unresolved'])} config_content(s) with unresolved patterns")
+        result["summary"] = "; ".join(parts)
+    else:
+        result["summary"] = "All patterns resolved successfully"
+    
+    return result
+
+
+def check_pod_unresolved_patterns(
+    secret_map: Dict[str, str] = None,
+    environment_variables: Dict[str, Any] = None,
+    volume_mounts: Dict[str, Any] = None
+) -> Optional[Dict[str, Any]]:
+    """
+    Convenience function to check a pod's configuration for unresolved patterns.
+    
+    Extracts config_content from volume_mounts and calls detect_unresolved_patterns.
+    Returns the unresolved info dict if any patterns found, otherwise None.
+    
+    Args:
+        secret_map: Pod's secret_map dict
+        environment_variables: Pod's environment_variables dict
+        volume_mounts: Pod's volume_mounts dict (keyed by mount_path)
+        
+    Returns:
+        Dict with unresolved pattern info if any found, None if all resolved
+    """
+    # Extract config_contents from volume_mounts
+    config_contents = []
+    if volume_mounts:
+        for mount_path, vol_mount in volume_mounts.items():
+            if vol_mount is None:
+                continue
+            config = None
+            if hasattr(vol_mount, 'config_content'):
+                config = vol_mount.config_content
+            elif isinstance(vol_mount, dict):
+                config = vol_mount.get('config_content')
+            if config:
+                config_contents.append(config)
+    
+    unresolved = detect_unresolved_patterns(
+        secret_map=dict(secret_map) if secret_map else None,
+        environment_variables=dict(environment_variables) if environment_variables else None,
+        config_contents=config_contents if config_contents else None
+    )
+    
+    return unresolved if unresolved["has_unresolved"] else None

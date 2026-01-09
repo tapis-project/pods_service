@@ -23,12 +23,13 @@ class CommandChannel(BinaryTaskQueue):
 
         super().__init__(name=f'command_channel_{name}')
 
-    def put_cmd(self, object_id, object_type, tenant_id, site_id):
-        """Put a new command on the command channel."""
+    def put_cmd(self, object_id, object_type, tenant_id, site_id, resolved_secrets=None):
+        """Put a new command on the command channel. """
         msg = {'object_id': object_id,
                'object_type': object_type,
                'tenant_id': tenant_id,
-               'site_id': site_id}
+               'site_id': site_id,
+               'resolved_secrets': resolved_secrets or {}}
 
         self.put(msg)
 
@@ -42,15 +43,16 @@ class PikaCommandChannel:
         self.channel = self.connection.channel()
         self.channel.queue_declare(queue=self.queue_name, durable=True)
 
-    def put_cmd(self, object_id, object_type, tenant_id, site_id):
+    def put_cmd(self, object_id, object_type, tenant_id, site_id, resolved_secrets=None):
         msg = {'object_id': object_id,
                'object_type': object_type,
                'tenant_id': tenant_id,
-               'site_id': site_id}
+               'site_id': site_id,
+               'resolved_secrets': resolved_secrets or {}}
         self.channel.basic_publish(
             exchange='',
             routing_key=self.queue_name,
-            body=msg,
+            body=pickle.dumps(msg),
             properties=pika.BasicProperties(delivery_mode=2)
         )
 

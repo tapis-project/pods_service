@@ -24,6 +24,10 @@ test_pod_ephemeral_1 = "testspodsephemeral1"
 test_pod_ephemeral_2 = "testspodsephemeral2"
 test_pod_ephemeral_3 = "testspodsephemeral3"
 test_pod_ephemeral_4 = "testspodsephemeral4"
+test_pod_eph_unlimited = "testspodsephunlimited"
+test_pod_eph_mixed = "testspodsephmixed"
+test_pod_eph_mixed2 = "testspodsephmixed2"
+test_pod_eph_skip = "testspodsephskip"
 
 
 ##### Teardown
@@ -38,7 +42,8 @@ def teardown(headers):
     yield None
 
     # Delete all objects after the tests are done.
-    pods = [test_pod_1, test_pod_error_1, test_pod_ephemeral_1, test_pod_ephemeral_2, test_pod_ephemeral_3, test_pod_ephemeral_4]
+    pods = [test_pod_1, test_pod_error_1, test_pod_ephemeral_1, test_pod_ephemeral_2, test_pod_ephemeral_3, test_pod_ephemeral_4,
+            test_pod_eph_unlimited, test_pod_eph_mixed, test_pod_eph_mixed2, test_pod_eph_skip]
     volumes = []
     for pod_id in pods:
         rsp = client.delete(f'/pods/{pod_id}', headers=headers)

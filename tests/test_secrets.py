@@ -763,9 +763,10 @@ def test_pod_creation_returns_placeholder_metadata(headers):
         "pod_id": test_pod_placeholders,
         "image": "notchristiangarcia/testserver:fastapi",
         "description": "Test pod with placeholders in secret_map",
+        "status_requested": "OFF",  # Don't start - just create to see placeholder metadata
         "secret_map": {
             "REQUIRED_KEY": "${:?This is a required secret}",
-            "OPTIONAL_KEY": "${default:fallback_value:?This is optional}"
+            "OPTIONAL_KEY": "${pods:default:fallback_value:?This is optional}"
         }
     }
     rsp = client.post("/pods", data=json.dumps(pod_def), headers=headers)

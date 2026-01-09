@@ -811,7 +811,8 @@ async def start_pod(pod_id):
                 site_id=g.site_id,
                 tenant_id=g.request_tenant_id,
                 actor=g.username,
-                pod_id=pod.pod_id
+                pod_id=pod.pod_id,
+                pod=pod
             )
             if secret_errors:
                 # Required secrets missing - fail the start

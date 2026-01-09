@@ -58,7 +58,7 @@ test_template_private = "testtemplatenopublic"  # Remains private (no public per
 
 # Template tags
 test_tag_simple = "simple"  # No secret_map placeholders
-test_tag_with_defaults = "withdefaults"  # Has ${default:value:?desc} placeholders
+test_tag_with_defaults = "withdefaults"  # Has ${pods:default:value:?desc} placeholders
 test_tag_with_required = "withrequired"  # Has ${:?desc} required placeholders
 
 # Pods created by regular user from public templates
@@ -164,15 +164,15 @@ def test_add_simple_tag_to_site_public(headers):
 
 
 def test_add_defaults_tag_to_site_public(headers):
-    """Add template tag with ${default:value:?desc} placeholders to site-public template."""
+    """Add template tag with ${pods:default:value:?desc} placeholders to site-public template."""
     tag_def = {
         "pod_definition": {
             "image": "notchristiangarcia/testserver:fastapi",
             "description": "Template tag with default placeholders",
             "secret_map": {
-                "APP_HOST": "${default:localhost:?Application hostname}",
-                "APP_PORT": "${default:5000:?Application port number}",
-                "LOG_LEVEL": "${default:INFO:?Logging level}"
+                "APP_HOST": "${pods:default:localhost:?Application hostname}",
+                "APP_PORT": "${pods:default:5000:?Application port number}",
+                "LOG_LEVEL": "${pods:default:INFO:?Logging level}"
             },
             "environment_variables": {
                 "HOST": "${pods:secrets:APP_HOST}",
@@ -585,7 +585,7 @@ def test_template_env_var_missing_secret_map_key_error(headers):
         "pod_definition": {
             "image": "notchristiangarcia/testserver:fastapi",
             "secret_map": {
-                "DB_HOST": "${default:localhost:?Database host}"
+                "DB_HOST": "${pods:default:localhost:?Database host}"
             },
             "environment_variables": {
                 "DATABASE_URL": "postgres://${pods:secrets:MISSING_KEY}@host/db"  # MISSING_KEY not in secret_map
@@ -608,7 +608,7 @@ def test_template_env_var_invalid_reference_format_error(headers):
         "pod_definition": {
             "image": "notchristiangarcia/testserver:fastapi",
             "secret_map": {
-                "DB_HOST": "${default:localhost:?Database host}"
+                "DB_HOST": "${pods:default:localhost:?Database host}"
             },
             "environment_variables": {
                 "INVALID_REF": "${pods:invalid:format:too:many:parts}"  # Invalid format

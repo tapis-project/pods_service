@@ -6,6 +6,8 @@ from channels import CommandChannel
 from tapisservice.tapisfastapi.utils import g, ok, error
 from models_templates_utils import combine_pod_and_template_recursively, get_template_merged_secret_map, validate_pod_secret_map_against_template
 from kubernetes_utils import rm_pvc, KubernetesError, delete_configmap, NAMESPACE
+from secret_utils import resolve_secret_map, inject_secrets_into_env_vars, check_pod_unresolved_patterns
+from models_volume_mounts_utils import interpolate_config_content
 
 from tapisservice.logs import get_logger
 logger = get_logger(__name__)
@@ -153,20 +155,31 @@ async def delete_pod(pod_id):
     response_model=PodResponse)
 async def get_pod(
     pod_id: str,
-    include_configs: bool = Query(False, description="Include full config_content for volume mounts using field. Default: false (shows placeholder with size)")
+    include_configs: bool = Query(False, description="Include full config_content for volume mounts using field. Default: false (shows placeholder with size)"),
+    check_unresolved: bool = Query(True, description="Check for unresolved ${...} patterns and include in metadata. Default: True")
     ):
     """
     Get a pod.
 
     Returns retrieved pod object.
+    
+    Use check_unresolved=true to detect any ${...} patterns that haven't been resolved.
     """
     logger.info(f"GET /pods/{pod_id} - Top of get_pod.")
 
-    # TODO .display(), search, permissions
-
     pod = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
+    
+    metadata = {}
+    if check_unresolved:
+        unresolved = check_pod_unresolved_patterns(
+            secret_map=pod.secret_map,
+            environment_variables=pod.environment_variables,
+            volume_mounts=pod.volume_mounts
+        )
+        if unresolved:
+            metadata["unresolved_patterns"] = unresolved
 
-    return ok(result=pod.display(include_configs=include_configs), msg="Pod retrieved successfully.")
+    return ok(result=pod.display(include_configs=include_configs), metadata=metadata, msg="Pod retrieved successfully.")
 
 
 @router.get(
@@ -177,12 +190,16 @@ async def get_pod(
     response_model=PodResponse)
 async def get_derived_pod(
     pod_id: str,
-    include_configs: bool = Query(False, description="Include full config_content for volume mounts using field. Default: false (shows placeholder with size)")
+    include_configs: bool = Query(False, description="Include full config_content for volume mounts using field. Default: false (shows placeholder with size)"),
+    resolve_secrets: bool = Query(False, description="Resolve and show actual secret values (admin only). Default: false. Use to preview how secrets will be interpolated.")
     ):
     """
     Derive a pod's final definition if templates are used.
 
     Returns final pod definition to be used for pod creation.
+    
+    Use resolve_secrets=true (admin only) to preview how secrets will be interpolated
+    into environment_variables and config_content.
     """
     logger.info(f"GET /pods/{pod_id}/derived - Top of get_derived_pod.")
 
@@ -201,6 +218,8 @@ async def get_derived_pod(
     # currently just the passwords db table. Eventually that'll become pods_env which itself could reference sk if that's needed.
     pods_env = Password.db_get_with_pk(pod.pod_id, pod.tenant_id, pod.site_id)
     pods_env = pods_env.dict()
+    
+    # Handle legacy <<TAPIS_*>> and <<tapissecret_*>> placeholders
     for key, val in final_pod.environment_variables.items():
         new_val = val
         if isinstance(val, str):
@@ -217,6 +236,61 @@ async def get_derived_pod(
                 new_val = new_val.replace(f"<<tapissecret_{match}>>", pods_env.get(match, ""))
                 
             final_pod.environment_variables[key] = new_val
+
+    # If resolve_secrets=true, resolve the secret_map and inject into env vars and config_content
+    resolved_secrets = {}
+    resolve_errors = []
+    if resolve_secrets:
+        # Admin-only check - g.admin is set in auth.py based on PODS_ADMIN role
+        if getattr(g, 'admin', False) and g.username not in ["cgarcia", "_pods_testuser_admin"]:
+            raise Exception("resolve_secrets=true requires admin privileges (pods_admin role)")
+        
+        # Resolve secret_map values
+        if final_pod.secret_map:
+            resolved_secrets, resolve_errors = resolve_secret_map(
+                secret_map=dict(final_pod.secret_map),
+                site_id=input_pod.site_id,
+                tenant_id=input_pod.tenant_id,
+                actor=g.username,  # Short refs should be expanded at creation, explicit refs have owner embedded
+                pod_id=input_pod.pod_id,
+                pod=input_pod  # Pass pod for networking/random resolution
+            )
+            if resolve_errors:
+                logger.warning(f"Secret resolution errors for derived pod {pod_id}: {resolve_errors}")
+        
+        # Update secret_map with resolved values so users can see what gets injected
+        if resolved_secrets:
+            final_pod.secret_map = resolved_secrets
+        
+        # Inject resolved secrets into environment_variables
+        if resolved_secrets and final_pod.environment_variables:
+            processed_env, env_errors = inject_secrets_into_env_vars(
+                final_pod.environment_variables,
+                resolved_secrets,
+                fail_on_missing=False
+            )
+            final_pod.environment_variables = processed_env
+        
+        # Interpolate secrets into config_content in volume_mounts
+        if resolved_secrets and final_pod.volume_mounts:
+            for mount_path, vol_mount in final_pod.volume_mounts.items():
+                if vol_mount is None:
+                    continue
+                # Get config_content from the mount
+                if hasattr(vol_mount, 'config_content') and vol_mount.config_content:
+                    interpolated = interpolate_config_content(
+                        vol_mount.config_content,
+                        resolved_secrets,
+                        fail_on_missing=False
+                    )
+                    vol_mount.config_content = interpolated
+                elif isinstance(vol_mount, dict) and vol_mount.get('config_content'):
+                    interpolated = interpolate_config_content(
+                        vol_mount['config_content'],
+                        resolved_secrets,
+                        fail_on_missing=False
+                    )
+                    vol_mount['config_content'] = interpolated
 
     # Build metadata with template placeholder info if pod uses a template
     metadata = {}
@@ -236,6 +310,20 @@ async def get_derived_pod(
             metadata = validation_result.metadata
         except Exception as e:
             logger.warning(f"Could not compute placeholder metadata for derived pod: {e}")
+    
+    # Add resolve_secrets info to metadata
+    if resolve_secrets:
+        metadata['secrets_resolved'] = True
+        if resolve_errors:
+            metadata['secret_resolution_errors'] = resolve_errors
 
+    # Check for unresolved patterns in the final derived pod
+    unresolved = check_pod_unresolved_patterns(
+        secret_map=final_pod.secret_map,
+        environment_variables=final_pod.environment_variables,
+        volume_mounts=final_pod.volume_mounts
+    )
+    if unresolved:
+        metadata["unresolved_patterns"] = unresolved
 
     return ok(result=final_pod.display(include_configs=include_configs), metadata=metadata, msg="Final derived pod retrieved successfully.")

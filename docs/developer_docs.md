@@ -159,32 +159,63 @@ View [live-docs](https://tapis-project.github.io/live-docs/?service=Pods) for cu
 ## Secrets Syntax Reference
 
 ### Pod `secret_map` Syntax
+
 | Syntax | Description | Example |
 |--------|-------------|---------|
-| `${secret:name}` | User's own secret | `${secret:my_db_pass}` |
-| `${secret:user:name}` | Another user's secret (requires permission) | `${secret:jsmith:shared_key}` |
+| `${secret:name}` | User's own secret from SK | `${secret:my_db_pass}` |
+| `${secret:user:name}` | Another user's secret from SK (requires permission) | `${secret:jsmith:shared_key}` |
+| `${pods:random:int_length}` | Generate random password (8-128 chars), persisted to DB | `${pods:random:32}` |
+| `${pods:url}` | Pod's full URL | `mypod.pods.tacc.tapis.io` |
+| `${pods:tapis_url}` | Base Tapis URL | `tacc.tapis.io` |
+| `${pods:networking:net_name:FIELD}` | Networking field (url, hostname, port, protocol, tapis_url) | `${pods:networking:default:port}` |
 | `literal_value` | Plain text | `my-config-value` |
 
 ### Template `secret_map` Syntax (Only allows placeholder secret values)
+
 | Syntax | Description | Example |
 |--------|-------------|---------|
-| `${:?description}` | Required - pod creation fails without override | `${:?Database password}` |
-| `${default:value:?description}` | Optional - uses default if not overridden | `${default:localhost:?DB hostname}` |
+| `${:?description}` | Required - pod must override | `${:?Database password}` |
+| `${pods:default:value:?description}` | Optional - uses default if not overridden | `${pods:default:localhost:?DB hostname}` |
 | `literal_value` | Plain text for non-secret config | `production` |
 
 **Note:** Templates cannot use `${secret:name}` - they define placeholders that pod creators override.
 
-### Environment Variable References
-| Syntax | Description | Example |
-|--------|-------------|---------|
-| `${pods:secrets:KEY}` | Reference `secret_map` entry by key | `${pods:secrets:DB_PASSWORD}` |
+### Environment Variables & Config File References
+
+> **⚠️ Important:** `${pods:url}`, `${pods:tapis_url}`, `${pods:random:int_length}`, `${pods:networking:...}` only work in `secret_map`. To use these values elsewhere, define them in `secret_map` first:
+> ```python
+> "secret_map": { "MY_URL": "${pods:url}" },
+> "environment_variables": { "APP_URL": "${pods:secrets:MY_URL}" }
+> ```
+> **Only `${pods:secrets:KEY}` works in `environment_variables` and config files**
+
+
+### Pod Networking Fields
+Reference pod networking dynamically with `${pods:networking:<networking_name>:FIELD}`, where fields are below.
+
+| Field | Description | Example Value |
+|-------|-------------|---------------|
+| `url` | Full URL | `mypod.pods.tacc.tapis.io` |
+| `hostname` | Same as url | `mypod.pods.tacc.tapis.io` |
+| `tapis_url` | Base Tapis URL | `tacc.tapis.io` |
+| `port` | Port number | `5000` |
+| `protocol` | Network protocol | `http` |
+
+
+**Shorthands:**
+- `${pods:url}` = `${pods:networking:default:url}`
+- `${pods:tapis_url}` = `${pods:networking:default:tapis_url}`
+
+### Random Password Generation
+
+`${pods:random:int_length}` generates a secure random password (8-128 chars) on first resolution, then persists to DB. Characters: `a-zA-Z0-9!@#$%^&*`
 
 ### Example: Template → Pod Flow
 ```python
 # Template secret_map (defines structure)
 {
     "DB_PASSWORD": "${:?Database password}",
-    "DB_HOST": "${default:localhost:?Database host}"
+    "DB_HOST": "${pods:default:localhost:?Database host}"
 }
 
 # Pod secret_map (provides values)
@@ -199,11 +230,114 @@ View [live-docs](https://tapis-project.github.io/live-docs/?service=Pods) for cu
 }
 ```
 
+### Example: Networking & Random Password
+```python
+# Pod with OAuth callback using pod URL and generated secret
+{
+    "pod_id": "myapp",
+    "image": "myorg/webapp:1.0",
+    "secret_map": {
+        "SESSION_SECRET": "${pods:random:64}",
+        "OAUTH_CALLBACK": "https://${pods:url}/auth/callback",
+        "TAPIS_BASE": "${pods:tapis_url}"
+    },
+    "environment_variables": {
+        "SESSION_SECRET": "${pods:secrets:SESSION_SECRET}",
+        "OAUTH_REDIRECT_URI": "${pods:secrets:OAUTH_CALLBACK}",
+        "TAPIS_URL": "${pods:secrets:TAPIS_BASE}"
+    },
+    "volume_mounts": {
+        "/etc/app/config.yaml": {
+            "type": "ephemeral",
+            "config_content": "oauth:\n callback_url: ${pods:secrets:OAUTH_CALLBACK}\n session_secret: ${pods:secrets:SESSION_SECRET}"
+        }
+    }
+}
+
+# After resolution (pod URL = myapp.pods.tacc.tapis.io):
+# SESSION_SECRET env var -> "aB3xK9!@mNpQ..." (generated, persisted)
+# OAUTH_REDIRECT_URI env var -> "https://myapp.pods.tacc.tapis.io/auth/callback"
+# TAPIS_URL -> "tacc.tapis.io"
+```
+
 ### Secrets Model Fields
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `readable` | bool | `True` | If `False`, value cannot be retrieved via API (pod injection still works) |
 | `writable` | bool | `True` | If `False`, value cannot be updated (write-once) |
+
+### Secret Resolution Flow
+
+When a pod is started, secrets are resolved **at the API layer** before being sent to the spawner. This design allows remote spawners to function without direct access to the Security Kernel.
+
+Resolution order:
+1. **Random passwords** (`${pods:random:int_length}`) - generates and persists to DB
+2. **Pod networking** (`${pods:networking:*}`, `${pods:url}`) - resolves pod URLs/ports
+3. **SK secrets** (`${secret:name}`) - fetches from Security Kernel
+
+Flow - 
+1. Pod requested through start, or create, or central health monitoring edge changes.
+2. Derive final pod + template with SK. Resolve secrets (resolve_secret_map) and put spawn msg in queue. 
+3. Spawner reads msg and creates pod, using inject_secrets_into_env_vars and interpolate_config_content.
+
+#### Viewing Resolved Secrets
+
+Use the `/derived` endpoint with `resolve_secrets=true` to preview how secrets will be interpolated (admin only):
+
+```bash
+GET /pods/{pod_id}/derived?resolve_secrets=true&include_configs=true
+# response with env and config using proper final secrets
+```
+
+#### Detecting Unresolved Patterns
+
+Use `check_unresolved=true` on GET endpoints to detect any `${...}` patterns that weren't resolved:
+
+```bash
+GET /pods/{pod_id}?check_unresolved=true
+# Returns metadata.unresolved_patterns if any patterns remain
+```
+
+The `/derived` endpoint automatically includes unresolved pattern detection in its response metadata.
+
+---
+
+## Placeholder Parsing & Validation Reference
+
+The following table documents the functions that parse and validate placeholder/secret patterns, and which endpoints use them:
+
+| Function | Purpose | Patterns Handled | Endpoints That Use It |
+|----------|---------|------------------|----------------------|
+| `parse_secret_reference()` | Parse a single secret_map value into structured reference | `${secret:name}`, `${secret:user:name}`, `${pods:default:val:?desc}`, `${:?description}`, literals | All validation and resolution functions |
+| `get_placeholder_warnings()` | Detect unresolved placeholders in secret_map | `${pods:default:...}`, `${:?...}`, inline placeholders | `POST /pods` (create pod) |
+| `validate_template_secret_map()` | Validate templates don't contain direct secret refs | `${secret:...}` (invalid in templates) | `POST /templates/{id}/tags`, template tag validation |
+| `validate_environment_placeholders()` | Validate `${pods:secrets:KEY}` refs exist in secret_map | `${pods:secrets:KEY}` with missing keys | `POST /pods`, template validation |
+| `get_config_secret_map_warnings()` | Warn when secret_map-only syntax used in wrong place | `${pods:default/networking/url/random}` in env vars | `POST /pods` (create pod) |
+| `validate_secret_map()` | Validate secret format and ownership | All `${secret:...}` patterns | Pod creation validation |
+| `resolve_secret_map()` | Resolve all secret_map values to final strings | All patterns → resolved values | `POST /pods` (on start), `GET /pods/{id}/derived?resolve_secrets=true` |
+| `resolve_random_passwords()` | Generate and persist random passwords | `${pods:random:N}` | `POST /pods` (before db_create) |
+| `resolve_pod_networking()` | Resolve pod URL/networking references | `${pods:networking:...}`, `${pods:url}`, `${pods:tapis_url}` | `POST /pods` (before db_create) |
+| `inject_secrets_into_env_vars()` | Inject resolved secrets into environment_variables | `${pods:secrets:KEY}` → actual value | `GET /pods/{id}/derived`, spawner |
+| `interpolate_config_content()` | Inject secrets into config file content | `${pods:secrets:KEY}` in config_content | `GET /pods/{id}/derived`, spawner |
+| `validate_pod_secret_map_against_template()` | Validate pod overrides all required template placeholders | Required `${:?...}` must be overridden | `POST /pods`, `GET /pods/{id}/derived` |
+| `detect_unresolved_patterns()` | Detect ANY remaining `${...}` patterns | All `${...}` syntax | Internal use by `check_pod_unresolved_patterns()` |
+| `check_pod_unresolved_patterns()` | Helper to check pod config for unresolved patterns | All `${...}` syntax | `GET /pods/{id}`, `GET /pods/{id}/derived`, `POST /pods` |
+
+### Pattern Resolution Flow
+
+```
+Pod Creation (POST /pods):
+  1. expand_short_secret_references() - ${secret:name} → ${secret:user:name}
+  2. resolve_random_passwords() - ${pods:random:N} → generated value
+  3. resolve_pod_networking() - ${pods:url}, ${pods:networking:...} → URLs
+  4. validate_environment_placeholders() - check ${pods:secrets:KEY} refs exist
+  5. detect_unresolved_patterns() - report any remaining ${...} in metadata
+  
+Pod Start (when status_requested=ON):
+  6. resolve_secret_map() - ${secret:user:name} → fetched value from SK
+  7. inject_secrets_into_env_vars() - ${pods:secrets:KEY} → resolved value
+  8. interpolate_config_content() - ${pods:secrets:KEY} in configs → resolved
+```
 
 ---
 
@@ -489,3 +623,51 @@ List format auto-converts to object-keyed. Migration via alembic, user shouldn't
 ```
 
 ---
+
+## Remote Deployment Considerations
+
+When deploying Pods Service with edge/remote spawners, special consideration is needed for secret handling since edge components should not have direct Security Kernel access.
+
+### Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           CENTRAL SITE                                       │
+│  ┌─────────┐  ┌─────────┐  ┌─────────────┐  ┌──────────────────────────┐    │
+│  │   API   │  │   SK    │  │  Database   │  │  Central Health/Coord    │    │
+│  └────┬────┘  └────┬────┘  └──────┬──────┘  └────────────┬─────────────┘    │
+│       │            │              │                      │                   │
+└───────┼────────────┼──────────────┼──────────────────────┼───────────────────┘
+        │            │              │                      │
+        │   resolve_secret_map()    │                      │
+        │◄───────────┘              │                      │
+        │                           │                      │
+        ▼                           ▼                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         MESSAGE QUEUE (RabbitMQ)                             │
+│                    (resolved_secrets in message payload)                     │
+└─────────────────────────────────────────────────────────────────────────────┘
+        │
+        ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           REMOTE/EDGE SITE                                   │
+│  ┌───────────────────┐    ┌─────────────────────────────────────────────┐   │
+│  │     Spawner       │    │              Health (monitor only)          │   │
+│  │  - receives msg   │    │  - updates pod status from K8s              │   │
+│  │  - has resolved   │    │  - syncs logs                               │   │
+│  │    secrets        │    │  - does NOT resolve secrets                 │   │
+│  │  - creates pod    │    │  - does NOT initiate restarts (see below)   │   │
+│  └───────────────────┘    └─────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Edge Management Considerations
+
+Currently and in implementation secrets will be resolved by API as SK access is central only. We need to architect this.
+Start and restart from API will be central. But restarts will be completely on the edge, they must be able to run a pod as well.
+
+1. Edge can call a endpoint to request a packet of data for running pod or request central health does something.
+2. Edge can use a queue to request central pod start as well.
+3. Central health can monitor the edge and when in state to restart it does things rather than edge health. **
+
+I like 3. Edge stays simple and doesn't need more access.
