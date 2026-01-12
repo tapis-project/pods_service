@@ -242,12 +242,28 @@ def set_traefik_proxy():
                 "tapis_auth": net_info.get('tapis_auth', False),
                 "auth_url": f"https://{tapis_domain}/v3/pods/{pod_id}/auth",
                 "tapis_auth_response_headers": net_info.get('tapis_auth_response_headers', {}),
+                "tapis_auth_excluded_paths": net_info.get('tapis_auth_excluded_paths', []),
+                "tapis_auth_excluded_path_regex": net_info.get('tapis_auth_excluded_path_regex', []),
             }
             ## ip allow list
             ip_allow_list_info = {
                 "ip_allow_list": net_info.get('ip_allow_list', [])
             }
-            logger.debug(f"pod_id: {pod_id}, tapis_domain: {tapis_domain}, net_info: {net_info}, traefik_forward_auth_info: {forward_auth_info}, cors_info: {cors_info}, ip_allow_list: {ip_allow_list_info}")
+            ## proxy compression (defaults ensure backwards compat with old pods missing these fields)
+            compression_info = {
+                "proxy_compression": net_info.get('proxy_compression', True),
+                "proxy_compression_encodings": net_info.get('proxy_compression_encodings', ['zstd', 'br', 'gzip']),
+                "proxy_compression_excluded_content_types": list(set(
+                    # Smart defaults: already-compressed formats where re-compression wastes CPU
+                    ['application/gzip', 'application/zip', 'application/zstd', 'application/x-tar',
+                     'application/x-bzip2', 'application/x-xz', 'application/x-7z-compressed',
+                     'image/png', 'image/jpeg', 'image/webp', 'image/gif',
+                     'video/mp4', 'video/webm', 'audio/mpeg', 'audio/ogg']
+                    + net_info.get('proxy_compression_excluded_content_types', [])
+                )),
+                "proxy_compression_min_response_body_bytes": net_info.get('proxy_compression_min_response_body_bytes', 1024),
+            }
+            logger.debug(f"pod_id: {pod_id}, tapis_domain: {tapis_domain}, net_info: {net_info}, traefik_forward_auth_info: {forward_auth_info}, cors_info: {cors_info}, ip_allow_list: {ip_allow_list_info}, compression_info: {compression_info}")
             match net_info['protocol']:
                 case "tcp":
                     # ip_allow_list
@@ -262,6 +278,8 @@ def set_traefik_proxy():
                         template_info.update(cors_info)
                     # ip_allow_list
                     template_info.update(ip_allow_list_info)
+                    # proxy compression
+                    template_info.update(compression_info)
                     http_proxy_info[traefik_service_name] = template_info
                 case "postgres":
                     # ip_allow_list

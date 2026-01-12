@@ -101,6 +101,8 @@ class Networking(TapisModel):
     tapis_auth_response_headers: Dict[str, str] = Field({}, description = "Specification of headers to forward to the pod when using Tapis auth.")
     tapis_auth_allowed_users: list[str] = Field(["*"], description = "List of users allowed to access the pod when using Tapis auth.")
     tapis_auth_return_path: str = Field("/", description = "Path to redirect to when accessing the pod via Tapis auth.")
+    tapis_auth_excluded_paths: list[str] = Field([], description = "List of PathPrefix patterns to exclude from Tapis auth (no forwardAuth). Useful for static assets that don't need auth. ex. ['/assets', '/static', '/_app']")
+    tapis_auth_excluded_path_regex: list[str] = Field([], description = "List of PathRegexp patterns to exclude from Tapis auth. ex. ['\\\\.(js|css|ico|png|jpg|jpeg|webp|gif|svg|woff2?|ttf|map)$']")
     cors_allow_origins: list[str] = Field([], description = "List of CORS allowed origins. ex. ['https://tacc.develop.tapis.io', 'https://tacc.tapis.io']")
     cors_allow_methods: list[str] = Field([], description = "List of CORS allowed methods. ex. ['GET', 'POST', 'PUT', 'DELETE']")
     cors_allow_headers: list[str] = Field([], description = "List of CORS allowed headers. ex. ['Content-Type', 'X-Tapis-Token']")
@@ -109,6 +111,11 @@ class Networking(TapisModel):
     tapis_ui_uri: str = Field("", description = "Path to redirect to when accessing the pod via Tapis UI.")
     tapis_ui_uri_redirect: bool = Field(False, description = "If true, will redirect to the tapis_ui_uri when accessing the pod via Tapis UI. Otherwise, just read-only uri.")
     tapis_ui_uri_description: str = Field("", description = "Describing where the tapis_ui_uri will redirect to.")
+    # Proxy compression (Traefik compress middleware)
+    proxy_compression: bool = Field(True, description = "Enable Traefik compress middleware for this HTTP endpoint. Enabled by default for all HTTP protocol endpoints.")
+    proxy_compression_encodings: list[str] = Field(["zstd", "br", "gzip"], description = "Ordered list of compression encodings by priority. Valid values: 'zstd', 'br', 'gzip'.")
+    proxy_compression_excluded_content_types: list[str] = Field([], description = "Content types to exclude from compression. Already-compressed formats (images, video, archives) are excluded automatically. Set explicit types here to add additional exclusions.")
+    proxy_compression_min_response_body_bytes: int = Field(1024, description = "Minimum response body size in bytes before compression is applied. Responses smaller than this are not compressed.")
 
     @validator('protocol')
     def check_protocol(cls, v):
@@ -144,6 +151,46 @@ class Networking(TapisModel):
             for user in v:
                 if not isinstance(user, str):
                     raise TypeError(f"tapis_auth_allowed_users must be list of str. Got '{type(user).__name__}'.")
+        return v
+
+    @validator('tapis_auth_excluded_paths')
+    def check_tapis_auth_excluded_paths(cls, v):
+        if v:
+            if not isinstance(v, list):
+                raise TypeError(f"networking.tapis_auth_excluded_paths must be list. Got '{type(v).__name__}'.")
+            if len(v) > 50:
+                raise ValueError(f"networking.tapis_auth_excluded_paths must have at most 50 entries. Got {len(v)}.")
+            for path in v:
+                if not isinstance(path, str):
+                    raise TypeError(f"networking.tapis_auth_excluded_paths must be list of str. Got '{type(path).__name__}'.")
+                if not path.startswith('/'):
+                    raise ValueError(f"networking.tapis_auth_excluded_paths values must start with '/'. Got '{path}'.")
+                if not path.isascii():
+                    raise ValueError(f"networking.tapis_auth_excluded_paths values must be ASCII. Got '{path}'.")
+                if len(path) > 256:
+                    raise ValueError(f"networking.tapis_auth_excluded_paths values must be less than 256 characters. Got length {len(path)}.")
+        return v
+
+    @validator('tapis_auth_excluded_path_regex')
+    def check_tapis_auth_excluded_path_regex(cls, v):
+        if v:
+            if not isinstance(v, list):
+                raise TypeError(f"networking.tapis_auth_excluded_path_regex must be list. Got '{type(v).__name__}'.")
+            if len(v) > 20:
+                raise ValueError(f"networking.tapis_auth_excluded_path_regex must have at most 20 entries. Got {len(v)}.")
+            for pattern in v:
+                if not isinstance(pattern, str):
+                    raise TypeError(f"networking.tapis_auth_excluded_path_regex must be list of str. Got '{type(pattern).__name__}'.")
+                if not pattern.isascii():
+                    raise ValueError(f"networking.tapis_auth_excluded_path_regex values must be ASCII. Got '{pattern}'.")
+                if len(pattern) > 512:
+                    raise ValueError(f"networking.tapis_auth_excluded_path_regex values must be less than 512 characters. Got length {len(pattern)}.")
+                # Validate the regex compiles
+                try:
+                    import re as _re
+                    _re.compile(pattern)
+                except _re.error as e:
+                    raise ValueError(f"networking.tapis_auth_excluded_path_regex contains invalid regex '{pattern}': {e}")
         return v
 
     @validator('tapis_ui_uri')
@@ -238,6 +285,49 @@ class Networking(TapisModel):
                     raise ValueError(f"networking.ip_allow_list can only contain valid IPs or CIDR ranges. Got {ip}")
         return v
 
+    @validator('proxy_compression_encodings')
+    def check_proxy_compression_encodings(cls, v):
+        valid_encodings = ['zstd', 'br', 'gzip']
+        if v:
+            if not isinstance(v, list):
+                raise TypeError(f"networking.proxy_compression_encodings must be list. Got '{type(v).__name__}'.")
+            for enc in v:
+                if not isinstance(enc, str):
+                    raise TypeError(f"networking.proxy_compression_encodings must be list of str. Got '{type(enc).__name__}'.")
+                if enc not in valid_encodings:
+                    raise ValueError(f"networking.proxy_compression_encodings values must be one of {valid_encodings}. Got '{enc}'.")
+            if len(v) == 0:
+                raise ValueError(f"networking.proxy_compression_encodings must have at least one encoding when proxy_compression is enabled.")
+            if len(v) != len(set(v)):
+                raise ValueError(f"networking.proxy_compression_encodings must not contain duplicates. Got {v}.")
+        return v
+
+    @validator('proxy_compression_excluded_content_types')
+    def check_proxy_compression_excluded_content_types(cls, v):
+        if v:
+            if not isinstance(v, list):
+                raise TypeError(f"networking.proxy_compression_excluded_content_types must be list. Got '{type(v).__name__}'.")
+            for ct in v:
+                if not isinstance(ct, str):
+                    raise TypeError(f"networking.proxy_compression_excluded_content_types must be list of str. Got '{type(ct).__name__}'.")
+                if not ct.isascii():
+                    raise ValueError(f"networking.proxy_compression_excluded_content_types values must be ASCII. Got '{ct}'.")
+                if len(ct) > 128:
+                    raise ValueError(f"networking.proxy_compression_excluded_content_types values must be less than 128 characters. Got length {len(ct)}.")
+            if len(v) > 50:
+                raise ValueError(f"networking.proxy_compression_excluded_content_types must have at most 50 entries. Got {len(v)}.")
+        return v
+
+    @validator('proxy_compression_min_response_body_bytes')
+    def check_proxy_compression_min_response_body_bytes(cls, v):
+        if not isinstance(v, int):
+            raise TypeError(f"networking.proxy_compression_min_response_body_bytes must be int. Got '{type(v).__name__}'.")
+        if v < 0:
+            raise ValueError(f"networking.proxy_compression_min_response_body_bytes must be >= 0. Got {v}.")
+        if v > 10485760:  # 10 MiB max
+            raise ValueError(f"networking.proxy_compression_min_response_body_bytes must be <= 10485760 (10 MiB). Got {v}.")
+        return v
+
     @model_validator(mode="after")
     def check_tapis_protocol_with_configured_options(cls, values):
         protocol = getattr(values, 'protocol', None)
@@ -255,6 +345,20 @@ class Networking(TapisModel):
         if cors_allow_origins:
             if protocol != "http":
                 raise ValueError(f"networking.cors_* can only be used with protocol 'http'. Got protocol {protocol}.")
+
+        # Silently disable proxy_compression for non-http protocols (don't error, for backwards compat)
+        proxy_compression = getattr(values, 'proxy_compression', None)
+        if proxy_compression and protocol != "http":
+            object.__setattr__(values, 'proxy_compression', False)
+
+        # Silently clear tapis_auth exclusion paths for non-http protocols
+        if protocol != "http":
+            tapis_auth_excluded_paths = getattr(values, 'tapis_auth_excluded_paths', None)
+            tapis_auth_excluded_path_regex = getattr(values, 'tapis_auth_excluded_path_regex', None)
+            if tapis_auth_excluded_paths:
+                object.__setattr__(values, 'tapis_auth_excluded_paths', [])
+            if tapis_auth_excluded_path_regex:
+                object.__setattr__(values, 'tapis_auth_excluded_path_regex', [])
 
         return values
 

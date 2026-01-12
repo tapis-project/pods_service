@@ -74,6 +74,24 @@ http:
     {% endif -%}
     {% endfor %}
 
+    {% for pname, pdata in http_proxy_info.items() -%}
+    {% if pdata.proxy_compression is defined and pdata.proxy_compression -%}
+    tapis-compress-{{ pname }}:
+      compress:
+        encodings:
+          {% for enc in pdata.proxy_compression_encodings -%}
+          - "{{ enc }}"
+          {% endfor %}
+        {% if pdata.proxy_compression_excluded_content_types -%}
+        excludedContentTypes:
+          {% for ct in pdata.proxy_compression_excluded_content_types -%}
+          - "{{ ct }}"
+          {% endfor %}
+        {% endif -%}
+        minResponseBodyBytes: {{ pdata.proxy_compression_min_response_body_bytes }}
+    {% endif -%}
+    {% endfor %}
+
   routers:
     dashboard:
       rule: (PathPrefix(`/api`) || PathPrefix(`/dashboard`))
@@ -88,11 +106,12 @@ http:
       service: pods-service
 
     {% for pname, pdata in http_proxy_info.items() -%}
+    {% set has_auth_exclusions = pdata.tapis_auth and (pdata.tapis_auth_excluded_paths or pdata.tapis_auth_excluded_path_regex) -%}
     {{ pname }}:
       entryPoints:
        - web
       rule: "Host(`{{ pdata.url }}`)"
-      {% if pdata.tapis_auth or pdata.cors_allow_origins or pdata.ip_allow_list -%}
+      {% if pdata.tapis_auth or pdata.cors_allow_origins or pdata.ip_allow_list or (pdata.proxy_compression is defined and pdata.proxy_compression) -%}
       middlewares:
         {% if pdata.ip_allow_list -%}
         - "tapis-ipallowlist-{{ pname }}"
@@ -103,10 +122,50 @@ http:
         {% if pdata.tapis_auth -%}
         - "tapis-auth-{{ pname }}"
         {% endif -%}
+        {% if pdata.proxy_compression is defined and pdata.proxy_compression -%}
+        - "tapis-compress-{{ pname }}"
+        {% endif -%}
       {% endif %}
       service: "{{ pname }}"
+      {% if has_auth_exclusions -%}
+      priority: 1
+      {% endif -%}
       tls:
         certResolver: tlsletsencrypt
+
+    {% if has_auth_exclusions -%}
+    {{ pname }}-noauth:
+      entryPoints:
+       - web
+      rule: >-
+        Host(`{{ pdata.url }}`) && (
+        {%- set rule_parts = [] -%}
+        {%- for path in pdata.tapis_auth_excluded_paths -%}
+          {%- set _ = rule_parts.append('PathPrefix(`' + path + '`)') -%}
+        {%- endfor -%}
+        {%- for regex in pdata.tapis_auth_excluded_path_regex -%}
+          {%- set _ = rule_parts.append('PathRegexp(`' + regex + '`)') -%}
+        {%- endfor -%}
+        {{ rule_parts | join(' || ') }}
+        )
+      {% if pdata.cors_allow_origins or pdata.ip_allow_list or (pdata.proxy_compression is defined and pdata.proxy_compression) -%}
+      middlewares:
+        {% if pdata.ip_allow_list -%}
+        - "tapis-ipallowlist-{{ pname }}"
+        {% endif -%}
+        {% if pdata.cors_allow_origins -%}
+        - "tapis-cors-{{ pname }}"
+        {% endif -%}
+        {% if pdata.proxy_compression is defined and pdata.proxy_compression -%}
+        - "tapis-compress-{{ pname }}"
+        {% endif %}
+      {% endif %}
+      service: "{{ pname }}"
+      priority: 100
+      tls:
+        certResolver: tlsletsencrypt
+    {% endif -%}
+
     {% endfor %}
 
     catch-all-error-handler:
