@@ -160,7 +160,7 @@ paths:
       tags:
       - Templates
       summary: get_template
-      description: 'Get a templates.
+      description: 'Get a template.
 
 
         Returns retrieved templates object.'

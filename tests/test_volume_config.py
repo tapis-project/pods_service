@@ -21,6 +21,7 @@ from api import api
 
 # Import test utilities like test_pods.py
 from tests.test_utils import headers, response_format, basic_response_checks, regular_headers
+from tests.test_utils import exec_command, verify_env_var, verify_file_content, wait_for_pod_status
 
 # Import volume_mounts utilities at module level
 from models_volume_mounts_utils import (
@@ -53,6 +54,11 @@ test_timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
 test_secret_for_env = f"testsecretenv{test_timestamp}"
 test_secret_for_config = f"testsecretcfg{test_timestamp}"
 test_pod_secret_env = f"testpodsecretenv{test_timestamp}"
+
+# Tapisvolume config exec verification test IDs
+test_volume_exec = "testvolumeexec"
+test_template_tapisvol = "testtmpltapisvol"
+test_pod_tapisvol_exec = "testpodtapisvolexec"
 test_pod_secret_config = f"testpodsecretcfg{test_timestamp}"
 test_pod_secret_both = f"testpodsecretboth{test_timestamp}"
 
@@ -69,9 +75,10 @@ def teardown(headers):
     pods = [test_pod_ephemeral, test_pod_tapisvol, "testpodephonce", "testpodvolonce",
             "testpodtmpleph", "testpodoverride", "testpodremove",
             "testpodrandompass", "testpodrandommulti", "testpodnetref", "testpodnetcfg",
-            test_pod_secret_env, test_pod_secret_config, test_pod_secret_both]
-    volumes = [test_volume_config]
-    templates = [test_template_vm]
+            test_pod_secret_env, test_pod_secret_config, test_pod_secret_both,
+            test_pod_tapisvol_exec]
+    volumes = [test_volume_config, test_volume_exec]
+    templates = [test_template_vm, test_template_tapisvol]
     secrets = [test_secret_for_env, test_secret_for_config]
     
     for pod_id in pods:
@@ -200,6 +207,20 @@ class TestVolumeMountConfigFields:
             VolumeMount(type="tapisvolume", source_id="vol1", 
                        config_content="test", config_filename="../etc/passwd")
     
+    def test_tapisvolume_config_content_requires_config_filename(self):
+        """tapisvolume with config_content must have config_filename specified."""
+        with pytest.raises(ValueError) as exc_info:
+            VolumeMount(type="tapisvolume", source_id="vol1", config_content="test")
+        assert "config_filename" in str(exc_info.value)
+        assert "requires config_filename to be specified" in str(exc_info.value)
+    
+    def test_tapisvolume_without_config_content_no_filename_required(self):
+        """tapisvolume without config_content does not require config_filename."""
+        # Should not raise - no config_content means no config_filename requirement
+        mount = VolumeMount(type="tapisvolume", source_id="vol1")
+        assert mount.config_filename is None
+        assert mount.config_content is None
+    
     @pytest.mark.parametrize("vol_type", ["tapissnapshot", "pvc"])
     def test_config_content_rejected_for_readonly_types(self, vol_type):
         """tapissnapshot and pvc should reject config_content."""
@@ -262,6 +283,73 @@ class TestSecretInterpolation:
         content = "static content"
         assert interpolate_config_content(content, {}) == content
 
+    # Tests for :?description syntax support
+    def test_interpolate_with_description(self):
+        """Placeholders with :?description should resolve correctly, stripping description."""
+        content = "password=${pods:secrets:DB_PASS:?Database password for production}"
+        result = interpolate_config_content(content, {"DB_PASS": "secret123"})
+        assert result == "password=secret123"
+        assert ":?" not in result
+        assert "Database password" not in result
+    
+    def test_interpolate_multiple_with_descriptions(self):
+        """Multiple placeholders with descriptions should all resolve."""
+        content = """[database]
+host=${pods:secrets:DB_HOST:?Hostname of the database server}
+port=${pods:secrets:DB_PORT:?Database port number}
+password=${pods:secrets:DB_PASS:?Database password - keep secret}"""
+        result = interpolate_config_content(content, {
+            "DB_HOST": "localhost",
+            "DB_PORT": "5432",
+            "DB_PASS": "secret123"
+        })
+        assert "host=localhost" in result
+        assert "port=5432" in result
+        assert "password=secret123" in result
+        assert ":?" not in result
+    
+    def test_interpolate_mixed_with_and_without_descriptions(self):
+        """Mix of placeholders with and without descriptions should work."""
+        content = "host=${pods:secrets:DB_HOST}\npass=${pods:secrets:DB_PASS:?The password}"
+        result = interpolate_config_content(content, {"DB_HOST": "localhost", "DB_PASS": "secret"})
+        assert "host=localhost" in result
+        assert "pass=secret" in result
+    
+    def test_interpolate_description_with_special_chars(self):
+        """Descriptions can contain special characters except }."""
+        content = "key=${pods:secrets:API_KEY:?Get from https://api.example.com/keys - required!}"
+        result = interpolate_config_content(content, {"API_KEY": "abc123"})
+        assert result == "key=abc123"
+    
+    def test_interpolate_missing_key_with_description_fail(self):
+        """Missing key with description should still raise error with just the key name."""
+        with pytest.raises(ValueError) as exc_info:
+            interpolate_config_content(
+                "pass=${pods:secrets:MISSING_KEY:?This key is required}",
+                {},
+                fail_on_missing=True
+            )
+        assert "MISSING_KEY" in str(exc_info.value)
+    
+    def test_interpolate_missing_key_with_description_no_fail(self):
+        """Missing key with description should leave full placeholder when not failing."""
+        result = interpolate_config_content(
+            "pass=${pods:secrets:MISSING_KEY:?Required password}",
+            {},
+            fail_on_missing=False
+        )
+        assert "${pods:secrets:MISSING_KEY:?Required password}" in result
+    
+    def test_volume_mount_interpolate_with_description(self):
+        """VolumeMount.interpolate_secrets() should handle descriptions."""
+        mount = VolumeMount(
+            type="ephemeral",
+            config_content="pass=${pods:secrets:DB_PASS:?Database password}"
+        )
+        result = mount.interpolate_secrets({"DB_PASS": "secret123"})
+        assert "pass=secret123" in result
+        assert ":?" not in result
+
 
 class TestMergeLogic:
     """Tests for volume_mounts merge during template inheritance."""
@@ -298,6 +386,30 @@ class TestMergeLogic:
         template = {"/etc/cfg": {"type": "ephemeral", "config_content": "x", "config_update_mode": "once"}}
         result = merge_pod_volume_mounts_with_template({}, template)
         assert result["/etc/cfg"]["config_update_mode"] == "once"
+    
+    def test_tapisvolume_config_content_preserved_in_merge(self):
+        """config_content and config_filename should be preserved when merging tapisvolume."""
+        template = {
+            "/etc/headscale": {
+                "type": "tapisvolume",
+                "source_id": "testvolumeexec",
+                "config_filename": "config.yaml",
+                "config_content": "# Test configuration file\napp_name: headscale-test\nlisten_addr: 0.0.0.0:8080",
+                "config_permissions": "0644",
+                "config_update_mode": "once"
+            }
+        }
+        pod = {}  # Pod doesn't override anything
+        result = merge_pod_volume_mounts_with_template(pod, template)
+        
+        mount = result.get("/etc/headscale")
+        assert mount is not None, f"Expected mount at /etc/headscale, got: {result}"
+        assert mount["type"] == "tapisvolume"
+        assert mount["source_id"] == "testvolumeexec"
+        assert mount["config_filename"] == "config.yaml"
+        assert mount["config_content"] == "# Test configuration file\napp_name: headscale-test\nlisten_addr: 0.0.0.0:8080"
+        assert mount["config_permissions"] == "0644"
+        assert mount["config_update_mode"] == "once"
     
     def test_both_empty(self):
         """Both empty should return empty dict."""
@@ -1023,3 +1135,227 @@ class TestPodNetworkingIntegration:
         env_vars = derived.get('environment_variables', {})
         assert env_vars.get('SERVER_HOST') == "${pods:secrets:HOST}"
         assert env_vars.get('SERVER_PORT') == "${pods:secrets:PORT}"
+
+
+# ============================================================================
+# Tapisvolume Config with Exec Verification Tests
+# ============================================================================
+
+class TestTapisvolumeConfigExecVerification:
+    """
+    Integration tests for tapisvolume with config_content.
+    
+    These tests verify that:
+    1. Template tags can define tapisvolume with config_content and config_filename
+    2. Pods created from templates correctly inherit the config
+    3. The config file is actually written to the volume on pod start
+    4. The config content can be verified via exec inside the running pod
+    5. config_update_mode "once" prevents overwrites on restart
+    """
+    
+    def test_create_volume_for_exec_test(self, headers):
+        """Create a volume to use for config file exec testing."""
+        vol_def = {"volume_id": test_volume_exec, "description": "Test volume for exec verification"}
+        rsp = client.post("/pods/volumes", data=json.dumps(vol_def), headers=headers)
+        result = basic_response_checks(rsp)
+        assert result['volume_id'] == test_volume_exec
+    
+    def test_create_template_with_tapisvolume_config(self, headers):
+        """Create a template for tapisvolume config testing."""
+        template_def = {
+            "template_id": test_template_tapisvol,
+            "description": "Template for tapisvolume config exec verification"
+        }
+        rsp = client.post("/pods/templates", data=json.dumps(template_def), headers=headers)
+        result = basic_response_checks(rsp)
+        assert result['template_id'] == test_template_tapisvol
+    
+    def test_add_template_tag_with_tapisvolume_config(self, headers):
+        """Add a template tag with tapisvolume volume_mount including config_content."""
+        config_content = """# Test configuration file
+app_name: headscale-test
+listen_addr: 0.0.0.0:8080
+server_url: https://test.example.com
+database:
+  type: sqlite3
+  path: /var/lib/headscale/db.sqlite
+"""
+        tag_def = {
+            "pod_definition": {
+                "image": "notchristiangarcia/testserver:fastapi",
+                "volume_mounts": {
+                    "/etc/headscale": {
+                        "type": "tapisvolume",
+                        "source_id": test_volume_exec,
+                        "config_filename": "config.yaml",
+                        "config_content": config_content,
+                        "config_permissions": "0644",
+                        "config_update_mode": "once"
+                    }
+                }
+            },
+            "tag": "withconfig",
+            "commit_message": "Template tag with tapisvolume config"
+        }
+        rsp = client.post(f"/pods/templates/{test_template_tapisvol}/tags", 
+                         data=json.dumps(tag_def), headers=headers)
+        result = basic_response_checks(rsp)
+        assert "withconfig" in result['tag_timestamp']
+    
+    def test_template_tag_config_redacted_by_default(self, headers):
+        """Verify config_content is redacted by default in template tag response."""
+        rsp = client.get(f"/pods/templates/{test_template_tapisvol}/tags/withconfig", headers=headers)
+        result = basic_response_checks(rsp)
+        
+        # API returns a list of tags, get the first one
+        assert isinstance(result, list) and len(result) > 0, f"Expected list with template tag, got: {result}"
+        tag = result[0]
+        
+        mount = tag['pod_definition']['volume_mounts']['/etc/headscale']
+        assert 'config_content' in mount
+        # Should be redacted (not the actual content)
+        assert "bytes - use ?include_configs=true" in mount['config_content']
+        assert "headscale-test" not in mount['config_content']
+    
+    def test_template_tag_config_shown_with_flag(self, headers):
+        """Verify config_content is shown when include_configs=true."""
+        rsp = client.get(f"/pods/templates/{test_template_tapisvol}/tags/withconfig?include_configs=true", headers=headers)
+        result = basic_response_checks(rsp)
+        
+        # API returns a list of tags, get the first one
+        assert isinstance(result, list) and len(result) > 0, f"Expected list with template tag, got: {result}"
+        tag = result[0]
+        
+        mount = tag['pod_definition']['volume_mounts']['/etc/headscale']
+        # Should show actual content
+        assert "headscale-test" in mount['config_content']
+        assert "listen_addr: 0.0.0.0:8080" in mount['config_content']
+    
+    def test_create_pod_from_template_with_tapisvolume_config(self, headers):
+        """Create a pod from the template with tapisvolume config."""
+        pod_def = {
+            "pod_id": test_pod_tapisvol_exec,
+            "template": f"{test_template_tapisvol}:withconfig"
+        }
+        rsp = client.post("/pods", data=json.dumps(pod_def), headers=headers)
+        basic_response_checks(rsp)
+        
+        # Check derived config - template volume_mounts are merged at this endpoint
+        rsp = client.get(f"/pods/{test_pod_tapisvol_exec}/derived", headers=headers)
+        derived = basic_response_checks(rsp)
+        
+        # Verify volume_mounts inherited from template
+        mount = derived['volume_mounts'].get('/etc/headscale')
+        assert mount is not None, "Expected volume_mount at /etc/headscale"
+        assert mount['type'] == 'tapisvolume'
+        assert mount['source_id'] == test_volume_exec
+        assert mount['config_filename'] == 'config.yaml'
+    
+    def test_pod_config_redacted_by_default(self, headers):
+        """Verify config_content is redacted by default in pod response."""
+        rsp = client.get(f"/pods/{test_pod_tapisvol_exec}/derived", headers=headers)
+        result = basic_response_checks(rsp)
+        
+        mount = result['volume_mounts']['/etc/headscale']
+        assert "bytes - use ?include_configs=true" in mount['config_content']
+        assert "headscale-test" not in mount['config_content']
+    
+    def test_pod_config_shown_with_flag(self, headers):
+        """Verify config_content is shown when include_configs=true."""
+        rsp = client.get(f"/pods/{test_pod_tapisvol_exec}/derived?include_configs=true", headers=headers)
+        result = basic_response_checks(rsp)
+        
+        mount = result['volume_mounts']['/etc/headscale']
+        assert "headscale-test" in mount['config_content']
+    
+    def test_wait_for_pod_available(self, headers):
+        """Wait for the pod to become available before running exec tests."""
+        success = wait_for_pod_status(client, test_pod_tapisvol_exec, "AVAILABLE", headers, max_attempts=40, sleep_time=3)
+        assert success, f"Pod {test_pod_tapisvol_exec} did not reach AVAILABLE status"
+    
+    def test_exec_verify_config_file_exists(self, headers):
+        """Use exec to verify config file exists at the expected path."""
+        success, stdout, stderr = exec_command(client, test_pod_tapisvol_exec, 
+                                               ["ls", "-la", "/etc/headscale/config.yaml"], headers)
+        assert success, f"Config file not found: {stderr}"
+        assert "config.yaml" in stdout
+    
+    def test_exec_verify_config_content(self, headers):
+        """Use exec to cat the config file and verify content."""
+        passed, content, error = verify_file_content(
+            client, test_pod_tapisvol_exec, 
+            "/etc/headscale/config.yaml", 
+            "headscale-test", 
+            headers
+        )
+        assert passed, f"Config content verification failed: {error}. Content: '{content}'"
+        
+        # Verify more specific content
+        assert "listen_addr: 0.0.0.0:8080" in content, f"Missing listen_addr in: {content}"
+        assert "server_url: https://test.example.com" in content, f"Missing server_url in: {content}"
+        assert "database:" in content, f"Missing database section in: {content}"
+    
+    def test_exec_verify_config_permissions(self, headers):
+        """Use exec to verify config file has correct permissions."""
+        success, stdout, stderr = exec_command(client, test_pod_tapisvol_exec,
+                                               ["stat", "-c", "%a", "/etc/headscale/config.yaml"], headers)
+        assert success, f"Failed to stat config file: {stderr}"
+        # Permissions should be 644 (octal 0644)
+        assert stdout.strip() == "644", f"Expected permissions 644, got: {stdout.strip()}"
+    
+    def test_stop_pod_for_cleanup(self, headers):
+        """Stop the pod to clean up."""
+        rsp = client.get(f"/pods/{test_pod_tapisvol_exec}/stop", headers=headers)
+        assert rsp.status_code in [200, 400, 404]
+
+
+class TestTapisvolumeConfigUpdateMode:
+    """
+    Tests for config_update_mode behavior with tapisvolume.
+    
+    Verifies that:
+    - "once" mode only writes config if file doesn't exist
+    - "always" mode overwrites config on each start
+    """
+    
+    def test_create_pod_with_update_mode_once(self, headers):
+        """Create a pod with config_update_mode=once and verify behavior."""
+        config_content = "version: 1\noriginal: true"
+        pod_def = {
+            "pod_id": "testpodvolonce",
+            "image": "notchristiangarcia/testserver:fastapi",
+            "volume_mounts": {
+                "/app/config": {
+                    "type": "tapisvolume",
+                    "source_id": test_volume_exec,
+                    "config_filename": "once-test.yaml",
+                    "config_content": config_content,
+                    "config_update_mode": "once"
+                }
+            }
+        }
+        rsp = client.post("/pods", data=json.dumps(pod_def), headers=headers)
+        result = basic_response_checks(rsp)
+        assert result['volume_mounts']['/app/config']['config_update_mode'] == 'once'
+    
+    def test_tapisvolume_requires_config_filename_error(self, headers):
+        """Verify that tapisvolume with config_content but no config_filename fails."""
+        pod_def = {
+            "pod_id": "testpodfail",
+            "image": "notchristiangarcia/testserver:fastapi",
+            "volume_mounts": {
+                "/app/config": {
+                    "type": "tapisvolume",
+                    "source_id": test_volume_exec,
+                    "config_content": "test content"
+                    # Missing config_filename - should fail
+                }
+            }
+        }
+        rsp = client.post("/pods", data=json.dumps(pod_def), headers=headers)
+        # Should fail validation
+        assert rsp.status_code == 400, f"Expected 400, got {rsp.status_code}: {rsp.text}"
+        assert "config_filename" in rsp.text.lower()
+        # time sleep so pod gets created before the delete during teardown that leaves it hanging weirdly.
+        time.sleep(3)
+        

@@ -94,7 +94,7 @@ async def delete_template(template_id):
     response_model=TemplateResponse)
 async def get_template(template_id):
     """
-    Get a templates.
+    Get a template.
 
     Returns retrieved templates object.
     """

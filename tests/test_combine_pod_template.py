@@ -200,6 +200,60 @@ class TestSimpleFieldOverrides:
             result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
             assert getattr(result, field) == pod_modified
 
+    def test_time_to_stop_default_negative_one_from_template(self):
+        """Test that template can set time_to_stop_default to -1 (infinite TTL)."""
+        from models_templates_utils import combine_pod_and_template_recursively
+        
+        mock_t_obj = MagicMock()
+        mock_t_obj.tenant_cache = MockTenantCache()
+        # Template sets time_to_stop_default to -1 (no auto-stop)
+        template = make_template(time_to_stop_default=-1)
+        
+        with patch('models_templates_utils.derive_template_info') as mock_derive, \
+             patch('models_templates_utils.t', mock_t_obj):
+            mock_derive.return_value = ("template1:latest@2024-01-01", MockTemplate(), template)
+            
+            # Pod uses default 43200, but template should override to -1
+            pod = MockPod(time_to_stop_default=43200, modified_fields=[])
+            result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
+            assert result.time_to_stop_default == -1, f"Expected -1, got {result.time_to_stop_default}"
+    
+    def test_time_to_stop_instance_negative_one_from_template(self):
+        """Test that template can set time_to_stop_instance to -1 (infinite TTL)."""
+        from models_templates_utils import combine_pod_and_template_recursively
+        
+        mock_t_obj = MagicMock()
+        mock_t_obj.tenant_cache = MockTenantCache()
+        # Template sets time_to_stop_instance to -1 (no auto-stop)
+        template = make_template(time_to_stop_instance=-1)
+        
+        with patch('models_templates_utils.derive_template_info') as mock_derive, \
+             patch('models_templates_utils.t', mock_t_obj):
+            mock_derive.return_value = ("template1:latest@2024-01-01", MockTemplate(), template)
+            
+            # Pod has no time_to_stop_instance set (None), template should set to -1
+            pod = MockPod(time_to_stop_instance=None, modified_fields=[])
+            result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
+            assert result.time_to_stop_instance == -1, f"Expected -1, got {result.time_to_stop_instance}"
+    
+    def test_pod_overrides_template_negative_one(self):
+        """Test that pod can override template's -1 with explicit value."""
+        from models_templates_utils import combine_pod_and_template_recursively
+        
+        mock_t_obj = MagicMock()
+        mock_t_obj.tenant_cache = MockTenantCache()
+        # Template sets time_to_stop_default to -1
+        template = make_template(time_to_stop_default=-1)
+        
+        with patch('models_templates_utils.derive_template_info') as mock_derive, \
+             patch('models_templates_utils.t', mock_t_obj):
+            mock_derive.return_value = ("template1:latest@2024-01-01", MockTemplate(), template)
+            
+            # Pod explicitly sets time_to_stop_default to 7200
+            pod = MockPod(time_to_stop_default=7200, modified_fields=['time_to_stop_default'])
+            result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
+            assert result.time_to_stop_default == 7200, f"Pod override should win, got {result.time_to_stop_default}"
+
     def test_command_and_arguments_override(self):
         """Test command and arguments (list fields) override correctly"""
         from models_templates_utils import combine_pod_and_template_recursively

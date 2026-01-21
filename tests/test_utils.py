@@ -182,3 +182,118 @@ def basic_response_checks(rsp):
     result = data['result']
     print(result)
     return result
+
+
+##### Exec Helper Functions for Pod Verification
+
+def exec_command(client, pod_id, command_list, headers):
+    """
+    Execute a command in a pod and return (success, stdout, stderr).
+    
+    Args:
+        client: The test client instance
+        pod_id: The pod to exec into
+        command_list: List of command parts, e.g., ["printenv", "MY_VAR"]
+        headers: Auth headers
+        
+    Returns:
+        Tuple of (success: bool, stdout: str, stderr: str)
+    """
+    exec_def = {"commands": [command_list]}
+    rsp = client.post(f"/pods/{pod_id}/exec", data=json.dumps(exec_def), headers=headers)
+    
+    if rsp.status_code != 200:
+        return False, "", f"Exec request failed: {rsp.status_code} - {rsp.text}"
+    
+    result = rsp.json().get('result', {})
+    exec_results = result.get('execution_results', [])
+    
+    if not exec_results:
+        return False, "", "No execution results returned"
+    
+    first_result = exec_results[0]
+    success = first_result.get('success', False)
+    stdout = first_result.get('stdout', '')
+    stderr = first_result.get('stderr', '')
+    
+    return success, stdout, stderr
+
+
+def verify_env_var(client, pod_id, var_name, expected_value, headers):
+    """
+    Verify an environment variable has the expected value inside the pod.
+    
+    Args:
+        client: The test client instance
+        pod_id: The pod to check
+        var_name: Name of the environment variable
+        expected_value: Expected value (or substring) to find
+        headers: Auth headers
+    
+    Returns:
+        Tuple of (passed: bool, actual_value: str, error_msg: str)
+    """
+    success, stdout, stderr = exec_command(client, pod_id, ["printenv", var_name], headers)
+    
+    if not success:
+        return False, "", f"Failed to get env var {var_name}: {stderr}"
+    
+    actual = stdout.strip()
+    if expected_value in actual:
+        return True, actual, ""
+    else:
+        return False, actual, f"Expected '{expected_value}' in {var_name}, got '{actual}'"
+
+
+def verify_file_content(client, pod_id, file_path, expected_content, headers):
+    """
+    Verify a file contains expected content inside the pod.
+    
+    Args:
+        client: The test client instance
+        pod_id: The pod to check
+        file_path: Path to the file inside the pod
+        expected_content: Expected content (or substring) to find
+        headers: Auth headers
+    
+    Returns:
+        Tuple of (passed: bool, actual_content: str, error_msg: str)
+    """
+    success, stdout, stderr = exec_command(client, pod_id, ["cat", file_path], headers)
+    
+    if not success:
+        return False, "", f"Failed to read file {file_path}: {stderr}"
+    
+    if expected_content in stdout:
+        return True, stdout, ""
+    else:
+        return False, stdout, f"Expected '{expected_content}' in {file_path}"
+
+
+def wait_for_pod_status(client, pod_id, target_status, headers, max_attempts=30, sleep_time=3):
+    """
+    Wait for pod to reach target status.
+    
+    Args:
+        client: The test client instance
+        pod_id: The pod to wait for
+        target_status: Target status like "AVAILABLE", "RUNNING", etc.
+        headers: Auth headers
+        max_attempts: Maximum polling attempts
+        sleep_time: Seconds between attempts
+    
+    Returns:
+        Tuple of (success: bool, final_result: dict)
+    """
+    for i in range(max_attempts):
+        rsp = client.get(f"/pods/{pod_id}", headers=headers)
+        result = basic_response_checks(rsp)
+        if result.get('status') == target_status:
+            return True, result
+        if result.get('status') in ["ERROR", "COMPLETE"]:
+            return False, result
+        # Also check container phase for RUNNING
+        if target_status == "RUNNING" and result.get('status_container', {}).get('phase') == 'Running':
+            return True, result
+        time.sleep(sleep_time)
+    return False, result

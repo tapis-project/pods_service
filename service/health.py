@@ -41,9 +41,10 @@ from kubernetes_utils import get_current_k8_services, get_current_k8_pods, rm_co
     rm_service, KubernetesError, get_k8_logs, list_all_containers, run_k8_exec, list_configmaps_by_prefix, delete_configmap, NAMESPACE
 from codes import AVAILABLE, DELETING, STOPPED, ERROR, REQUESTED, COMPLETE, RESTART, ON, OFF
 from stores import pg_store, SITE_TENANT_DICT
-from models_pods import Pod
+from models_pods import Pod, PodBaseFull
 from models_volumes import Volume
 from models_snapshots import Snapshot
+from models_templates_utils import combine_pod_and_template_recursively
 from secret_utils import resolve_secret_map
 from psycopg2 import ProgrammingError
 from sqlmodel import select
@@ -258,15 +259,37 @@ def check_k8_pods(k8_pods):
 
                         if pod.start_instance_ts:
                             # This will set time_to_stop_ts the first time pod is available and if
-                            # time_to_stop_instance or time_to_stop_default is updated. 
-                            if isinstance(pod.time_to_stop_instance, int):
+                            # time_to_stop_instance or time_to_stop_default is updated.
+                            #
+                            # IMPORTANT: If pod uses a template, derive the time_to_stop values from
+                            # the merged template, as templates can set time_to_stop_default/-1 etc.
+                            time_to_stop_instance = pod.time_to_stop_instance
+                            time_to_stop_default = pod.time_to_stop_default
+                            
+                            if pod.template:
+                                try:
+                                    # Derive merged pod to get template's time_to_stop values
+                                    pod_copy = PodBaseFull(**pod.dict().copy())
+                                    derived_pod = combine_pod_and_template_recursively(
+                                        pod_copy, pod.template, tenant=pod.tenant_id, site=pod.site_id
+                                    )
+                                    # Use template's values if pod didn't explicitly set them
+                                    if 'time_to_stop_instance' not in (pod.modified_fields or []):
+                                        time_to_stop_instance = derived_pod.time_to_stop_instance
+                                    if 'time_to_stop_default' not in (pod.modified_fields or []):
+                                        time_to_stop_default = derived_pod.time_to_stop_default
+                                    logger.debug(f"Pod {pod.pod_id} using template time_to_stop: instance={time_to_stop_instance}, default={time_to_stop_default}")
+                                except Exception as e:
+                                    logger.warning(f"Failed to derive template time_to_stop for pod {pod.pod_id}: {e}")
+                            
+                            if isinstance(time_to_stop_instance, int):
                                 # If set to -1, we don't do ttl.
-                                if not pod.time_to_stop_instance == -1:
-                                    pod.time_to_stop_ts = pod.start_instance_ts + timedelta(seconds=pod.time_to_stop_instance)
+                                if not time_to_stop_instance == -1:
+                                    pod.time_to_stop_ts = pod.start_instance_ts + timedelta(seconds=time_to_stop_instance)
                             else:
                                 # If set to -1, we don't do ttl.
-                                if not pod.time_to_stop_default == -1:
-                                    pod.time_to_stop_ts = pod.start_instance_ts + timedelta(seconds=pod.time_to_stop_default)
+                                if not time_to_stop_default == -1:
+                                    pod.time_to_stop_ts = pod.start_instance_ts + timedelta(seconds=time_to_stop_default)
                         # We update if there's been a change.
                         if pod != pre_health_pod:
                             pod.db_update(f"health set status to AVAILABLE")
@@ -417,11 +440,31 @@ def check_db_pods(k8_pods):
 
                 # Resolve secrets at central health layer before sending to spawner
                 # This allows edge spawners to work without direct SK access
+                #
+                # IMPORTANT: If pod uses a template, merge template's secret_map first
+                # so template-defined secrets get resolved and sent to spawner
                 resolved_secrets = {}
-                if pod.secret_map:
+                
+                # Derive merged secret_map if pod uses a template
+                if pod.template:
+                    try:
+                        pod_copy = PodBaseFull(**pod.dict().copy())
+                        derived_pod = combine_pod_and_template_recursively(
+                            pod_copy, pod.template, tenant=pod.tenant_id, site=pod.site_id
+                        )
+                        merged_secret_map = getattr(derived_pod, 'secret_map', {}) or {}
+                    except Exception as e:
+                        logger.error(f"Failed to derive template for pod {pod.pod_id}: {e}")
+                        pod.status = ERROR
+                        pod.db_update(f"health failed to derive template: {str(e)}")
+                        continue
+                else:
+                    merged_secret_map = pod.secret_map or {}
+                
+                if merged_secret_map:
                     try:
                         resolved_secrets, secret_errors = resolve_secret_map(
-                            pod.secret_map,
+                            merged_secret_map,
                             site_id=pod.site_id,
                             tenant_id=pod.tenant_id,
                             actor=pod.pod_owner or "pods_service",

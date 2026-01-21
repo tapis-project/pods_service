@@ -143,8 +143,11 @@ def start_generic_pod(input_pod, revision: int, resolved_secrets: dict = None):
                         nfs_sub_path = f"{pod.tenant_id}/volumes/{source_id}"
                     
                     # Handle config_content for tapisvolume - write to NFS
+                    logger.debug(f"tapisvolume at '{mount_path}': config_content={bool(config_content)}, config_filename='{config_filename}', source_id='{source_id}'")
                     if config_content:
                         from volume_utils import file_exists, files_write_content
+                        
+                        logger.info(f"tapisvolume has config_content ({len(config_content)} bytes), will write to NFS")
                         
                         # Interpolate secrets in config_content:
                         # 1. First interpolate ${pods:secrets:KEY} with resolved_secrets
@@ -156,24 +159,29 @@ def start_generic_pod(input_pod, revision: int, resolved_secrets: dict = None):
                         cfg_filename = config_filename or os.path.basename(mount_path)
                         config_file_path = f"volumes/{source_id}/{cfg_filename}"
                         
+                        logger.info(f"Config file path: '{config_file_path}', tenant_id: '{pod.tenant_id}'")
+                        
                         # Check config_update_mode
                         should_write = True
                         if config_update_mode == "once":
-                            if file_exists(config_file_path, tenant_id=pod.tenant_id):
+                            exists = file_exists(config_file_path, tenant_id=pod.tenant_id)
+                            logger.info(f"config_update_mode=once, file_exists={exists}")
+                            if exists:
                                 logger.info(f"Config file '{config_file_path}' already exists, skipping write (config_update_mode=once)")
                                 should_write = False
                         
                         if should_write:
                             try:
+                                logger.info(f"Writing config content to NFS: {config_file_path}")
                                 files_write_content(
                                     content=interpolated_content,
                                     path=config_file_path,
                                     tenant_id=pod.tenant_id,
                                     permissions=config_permissions
                                 )
-                                logger.info(f"Wrote config content to NFS: {config_file_path}")
+                                logger.info(f"Successfully wrote config content to NFS: {config_file_path}")
                             except Exception as e:
-                                logger.error(f"Failed to write config content to NFS {config_file_path}: {e}")
+                                logger.error(f"Failed to write config content to NFS {config_file_path}: {e}", exc_info=True)
                     
                     volume_mounts.append(client.V1VolumeMount(
                         name=full_k8_name,

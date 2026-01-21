@@ -226,14 +226,14 @@ def file_exists(path: str, tenant_id: str = "", base_path: str = "") -> bool:
     """
     logger.debug(f"top of volume_utils.file_exists() - path: {path}")
     
-    # Normalize path
-    path = os.path.abspath(path)
+    # Normalize path (remove . and .. but keep relative)
+    path = os.path.normpath(path)
     
     # Establish base_path w/ tenant
     base_path = base_path or f"{conf.nfs_base_path}/{tenant_id or g.tenant_id}"
     base_path = os.path.abspath(base_path)
     
-    full_path = f"{base_path}/{path}"
+    full_path = os.path.join(base_path, path)
     return os.path.isfile(full_path)
 
 
@@ -250,14 +250,14 @@ def files_write_content(content: str, path: str, tenant_id: str = "", base_path:
     """
     logger.debug(f"top of volume_utils.files_write_content() - path: {path}")
     
-    # Normalize path
-    path = os.path.abspath(path)
+    # Normalize path (remove . and .. but keep relative)
+    path = os.path.normpath(path)
     
     # Establish base_path w/ tenant
     base_path = base_path or f"{conf.nfs_base_path}/{tenant_id or g.tenant_id}"
     base_path = os.path.abspath(base_path)
     
-    full_path = f"{base_path}/{path}"
+    full_path = os.path.join(base_path, path)
     
     # Ensure parent directory exists
     parent_dir = os.path.dirname(full_path)

@@ -475,10 +475,10 @@ class PodBaseFull(PodBaseRead):
         display.pop('modified_fields')
         display.pop('action_logs')
         
-        # Redact config_content if not requested
+        # Redact config_content if not requested (for both ephemeral and tapisvolume types)
         if not include_configs and display.get('volume_mounts'):
             for mount_path, mount_config in display['volume_mounts'].items():
-                if mount_config and mount_config.get('type') == 'ephemeral' and mount_config.get('config_content'):
+                if mount_config and mount_config.get('type') in ('ephemeral', 'tapisvolume') and mount_config.get('config_content'):
                     content_size = len(mount_config['config_content'])
                     mount_config['config_content'] = f"<{content_size} bytes - use ?include_configs=true to retrieve>"
         

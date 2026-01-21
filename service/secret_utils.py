@@ -80,8 +80,9 @@ PLACEHOLDER_REQUIRED_PATTERN = re.compile(r'^\$\{:\?([^}]+)\}$')
 # Note: default value can be empty, e.g., ${pods:default::?description}
 INLINE_PLACEHOLDER_PATTERN = re.compile(r'\$\{(pods:default:[^:}]*(?::\?[^}]+)?|:\?[^}]+)\}')
 
-# Pattern for inline secret references in strings: ${pods:secrets:key}
-INLINE_SECRET_PATTERN = re.compile(r'\$\{pods:secrets:([a-zA-Z0-9_-]+)\}')
+# Pattern for inline secret references in strings: ${pods:secrets:KEY} or ${pods:secrets:KEY:?description}
+# Description is informational only and stripped during interpolation
+INLINE_SECRET_PATTERN = re.compile(r'\$\{pods:secrets:([a-zA-Z0-9_-]+)(?::\?([^}]+))?\}')
 
 # Pattern for pod networking references: ${pods:networking:netname:field}
 # Fields: url, hostname, port, protocol, tapis_url
@@ -465,9 +466,12 @@ def validate_environment_placeholders(
         if not isinstance(value, str):
             continue
             
-        # Find all ${pods:secrets:KEY} references in the value
+        # Find all ${pods:secrets:KEY} or ${pods:secrets:KEY:?description} references
+        # INLINE_SECRET_PATTERN returns tuples of (key, description) where description may be empty
         matches = INLINE_SECRET_PATTERN.findall(value)
-        for secret_key in matches:
+        for match in matches:
+            # match is a tuple: (key, description) - we only need the key
+            secret_key = match[0] if isinstance(match, tuple) else match
             if secret_key not in secret_map_keys:
                 errors.append(
                     f"Environment variable '{var_name}' references secret_map key "
@@ -1099,7 +1103,10 @@ def inject_secrets_into_env_vars(
     Process inline secret references in environment variables.
     
     Secrets must be defined in secret_map first, then referenced in
-    environment_variables using ${pods:secrets:KEY} notation.
+    environment_variables using ${pods:secrets:KEY} or ${pods:secrets:KEY:?description} notation.
+    
+    The :?description suffix is optional and purely informational - it allows environment
+    variable definitions to be self-documenting. Descriptions are stripped during interpolation.
     
     NOTE: This function only processes ${pods:secrets:KEY} references.
     It does NOT automatically add all secret_map keys to environment_variables.
@@ -1113,11 +1120,15 @@ def inject_secrets_into_env_vars(
     Returns:
         Tuple of (processed environment variables dict, list of errors)
         
-    Example:
-        env_vars = {
-            "DB_URL": "postgres://user:${pods:secrets:DB_PASSWORD}@localhost/db"
-        }
+    Examples:
+        # Basic usage
+        env_vars = {"DB_URL": "postgres://user:${pods:secrets:DB_PASSWORD}@localhost/db"}
         secrets = {"DB_PASSWORD": "secret123"}
+        result, errors = inject_secrets_into_env_vars(env_vars, secrets)
+        # result = {"DB_URL": "postgres://user:secret123@localhost/db"}
+        
+        # With description (description is stripped)
+        env_vars = {"DB_URL": "postgres://user:${pods:secrets:DB_PASSWORD:?Database password}@localhost/db"}
         result, errors = inject_secrets_into_env_vars(env_vars, secrets)
         # result = {"DB_URL": "postgres://user:secret123@localhost/db"}
     """
@@ -1127,13 +1138,14 @@ def inject_secrets_into_env_vars(
     # NOTE: We intentionally do NOT auto-add all resolved_secrets to result.
     # Secrets are only injected when explicitly referenced via ${pods:secrets:KEY}.
     
-    # Replace inline ${pods:secrets:KEY} references in all values
+    # Replace inline ${pods:secrets:KEY} or ${pods:secrets:KEY:?description} references
     for key, value in list(result.items()):
         if isinstance(value, str):
             missing_refs = []
             
             def replace_inline_secret(match):
                 secret_key = match.group(1)
+                # description = match.group(2)  # Available if needed for logging/debugging
                 if secret_key in resolved_secrets:
                     return resolved_secrets[secret_key]
                 # Track missing reference
@@ -1311,6 +1323,7 @@ def detect_unresolved_patterns(
         - secret_map_unresolved: List of {key, patterns: [{pattern, type}]}
         - env_vars_unresolved: List of {key, patterns: [{pattern, type}]}
         - config_unresolved: List of {index, patterns: [{pattern, type}]}
+        - syntax_warnings: List of syntax issue warnings (e.g., ? instead of :?)
         - summary: Human-readable summary string
     """
     result = {
@@ -1318,8 +1331,13 @@ def detect_unresolved_patterns(
         "secret_map_unresolved": [],
         "env_vars_unresolved": [],
         "config_unresolved": [],
+        "syntax_warnings": [],
         "summary": ""
     }
+    
+    # Pattern to detect common mistake: ${pods:secrets:KEY?desc} instead of ${pods:secrets:KEY:?desc}
+    # This matches ${pods:secrets:KEY?...} where ? is NOT preceded by :
+    MISSING_COLON_PATTERN = re.compile(r'\$\{pods:secrets:([a-zA-Z0-9_-]+)\?([^}]+)\}')
     
     def classify_pattern(pattern_content: str) -> str:
         """Classify what type of unresolved pattern this is."""
@@ -1355,9 +1373,26 @@ def detect_unresolved_patterns(
             })
         return patterns
     
+    def check_syntax_warnings(value: str, location: str) -> None:
+        """Check for common syntax mistakes and add warnings."""
+        if not isinstance(value, str):
+            return
+        # Check for ${pods:secrets:KEY?desc} - missing colon before ?
+        for match in MISSING_COLON_PATTERN.finditer(value):
+            key = match.group(1)
+            desc = match.group(2)
+            result["syntax_warnings"].append({
+                "location": location,
+                "issue": "Missing colon before description",
+                "found": match.group(0),
+                "suggestion": f"Use '${{pods:secrets:{key}:?{desc}}}' (note the ':?' not just '?')",
+                "explanation": "Descriptions require ':?' syntax, not just '?'. The pattern ${pods:secrets:KEY?desc} won't match - use ${pods:secrets:KEY:?desc} instead."
+            })
+    
     # Check secret_map
     if secret_map:
         for key, value in secret_map.items():
+            check_syntax_warnings(value, f"secret_map['{key}']")
             patterns = find_patterns(value)
             if patterns:
                 result["secret_map_unresolved"].append({
@@ -1368,6 +1403,7 @@ def detect_unresolved_patterns(
     # Check environment_variables
     if environment_variables:
         for key, value in environment_variables.items():
+            check_syntax_warnings(value, f"environment_variables['{key}']")
             patterns = find_patterns(value)
             if patterns:
                 result["env_vars_unresolved"].append({
@@ -1378,6 +1414,7 @@ def detect_unresolved_patterns(
     # Check config_contents
     if config_contents:
         for idx, content in enumerate(config_contents):
+            check_syntax_warnings(content, f"config_content[{idx}]")
             patterns = find_patterns(content)
             if patterns:
                 result["config_unresolved"].append({
@@ -1391,19 +1428,22 @@ def detect_unresolved_patterns(
         len(result["env_vars_unresolved"]) + 
         len(result["config_unresolved"])
     )
-    result["has_unresolved"] = total_unresolved > 0
+    result["has_unresolved"] = total_unresolved > 0 or len(result["syntax_warnings"]) > 0
     
     # Build summary
-    if result["has_unresolved"]:
-        parts = []
-        if result["secret_map_unresolved"]:
-            keys = [item["key"] for item in result["secret_map_unresolved"]]
-            parts.append(f"secret_map keys with unresolved patterns: {', '.join(keys)}")
-        if result["env_vars_unresolved"]:
-            keys = [item["key"] for item in result["env_vars_unresolved"]]
-            parts.append(f"environment_variables with unresolved patterns: {', '.join(keys)}")
-        if result["config_unresolved"]:
-            parts.append(f"{len(result['config_unresolved'])} config_content(s) with unresolved patterns")
+    parts = []
+    if result["secret_map_unresolved"]:
+        keys = [item["key"] for item in result["secret_map_unresolved"]]
+        parts.append(f"secret_map keys with unresolved patterns: {', '.join(keys)}")
+    if result["env_vars_unresolved"]:
+        keys = [item["key"] for item in result["env_vars_unresolved"]]
+        parts.append(f"environment_variables with unresolved patterns: {', '.join(keys)}")
+    if result["config_unresolved"]:
+        parts.append(f"{len(result['config_unresolved'])} config_content(s) with unresolved patterns")
+    if result["syntax_warnings"]:
+        parts.append(f"{len(result['syntax_warnings'])} syntax warning(s) - check 'syntax_warnings' for details")
+    
+    if parts:
         result["summary"] = "; ".join(parts)
     else:
         result["summary"] = "All patterns resolved successfully"

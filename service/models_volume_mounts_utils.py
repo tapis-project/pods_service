@@ -26,7 +26,10 @@ MAX_CONFIG_CONTENT_SIZE = 1024 * 1024  # 1MB
 
 def interpolate_config_content(content: str, secret_map: Dict[str, str], fail_on_missing: bool = True) -> str:
     """
-    Interpolate ${pods:secrets:KEY} placeholders in config content using secret_map values.
+    Interpolate ${pods:secrets:KEY} or ${pods:secrets:KEY:?description} placeholders in config content.
+    
+    The :?description suffix is optional and purely informational - it allows config files
+    to be self-documenting. Descriptions are stripped during interpolation.
     
     Args:
         content: Config content with placeholders
@@ -35,20 +38,35 @@ def interpolate_config_content(content: str, secret_map: Dict[str, str], fail_on
         
     Returns:
         Interpolated config content string
+        
+    Examples:
+        # Basic usage
+        interpolate_config_content("pass=${pods:secrets:DB_PASS}", {"DB_PASS": "secret"})
+        # Returns: "pass=secret"
+        
+        # With description (description is stripped)
+        interpolate_config_content("pass=${pods:secrets:DB_PASS:?Database password}", {"DB_PASS": "secret"})
+        # Returns: "pass=secret"
     """
     if content is None:
         return ""
     
     result = content
-    pattern = r'\$\{pods:secrets:([^}]+)\}'
-    matches = re.findall(pattern, result)
+    # Pattern captures KEY and optional :?description
+    # Group 1: key (required), Group 2: description (optional, after :?)
+    pattern = r'\$\{pods:secrets:([a-zA-Z0-9_-]+)(?::\?([^}]+))?\}'
     
-    for key in matches:
+    def replace_match(match):
+        key = match.group(1)
+        # description = match.group(2)  # Available if needed for logging/debugging
         if key in secret_map:
-            result = result.replace(f"${{pods:secrets:{key}}}", str(secret_map[key]))
+            return str(secret_map[key])
         elif fail_on_missing:
             raise ValueError(f"Config interpolation failed: secret_map key '{key}' not found.")
+        else:
+            return match.group(0)  # Leave placeholder unchanged
     
+    result = re.sub(pattern, replace_match, result)
     return result
 
 
@@ -301,6 +319,14 @@ class VolumeMount(TapisModel):
             if not source_id:
                 raise ValueError(f"volume_mounts type 'tapisvolume' requires source_id.")
             # tapisvolume CAN have config_content (will be written to NFS)
+            # When config_content is provided, config_filename is REQUIRED to avoid ambiguity
+            # (mount_path basename could be a directory name like 'headscale' vs a file 'config.yaml')
+            config_filename = getattr(values, 'config_filename', None)
+            if config_content and not config_filename:
+                raise ValueError(
+                    f"volume_mounts type 'tapisvolume' with config_content requires config_filename to be specified. "
+                    f"This ensures the config file is written with an explicit filename rather than deriving from mount_path."
+                )
             # Default read_only to False for tapisvolume
             if read_only is None:
                 object.__setattr__(values, 'read_only', False)

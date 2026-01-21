@@ -1111,6 +1111,97 @@ class TestDetectUnresolvedPatterns:
         assert result["has_unresolved"] is True
         assert len(result["env_vars_unresolved"]) == 1
         assert len(result["env_vars_unresolved"][0]["patterns"]) == 2
+    
+    def test_syntax_warning_missing_colon_before_question(self):
+        """Should warn when user uses ? instead of :? for description."""
+        result = detect_unresolved_patterns(
+            environment_variables={
+                "SERVER_URL": "${pods:secrets:server_url?ex. mypod.tacc.cloud}"
+            }
+        )
+        
+        # Should detect syntax warning even though pattern doesn't match as unresolved
+        assert result["has_unresolved"] is True
+        assert len(result["syntax_warnings"]) == 1
+        
+        warning = result["syntax_warnings"][0]
+        assert warning["location"] == "environment_variables['SERVER_URL']"
+        assert "Missing colon before description" in warning["issue"]
+        assert "${pods:secrets:server_url?ex. mypod.tacc.cloud}" in warning["found"]
+        assert ":?" in warning["suggestion"]
+        assert "server_url:?" in warning["suggestion"]
+    
+    def test_syntax_warning_in_config_content(self):
+        """Should detect syntax warning in config_content."""
+        result = detect_unresolved_patterns(
+            config_contents=[
+                "api_key=${pods:secrets:API_KEY?Your API key here}"
+            ]
+        )
+        
+        assert result["has_unresolved"] is True
+        assert len(result["syntax_warnings"]) == 1
+        assert result["syntax_warnings"][0]["location"] == "config_content[0]"
+    
+    def test_syntax_warning_in_secret_map(self):
+        """Should detect syntax warning in secret_map."""
+        result = detect_unresolved_patterns(
+            secret_map={
+                "DB_PASS": "${pods:secrets:password?Database password}"
+            }
+        )
+        
+        assert result["has_unresolved"] is True
+        assert len(result["syntax_warnings"]) == 1
+        assert result["syntax_warnings"][0]["location"] == "secret_map['DB_PASS']"
+    
+    def test_syntax_warning_multiple(self):
+        """Should detect multiple syntax warnings."""
+        result = detect_unresolved_patterns(
+            environment_variables={
+                "VAR1": "${pods:secrets:key1?desc1}",
+                "VAR2": "${pods:secrets:key2?desc2}"
+            }
+        )
+        
+        assert len(result["syntax_warnings"]) == 2
+        assert "2 syntax warning" in result["summary"]
+    
+    def test_no_syntax_warning_for_correct_syntax(self):
+        """Should NOT warn when correct :? syntax is used."""
+        result = detect_unresolved_patterns(
+            environment_variables={
+                "SERVER_URL": "${pods:secrets:server_url:?ex. mypod.tacc.cloud}"
+            }
+        )
+        
+        # This will be flagged as unresolved (secret_map_reference) but NOT as syntax warning
+        assert result["has_unresolved"] is True
+        assert len(result["syntax_warnings"]) == 0
+        assert len(result["env_vars_unresolved"]) == 1
+    
+    def test_syntax_warning_and_unresolved_together(self):
+        """Should report both syntax warnings and unresolved patterns."""
+        result = detect_unresolved_patterns(
+            environment_variables={
+                "BAD_SYNTAX": "${pods:secrets:key?bad desc}",  # syntax warning + unresolved
+                "UNRESOLVED": "${pods:secrets:other_key}"  # proper but unresolved
+            }
+        )
+        
+        assert result["has_unresolved"] is True
+        assert len(result["syntax_warnings"]) == 1
+        # Both are detected as unresolved (the UNRESOLVED_PATTERN matches any ${...})
+        # BAD_SYNTAX is flagged as both unresolved AND has a syntax warning
+        assert len(result["env_vars_unresolved"]) == 2
+        
+        # Verify the syntax warning is for BAD_SYNTAX
+        assert result["syntax_warnings"][0]["location"] == "environment_variables['BAD_SYNTAX']"
+        
+        # Verify both keys are in unresolved
+        unresolved_keys = [e["key"] for e in result["env_vars_unresolved"]]
+        assert "BAD_SYNTAX" in unresolved_keys
+        assert "UNRESOLVED" in unresolved_keys
 
 
 # ============================================================================
@@ -1179,3 +1270,97 @@ class TestCheckPodUnresolvedPatterns:
         )
         
         assert result is None
+
+
+# ============================================================================
+# TEST: inject_secrets_into_env_vars() - Description syntax support
+# ============================================================================
+
+# Import the function for testing
+from secret_utils import inject_secrets_into_env_vars
+
+class TestInjectSecretsWithDescriptions:
+    """Tests for ${pods:secrets:KEY:?description} syntax in environment variables."""
+    
+    def test_basic_injection(self):
+        """Basic ${pods:secrets:KEY} should work."""
+        env_vars = {"DB_URL": "postgres://user:${pods:secrets:DB_PASS}@localhost/db"}
+        secrets = {"DB_PASS": "secret123"}
+        result, errors = inject_secrets_into_env_vars(env_vars, secrets)
+        
+        assert errors == []
+        assert result["DB_URL"] == "postgres://user:secret123@localhost/db"
+    
+    def test_injection_with_description(self):
+        """${pods:secrets:KEY:?description} should resolve, stripping description."""
+        env_vars = {"DB_URL": "postgres://user:${pods:secrets:DB_PASS:?Database password}@localhost/db"}
+        secrets = {"DB_PASS": "secret123"}
+        result, errors = inject_secrets_into_env_vars(env_vars, secrets)
+        
+        assert errors == []
+        assert result["DB_URL"] == "postgres://user:secret123@localhost/db"
+        assert ":?" not in result["DB_URL"]
+        assert "Database password" not in result["DB_URL"]
+    
+    def test_multiple_with_descriptions(self):
+        """Multiple placeholders with descriptions should all resolve."""
+        env_vars = {
+            "CONN": "${pods:secrets:HOST:?DB host}:${pods:secrets:PORT:?DB port}"
+        }
+        secrets = {"HOST": "localhost", "PORT": "5432"}
+        result, errors = inject_secrets_into_env_vars(env_vars, secrets)
+        
+        assert errors == []
+        assert result["CONN"] == "localhost:5432"
+    
+    def test_mixed_with_and_without_descriptions(self):
+        """Mix of placeholders with and without descriptions should work."""
+        env_vars = {
+            "URL": "${pods:secrets:HOST}:${pods:secrets:PORT:?The port number}"
+        }
+        secrets = {"HOST": "localhost", "PORT": "5432"}
+        result, errors = inject_secrets_into_env_vars(env_vars, secrets)
+        
+        assert errors == []
+        assert result["URL"] == "localhost:5432"
+    
+    def test_description_with_special_chars(self):
+        """Descriptions can contain special characters except }."""
+        env_vars = {
+            "KEY": "${pods:secrets:API_KEY:?Get from https://api.example.com - required!}"
+        }
+        secrets = {"API_KEY": "abc123"}
+        result, errors = inject_secrets_into_env_vars(env_vars, secrets)
+        
+        assert errors == []
+        assert result["KEY"] == "abc123"
+    
+    def test_missing_key_with_description_reports_key_only(self):
+        """Missing key error should reference just the key, not the description."""
+        env_vars = {"VAR": "${pods:secrets:MISSING_KEY:?This is required}"}
+        result, errors = inject_secrets_into_env_vars(env_vars, {}, fail_on_missing=True)
+        
+        assert len(errors) == 1
+        assert "MISSING_KEY" in errors[0]
+        # The original placeholder should remain
+        assert "${pods:secrets:MISSING_KEY:?This is required}" in result["VAR"]
+    
+    def test_missing_key_with_description_no_fail(self):
+        """Missing key with fail_on_missing=False should leave full placeholder."""
+        env_vars = {"VAR": "${pods:secrets:MISSING:?Required}"}
+        result, errors = inject_secrets_into_env_vars(env_vars, {}, fail_on_missing=False)
+        
+        # Errors are still collected even with fail_on_missing=False
+        assert len(errors) == 1
+        assert "${pods:secrets:MISSING:?Required}" in result["VAR"]
+    
+    def test_long_description(self):
+        """Long descriptions should work correctly."""
+        long_desc = "This is a very long description that explains what this secret is for and how to obtain it from the admin portal"
+        env_vars = {"VAR": f"${{pods:secrets:KEY:?{long_desc}}}"}
+        secrets = {"KEY": "value"}
+        result, errors = inject_secrets_into_env_vars(env_vars, secrets)
+        
+        assert errors == []
+        assert result["VAR"] == "value"
+        assert long_desc not in result["VAR"]

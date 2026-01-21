@@ -8,6 +8,7 @@ Tests cover:
 - Secret name validation and error cases
 - secret_map format validation
 - Integration with pods via secret_map and environment_variables
+- Template secret_map resolution (verified via exec)
 """
 import os
 import sys
@@ -18,7 +19,8 @@ from datetime import datetime
 
 from tests.test_utils import (
     headers, response_format, basic_response_checks,
-    regular_headers, privileged_headers
+    regular_headers, privileged_headers,
+    exec_command, verify_env_var, verify_file_content, wait_for_pod_status
 )
 
 # Allows us to import pods's modules.
@@ -46,6 +48,18 @@ test_secret_error = f"testsecreterror_{test_timestamp}"
 test_pod_with_secrets = f"testpodwithsecrets{test_timestamp}"
 test_pod_legacy_secrets = f"testpodlegacysecrets{test_timestamp}"
 
+# Template secret resolution tests - variables
+test_template_secret_id = f"testtmplsecret{test_timestamp}"
+test_template_for_secrets = f"testsecrettmpl{test_timestamp}"
+test_pod_from_template = f"testpodfromtmpl{test_timestamp}"
+test_pod_direct_secrets = f"testpoddirect{test_timestamp}"
+
+# Description syntax tests - variables
+test_pod_description_syntax = f"testpoddesc{test_timestamp}"
+
+# Syntax warning tests - variables (testing ? vs :? detection)
+test_pod_syntax_warning = f"testpodsyntaxwarn{test_timestamp}"
+
 
 ##### Teardown
 @pytest.fixture(scope="module", autouse=True)
@@ -58,9 +72,13 @@ def teardown(headers):
     # Clean up pods
     pods_to_delete = [
         test_pod_with_secrets,
-        test_pod_legacy_secrets,
         f"testpodplaceholders{test_timestamp}",
         f"testpodnoplacehold{test_timestamp}",
+        test_pod_from_template,
+        test_pod_direct_secrets,
+        test_pod_legacy_secrets,
+        test_pod_description_syntax,
+        test_pod_syntax_warning,
     ]
     for pod_id in pods_to_delete:
         try:
@@ -82,10 +100,21 @@ def teardown(headers):
         test_secret_full,
         test_secret_error,
         f"testsecretresolved_{test_timestamp}",
+        test_template_secret_id,
     ]
     for secret_id in secrets_to_delete:
         try:
             client.delete(f'/pods/secrets/{secret_id}', headers=headers)
+        except Exception:
+            pass
+
+    # Clean up templates
+    templates_to_delete = [
+        test_template_for_secrets,
+    ]
+    for template_id in templates_to_delete:
+        try:
+            client.delete(f'/pods/templates/{template_id}', headers=headers)
         except Exception:
             pass
 
@@ -895,4 +924,503 @@ def test_get_derived_pod_replaces_tapissecret(headers):
     assert "<<tapissecret_" not in combined, f"Placeholders not replaced in COMBINED: {combined}"
     assert f"user:{test_pod_legacy_secrets}:pass:" in combined
 
+
+##### Template Secret Resolution Tests #####
+# These tests verify that secrets defined in templates are properly resolved
+# when pods use those templates. The bug was that template secret_map entries
+# were merged AFTER resolution, so they never got resolved.
+
+def test_template_secret_create_secret(headers):
+    """Create a secret to be used for template secret resolution tests."""
+    secret_def = {
+        "secret_id": test_template_secret_id,
+        "secret_value": "template_secret_value_12345",
+        "description": "Secret for template resolution tests",
+        "scope": "user",
+        "readable": True,
+        "writable": True
+    }
+    rsp = client.post("/pods/secrets", data=json.dumps(secret_def), headers=headers)
+    result = basic_response_checks(rsp)
+    assert result['secret_id'] == test_template_secret_id
+
+
+def test_template_secret_create_template(headers):
+    """Create a template for testing secret resolution from templates."""
+    # Step 1: Create the template (just metadata)
+    template_def = {
+        "template_id": test_template_for_secrets,
+        "description": "Template for testing secret resolution from templates",
+        "metatags": ["test", "secrets", "resolution"]
+    }
+    rsp = client.post("/pods/templates", data=json.dumps(template_def), headers=headers)
+    result = basic_response_checks(rsp)
+    assert result['template_id'] == test_template_for_secrets
+    time.sleep(1)
+
+
+def test_template_secret_add_tag(headers):
+    """Add a tag to the template with secret_map placeholders that pod creators will override."""
+    # Step 2: Add a tag with the pod_definition
+    # Templates define PLACEHOLDERS in secret_map, not direct secret references
+    # Pod creators override these placeholders with their actual secrets
+    # Format: ${:?description} for required placeholder
+    tag_def = {
+        "pod_definition": {
+            "image": "notchristiangarcia/testserver:fastapi",
+            "description": "Template tag with secret_map placeholders",
+            "command": [],
+            "environment_variables": {
+                "HOST": "${pods:secrets:DB_HOST}",
+                "PORT": "5432",
+                "TEMPLATE_VAR": "from_template"
+            },
+            "volume_mounts": {
+                "/etc/myapp/config.ini": {
+                    "type": "ephemeral",
+                    "config_content": "[database]\nhost = ${pods:secrets:DB_HOST}\nport = 5432\n"
+                }
+            },
+            "secret_map": {
+                "DB_HOST": "${:?Database host secret - provide your secret reference}"
+            },
+            "resources": {
+                "cpu_request": 250,
+                "mem_request": 256,
+                "cpu_limit": 1000,
+                "mem_limit": 1024
+            }
+        },
+        "tag": "secrettest",
+        "commit_message": "Template tag with secret_map placeholders for resolution testing"
+    }
+    rsp = client.post(f"/pods/templates/{test_template_for_secrets}/tags", data=json.dumps(tag_def), headers=headers)
+    result = basic_response_checks(rsp)
+    assert "secrettest" in result['tag_timestamp']
+
+
+def test_template_secret_create_pod_from_template(headers):
+    """Create a pod using the template, overriding the secret_map placeholder with actual secret."""
+    # The template has a placeholder for DB_HOST - we override it with our actual secret
+    pod_def = {
+        "pod_id": test_pod_from_template,
+        "description": "Pod from template for secret resolution test",
+        "template": f"{test_template_for_secrets}:secrettest",
+        "environment_variables": {
+            "POD_VAR": "from_pod"
+        },
+        "secret_map": {
+            # Override the template's DB_HOST placeholder with our actual secret reference
+            "DB_HOST": "${secret:" + test_template_secret_id + "}"
+        }
+    }
+    rsp = client.post("/pods", data=json.dumps(pod_def), headers=headers)
+    result = basic_response_checks(rsp)
+    assert result['pod_id'] == test_pod_from_template
+    assert test_template_for_secrets in result['template']
+    # Verify secret_map was merged (pod's override should be present)
+    assert 'secret_map' in result
+    assert 'DB_HOST' in result['secret_map']
+
+
+def test_template_secret_derived_shows_resolved(headers):
+    """Verify that GET /pods/{id}/derived with resolve_secrets=true shows resolved secrets."""
+    # Wait briefly for pod to be created
+    time.sleep(2)
+    
+    rsp = client.get(
+        f'/pods/{test_pod_from_template}/derived?resolve_secrets=true&include_configs=true',
+        headers=headers
+    )
+    result = basic_response_checks(rsp)
+    
+    # Check environment_variables have secrets resolved
+    env_vars = result.get('environment_variables', {})
+    host_value = env_vars.get('HOST', '')
+    
+    # Should NOT contain the placeholder syntax
+    assert "${pods:secrets:" not in host_value, f"Secret not resolved in HOST: {host_value}"
+    # Should contain the actual secret value
+    assert host_value == "template_secret_value_12345", f"HOST should be secret value, got: {host_value}"
+    
+    # Check volume_mounts config_content has secrets resolved
+    volume_mounts = result.get('volume_mounts', {})
+    config_mount = volume_mounts.get('/etc/myapp/config.ini', {})
+    config_content = config_mount.get('config_content', '')
+    assert "${pods:secrets:" not in config_content, f"Secret not resolved in config_content: {config_content}"
+    assert "template_secret_value_12345" in config_content, f"Secret value not in config_content: {config_content}"
+
+
+def test_template_secret_wait_for_pod_running(headers):
+    """Wait for the pod from template to reach RUNNING status."""
+    success, result = wait_for_pod_status(client, test_pod_from_template, "RUNNING", headers, max_attempts=30)
+    if not success:
+        pytest.fail(f"Pod did not reach Running status: {result}")
+
+
+def test_template_secret_exec_verify_env_vars(headers):
+    """Use exec to verify actual environment variable values inside the running pod."""
+    # Verify HOST contains actual secret value, not placeholder
+    passed, actual, error = verify_env_var(client, test_pod_from_template, "HOST", "template_secret_value_12345", headers)
+    assert passed, f"HOST verification failed: {error}. Actual: '{actual}'"
+    assert "${pods:secrets:" not in actual, f"HOST still has unresolved placeholder: {actual}"
+    
+    # Verify PORT is also present (from template)
+    passed, actual, error = verify_env_var(client, test_pod_from_template, "PORT", "5432", headers)
+    assert passed, f"PORT verification failed: {error}. Actual: '{actual}'"
+    
+    # Verify TEMPLATE_VAR from template
+    passed, actual, error = verify_env_var(client, test_pod_from_template, "TEMPLATE_VAR", "from_template", headers)
+    assert passed, f"TEMPLATE_VAR verification failed: {error}. Actual: '{actual}'"
+
+
+def test_template_secret_exec_verify_config_content(headers):
+    """Use exec to cat the config file and verify secret is resolved in the actual file."""
+    # Verify config file contains actual secret value
+    passed, content, error = verify_file_content(client, test_pod_from_template, "/etc/myapp/config.ini", "template_secret_value_12345", headers)
+    assert passed, f"Config verification failed: {error}. Content: '{content}'"
+    
+    # Verify config file does NOT contain placeholder
+    assert "${pods:secrets:" not in content, f"Config file still has unresolved placeholder: {content}"
+    
+    # Verify the structure is correct
+    assert "[database]" in content, f"Config missing [database] section: {content}"
+    assert "port = 5432" in content, f"Config missing port value: {content}"
+
+
+def test_template_secret_stop_pod_from_template(headers):
+    """Stop the pod from template to clean up."""
+    rsp = client.get(f'/pods/{test_pod_from_template}/stop', headers=headers)
+    # Either success or already stopped is fine
+    assert rsp.status_code in [200, 400, 404]
+
+
+##### Direct Secret Map Pod Tests (Comparison) #####
+# These tests verify that secrets defined directly on pods (not via templates) also work
+
+def test_direct_secret_create_pod_with_secret_map(headers):
+    """Create a pod with secret_map defined directly on the pod (no template)."""
+    # secret_map maps a KEY to a secret reference ${secret:secret_id}
+    # environment_variables use ${pods:secrets:KEY} to get the resolved value
+    pod_def = {
+        "pod_id": test_pod_direct_secrets,
+        "description": "Pod with direct secret_map for comparison",
+        "image": "notchristiangarcia/testserver:fastapi",
+        "environment_variables": {
+            "DIRECT_SECRET": "${pods:secrets:MY_SECRET}",
+            "NORMAL_VAR": "normal_value"
+        },
+        "secret_map": {
+            "MY_SECRET": "${secret:" + test_template_secret_id + "}"
+        },
+        "resources": {
+            "cpu_request": 250,
+            "mem_request": 256,
+            "cpu_limit": 1000,
+            "mem_limit": 1024
+        }
+    }
+    rsp = client.post("/pods", data=json.dumps(pod_def), headers=headers)
+    result = basic_response_checks(rsp)
+    assert result['pod_id'] == test_pod_direct_secrets
+
+
+def test_direct_secret_derived_shows_resolved(headers):
+    """Verify that direct secret_map also resolves correctly in /derived."""
+    time.sleep(2)
+    
+    rsp = client.get(
+        f'/pods/{test_pod_direct_secrets}/derived?resolve_secrets=true',
+        headers=headers
+    )
+    result = basic_response_checks(rsp)
+    
+    env_vars = result.get('environment_variables', {})
+    direct_secret = env_vars.get('DIRECT_SECRET', '')
+    
+    assert "${pods:secrets:" not in direct_secret, f"Secret not resolved: {direct_secret}"
+    assert direct_secret == "template_secret_value_12345", f"Wrong value: {direct_secret}"
+
+
+def test_direct_secret_wait_for_pod_running(headers):
+    """Wait for the direct secret pod to reach RUNNING status."""
+    success, result = wait_for_pod_status(client, test_pod_direct_secrets, "RUNNING", headers, max_attempts=30)
+    if not success:
+        pytest.fail(f"Pod did not reach Running status: {result}")
+
+
+def test_direct_secret_exec_verify_env_vars(headers):
+    """Use exec to verify environment variables in the direct secret pod."""
+    # Verify DIRECT_SECRET contains actual secret value
+    passed, actual, error = verify_env_var(client, test_pod_direct_secrets, "DIRECT_SECRET", "template_secret_value_12345", headers)
+    assert passed, f"DIRECT_SECRET verification failed: {error}. Actual: '{actual}'"
+    
+    # Verify NORMAL_VAR is also present
+    passed, actual, error = verify_env_var(client, test_pod_direct_secrets, "NORMAL_VAR", "normal_value", headers)
+    assert passed, f"NORMAL_VAR verification failed: {error}. Actual: '{actual}'"
+
+
+def test_direct_secret_stop_pod(headers):
+    """Stop the direct secret pod to clean up."""
+    rsp = client.get(f'/pods/{test_pod_direct_secrets}/stop', headers=headers)
+    assert rsp.status_code in [200, 400, 404]
+
+
+##### Description Syntax Tests (${pods:secrets:KEY:?description}) #####
+# These tests verify that the :?description suffix on ${pods:secrets:KEY} references
+# works correctly - descriptions are informational only and stripped during interpolation.
+
+def test_description_syntax_create_pod(headers):
+    """Create a pod using ${pods:secrets:KEY:?description} syntax in env vars and config."""
+    pod_def = {
+        "pod_id": test_pod_description_syntax,
+        "description": "Pod testing :?description syntax in secret references",
+        "image": "notchristiangarcia/testserver:fastapi",
+        "environment_variables": {
+            # Using :?description syntax - description should be stripped at runtime
+            "DB_HOST": "${pods:secrets:HOST_SECRET:?Database hostname}",
+            "DB_PORT": "${pods:secrets:PORT_SECRET:?Database port number}",
+            # Mix of with and without description
+            "DB_USER": "${pods:secrets:USER_SECRET}",
+            # Inline with description
+            "DB_URL": "postgres://${pods:secrets:USER_SECRET:?Username}:${pods:secrets:PASS_SECRET:?Password}@${pods:secrets:HOST_SECRET:?Host}/mydb",
+            "NORMAL_VAR": "no_secrets_here"
+        },
+        "volume_mounts": {
+            "/etc/app/db.ini": {
+                "type": "ephemeral",
+                "config_content": "[database]\nhost = ${pods:secrets:HOST_SECRET:?Database server hostname}\nport = ${pods:secrets:PORT_SECRET:?Port number}\nuser = ${pods:secrets:USER_SECRET}\npassword = ${pods:secrets:PASS_SECRET:?Database password - keep secret}\n"
+            }
+        },
+        "secret_map": {
+            "HOST_SECRET": "${secret:" + test_template_secret_id + "}",
+            "PORT_SECRET": "5432",  # Literal value
+            "USER_SECRET": "testuser",  # Literal value
+            "PASS_SECRET": "supersecretpass123"
+        },
+        "resources": {
+            "cpu_request": 250,
+            "mem_request": 256,
+            "cpu_limit": 1000,
+            "mem_limit": 1024
+        }
+    }
+    rsp = client.post("/pods", data=json.dumps(pod_def), headers=headers)
+    result = basic_response_checks(rsp)
+    assert result['pod_id'] == test_pod_description_syntax
+    # Verify secret_map is stored
+    assert 'secret_map' in result
+    assert 'HOST_SECRET' in result['secret_map']
+
+
+def test_description_syntax_derived_resolves_correctly(headers):
+    """Verify /derived endpoint strips descriptions and resolves secrets."""
+    time.sleep(2)
+    
+    rsp = client.get(
+        f'/pods/{test_pod_description_syntax}/derived?resolve_secrets=true&include_configs=true',
+        headers=headers
+    )
+    result = basic_response_checks(rsp)
+    
+    env_vars = result.get('environment_variables', {})
+    
+    # DB_HOST should be resolved, description stripped
+    db_host = env_vars.get('DB_HOST', '')
+    assert db_host == "template_secret_value_12345", f"DB_HOST wrong value: {db_host}"
+    assert ":?" not in db_host, f"Description not stripped from DB_HOST: {db_host}"
+    assert "Database hostname" not in db_host, f"Description text in DB_HOST: {db_host}"
+    
+    # DB_PORT should be resolved (literal value)
+    db_port = env_vars.get('DB_PORT', '')
+    assert db_port == "5432", f"DB_PORT wrong value: {db_port}"
+    assert ":?" not in db_port, f"Description not stripped from DB_PORT: {db_port}"
+    
+    # DB_USER should be resolved (no description in original)
+    db_user = env_vars.get('DB_USER', '')
+    assert db_user == "testuser", f"DB_USER wrong value: {db_user}"
+    
+    # DB_URL should have all secrets resolved, all descriptions stripped
+    db_url = env_vars.get('DB_URL', '')
+    expected_url = "postgres://testuser:supersecretpass123@template_secret_value_12345/mydb"
+    assert db_url == expected_url, f"DB_URL wrong value: {db_url}, expected: {expected_url}"
+    assert ":?" not in db_url, f"Description not stripped from DB_URL: {db_url}"
+    assert "${pods:secrets:" not in db_url, f"Placeholder not resolved in DB_URL: {db_url}"
+    
+    # Check config_content in volume_mounts
+    volume_mounts = result.get('volume_mounts', {})
+    config_mount = volume_mounts.get('/etc/app/db.ini', {})
+    config_content = config_mount.get('config_content', '')
+    
+    # Config should have all secrets resolved, all descriptions stripped
+    assert "template_secret_value_12345" in config_content, f"HOST not resolved in config: {config_content}"
+    assert "5432" in config_content, f"PORT not in config: {config_content}"
+    assert "testuser" in config_content, f"USER not in config: {config_content}"
+    assert "supersecretpass123" in config_content, f"PASS not resolved in config: {config_content}"
+    assert ":?" not in config_content, f"Description not stripped from config: {config_content}"
+    assert "${pods:secrets:" not in config_content, f"Placeholder not resolved in config: {config_content}"
+    assert "Database server hostname" not in config_content, f"Description text in config: {config_content}"
+
+
+def test_description_syntax_wait_for_pod_running(headers):
+    """Wait for the description syntax test pod to reach RUNNING status."""
+    success, result = wait_for_pod_status(client, test_pod_description_syntax, "RUNNING", headers, max_attempts=30)
+    if not success:
+        pytest.fail(f"Pod did not reach Running status: {result}")
+
+
+def test_description_syntax_exec_verify_env_vars(headers):
+    """Use exec to verify environment variables have descriptions stripped in running pod."""
+    # Verify DB_HOST contains actual secret value, no description
+    passed, actual, error = verify_env_var(client, test_pod_description_syntax, "DB_HOST", "template_secret_value_12345", headers)
+    assert passed, f"DB_HOST verification failed: {error}. Actual: '{actual}'"
+    assert ":?" not in actual, f"Description not stripped in DB_HOST: {actual}"
+    
+    # Verify DB_PORT
+    passed, actual, error = verify_env_var(client, test_pod_description_syntax, "DB_PORT", "5432", headers)
+    assert passed, f"DB_PORT verification failed: {error}. Actual: '{actual}'"
+    
+    # Verify DB_USER
+    passed, actual, error = verify_env_var(client, test_pod_description_syntax, "DB_USER", "testuser", headers)
+    assert passed, f"DB_USER verification failed: {error}. Actual: '{actual}'"
+    
+    # Verify DB_URL has all parts resolved and no descriptions
+    expected_url = "postgres://testuser:supersecretpass123@template_secret_value_12345/mydb"
+    passed, actual, error = verify_env_var(client, test_pod_description_syntax, "DB_URL", expected_url, headers)
+    assert passed, f"DB_URL verification failed: {error}. Actual: '{actual}'"
+    assert ":?" not in actual, f"Description not stripped in DB_URL: {actual}"
+    assert "${pods:secrets:" not in actual, f"Placeholder not resolved in DB_URL: {actual}"
+
+
+def test_description_syntax_exec_verify_config_content(headers):
+    """Use exec to cat the config file and verify descriptions are stripped."""
+    # Verify config file contains resolved values
+    passed, content, error = verify_file_content(
+        client, test_pod_description_syntax, "/etc/app/db.ini", 
+        "template_secret_value_12345", headers
+    )
+    assert passed, f"Config HOST verification failed: {error}. Content: '{content}'"
+    
+    # Verify other values are present
+    assert "5432" in content, f"PORT not in config: {content}"
+    assert "testuser" in content, f"USER not in config: {content}"
+    assert "supersecretpass123" in content, f"PASS not in config: {content}"
+    
+    # Verify no descriptions remain
+    assert ":?" not in content, f"Description marker still in config: {content}"
+    assert "${pods:secrets:" not in content, f"Placeholder not resolved in config: {content}"
+    assert "Database server hostname" not in content, f"Description text in config: {content}"
+    assert "keep secret" not in content, f"Description text 'keep secret' in config: {content}"
+    
+    # Verify structure is correct
+    assert "[database]" in content, f"Config missing [database] section: {content}"
+
+
+def test_description_syntax_stop_pod(headers):
+    """Stop the description syntax test pod to clean up."""
+    rsp = client.get(f'/pods/{test_pod_description_syntax}/stop', headers=headers)
+    assert rsp.status_code in [200, 400, 404]
+
+
+##### Syntax Warning Tests (${pods:secrets:KEY?desc} vs ${pods:secrets:KEY:?desc}) #####
+# These tests verify that the system detects and warns about the common mistake of using
+# ${pods:secrets:KEY?description} instead of the correct ${pods:secrets:KEY:?description}.
+# The incorrect syntax (missing colon) won't match and won't resolve, so warnings help users.
+
+def test_syntax_warning_create_pod_with_wrong_syntax(headers):
+    """Create a pod using incorrect ? syntax (should still create but warn)."""
+    # Using WRONG syntax: ${pods:secrets:KEY?desc} instead of ${pods:secrets:KEY:?desc}
+    # This tests that the system detects this common mistake
+    pod_def = {
+        "pod_id": test_pod_syntax_warning,
+        "description": "Pod testing syntax warning for ? vs :?",
+        "image": "notchristiangarcia/testserver:fastapi",
+        "environment_variables": {
+            # WRONG syntax - ? instead of :? - this won't resolve!
+            "WRONG_SYNTAX": "${pods:secrets:BAD_KEY?This description wont work}",
+            # CORRECT syntax - :? - this WILL resolve
+            "CORRECT_SYNTAX": "${pods:secrets:GOOD_KEY:?This description works}",
+            # Normal var for comparison
+            "NORMAL_VAR": "just_a_normal_value"
+        },
+        "volume_mounts": {
+            "/etc/app/test.conf": {
+                "type": "ephemeral",
+                "config_content": "# Wrong syntax in config\nwrong_key = ${pods:secrets:CONFIG_BAD?wrong desc}\n# Correct syntax\ncorrect_key = ${pods:secrets:CONFIG_GOOD:?correct desc}\n"
+            }
+        },
+        "secret_map": {
+            "BAD_KEY": "bad_value_wont_resolve",
+            "GOOD_KEY": "good_value_will_resolve",
+            "CONFIG_BAD": "config_bad_value",
+            "CONFIG_GOOD": "config_good_value"
+        },
+        "resources": {
+            "cpu_request": 250,
+            "mem_request": 256,
+            "cpu_limit": 1000,
+            "mem_limit": 1024
+        }
+    }
+    rsp = client.post("/pods", data=json.dumps(pod_def), headers=headers)
+    result = basic_response_checks(rsp)
+    assert result['pod_id'] == test_pod_syntax_warning
+
+
+def test_syntax_warning_wait_for_pod_running(headers):
+    """Wait for the syntax warning test pod to reach RUNNING status."""
+    success, result = wait_for_pod_status(client, test_pod_syntax_warning, "RUNNING", headers, max_attempts=30)
+    if not success:
+        pytest.fail(f"Pod did not reach Running status: {result}")
+
+
+def test_syntax_warning_correct_syntax_resolves(headers):
+    """Verify that correct :? syntax resolves properly in the running pod."""
+    # The CORRECT_SYNTAX env var should have the secret resolved and description stripped
+    passed, actual, error = verify_env_var(client, test_pod_syntax_warning, "CORRECT_SYNTAX", "good_value_will_resolve", headers)
+    assert passed, f"CORRECT_SYNTAX verification failed: {error}. Actual: '{actual}'"
+    assert ":?" not in actual, f"Description not stripped from CORRECT_SYNTAX: {actual}"
+    assert "${pods:secrets:" not in actual, f"Placeholder not resolved in CORRECT_SYNTAX: {actual}"
+
+
+def test_syntax_warning_wrong_syntax_not_resolved(headers):
+    """Verify that wrong ? syntax does NOT resolve (remains as literal)."""
+    # The WRONG_SYNTAX env var should NOT be resolved because ? doesn't match the pattern
+    # It will remain as the literal string since the pattern didn't match
+    passed, actual, error = verify_env_var(client, test_pod_syntax_warning, "WRONG_SYNTAX", "${pods:secrets:BAD_KEY?This description wont work}", headers)
+    assert passed, f"WRONG_SYNTAX should remain unresolved: {error}. Actual: '{actual}'"
+    # The placeholder should still be there because ? syntax doesn't match
+    assert "${pods:secrets:" in actual, f"Expected unresolved placeholder in WRONG_SYNTAX, got: {actual}"
+    assert "?" in actual, f"Expected ? to remain (wrong syntax), got: {actual}"
+
+
+def test_syntax_warning_config_correct_syntax_resolves(headers):
+    """Verify correct :? syntax resolves in config file."""
+    # Check that correct_key line has resolved value
+    passed, content, error = verify_file_content(
+        client, test_pod_syntax_warning, "/etc/app/test.conf",
+        "config_good_value", headers
+    )
+    assert passed, f"Config correct syntax verification failed: {error}. Content: '{content}'"
+    assert ":?" not in content or "${pods:secrets:CONFIG_GOOD:?" not in content, \
+        f"Description not stripped from correct syntax in config: {content}"
+
+
+def test_syntax_warning_config_wrong_syntax_not_resolved(headers):
+    """Verify wrong ? syntax does NOT resolve in config file."""
+    # Check that wrong_key line still has the unresolved placeholder
+    passed, content, error = verify_file_content(
+        client, test_pod_syntax_warning, "/etc/app/test.conf",
+        "${pods:secrets:CONFIG_BAD?wrong desc}", headers
+    )
+    assert passed, f"Config wrong syntax should remain unresolved: {error}. Content: '{content}'"
+    # The wrong syntax placeholder should still be in the file
+    assert "${pods:secrets:CONFIG_BAD?" in content, \
+        f"Expected unresolved wrong syntax in config, got: {content}"
+
+
+def test_syntax_warning_stop_pod(headers):
+    """Stop the syntax warning test pod to clean up."""
+    rsp = client.get(f'/pods/{test_pod_syntax_warning}/stop', headers=headers)
+    assert rsp.status_code in [200, 400, 404]
 

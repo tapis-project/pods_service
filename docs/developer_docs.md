@@ -189,6 +189,33 @@ View [live-docs](https://tapis-project.github.io/live-docs/?service=Pods) for cu
 > ```
 > **Only `${pods:secrets:KEY}` works in `environment_variables` and config files**
 
+##### Self-Documenting References with `:?description`
+
+You can add descriptions to `${pods:secrets:KEY}` references in `environment_variables` and `config_content`. Descriptions are **informational only** and stripped during interpolation:
+
+| Syntax | Description | Example |
+|--------|-------------|---------|
+| `${pods:secrets:KEY}` | Basic secret reference | `${pods:secrets:DB_PASS}` |
+| `${pods:secrets:KEY:?description}` | Secret reference with description | `${pods:secrets:DB_PASS:?Database password}` |
+
+**Example: Self-documenting config file**
+```ini
+[database]
+host = ${pods:secrets:DB_HOST:?Hostname of the database server}
+port = ${pods:secrets:DB_PORT:?Database port (default 5432)}
+password = ${pods:secrets:DB_PASS:?Database password - obtain from admin}
+```
+
+**Example: Self-documenting environment variables**
+```python
+"environment_variables": {
+    "DATABASE_URL": "postgres://${pods:secrets:DB_USER:?DB username}:${pods:secrets:DB_PASS:?DB password}@${pods:secrets:DB_HOST:?Hostname}/mydb",
+    "API_KEY": "${pods:secrets:API_KEY:?Get from https://api.example.com/keys}"
+}
+```
+
+The descriptions help collaborators understand what each secret is for without needing external documentation. After resolution, only the values remain.
+
 
 ### Pod Networking Fields
 Reference pod networking dynamically with `${pods:networking:<networking_name>:FIELD}`, where fields are below.
@@ -317,8 +344,8 @@ The following table documents the functions that parse and validate placeholder/
 | `resolve_secret_map()` | Resolve all secret_map values to final strings | All patterns → resolved values | `POST /pods` (on start), `GET /pods/{id}/derived?resolve_secrets=true` |
 | `resolve_random_passwords()` | Generate and persist random passwords | `${pods:random:N}` | `POST /pods` (before db_create) |
 | `resolve_pod_networking()` | Resolve pod URL/networking references | `${pods:networking:...}`, `${pods:url}`, `${pods:tapis_url}` | `POST /pods` (before db_create) |
-| `inject_secrets_into_env_vars()` | Inject resolved secrets into environment_variables | `${pods:secrets:KEY}` → actual value | `GET /pods/{id}/derived`, spawner |
-| `interpolate_config_content()` | Inject secrets into config file content | `${pods:secrets:KEY}` in config_content | `GET /pods/{id}/derived`, spawner |
+| `inject_secrets_into_env_vars()` | Inject resolved secrets into environment_variables | `${pods:secrets:KEY}` or `${pods:secrets:KEY:?desc}` → actual value | `GET /pods/{id}/derived`, spawner |
+| `interpolate_config_content()` | Inject secrets into config file content | `${pods:secrets:KEY}` or `${pods:secrets:KEY:?desc}` in config_content | `GET /pods/{id}/derived`, spawner |
 | `validate_pod_secret_map_against_template()` | Validate pod overrides all required template placeholders | Required `${:?...}` must be overridden | `POST /pods`, `GET /pods/{id}/derived` |
 | `detect_unresolved_patterns()` | Detect ANY remaining `${...}` patterns | All `${...}` syntax | Internal use by `check_pod_unresolved_patterns()` |
 | `check_pod_unresolved_patterns()` | Helper to check pod config for unresolved patterns | All `${...}` syntax | `GET /pods/{id}`, `GET /pods/{id}/derived`, `POST /pods` |

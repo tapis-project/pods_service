@@ -4,7 +4,8 @@ from codes import REQUESTED, ON
 from pydantic import ValidationError
 
 from models_pods import Pod, NewPod, Password, PodsResponse, PodResponse, PodBase, PodBaseRead
-from models_templates_utils import validate_pod_secret_map_against_template, get_template_merged_secret_map
+from models_templates_utils import validate_pod_secret_map_against_template, get_template_merged_secret_map, combine_pod_and_template_recursively
+from models_pods import PodBaseFull
 from models_volume_mounts_utils import (
     validate_pod_volume_mounts_against_template, 
     get_template_merged_volume_mounts,
@@ -253,10 +254,26 @@ async def create_pod(new_pod: NewPod):
     if pod.status_requested == ON:
         # Resolve secrets at API layer before sending to spawner
         # This allows edge spawners to work without direct SK access
+        #
+        # IMPORTANT: If pod uses a template, we must merge the template's secret_map
+        # with the pod's secret_map BEFORE resolving, so template-defined secrets
+        # get resolved and sent to the spawner.
         resolved_secrets = {}
-        if pod.secret_map:
+        
+        # Derive merged secret_map if pod uses a template
+        if pod.template:
+            # Use combine_pod_and_template_recursively to get the final merged secret_map
+            pod_copy = PodBaseFull(**pod.dict().copy())
+            derived_pod = combine_pod_and_template_recursively(
+                pod_copy, pod.template, tenant=g.request_tenant_id, site=g.site_id
+            )
+            merged_secret_map = getattr(derived_pod, 'secret_map', {}) or {}
+        else:
+            merged_secret_map = pod.secret_map or {}
+        
+        if merged_secret_map:
             resolved_secrets, secret_errors = resolve_secret_map(
-                pod.secret_map,
+                merged_secret_map,
                 site_id=g.site_id,
                 tenant_id=g.request_tenant_id,
                 actor=g.username,

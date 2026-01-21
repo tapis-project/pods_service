@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Request, UploadFile, File, Form, Body, Path, Query
 from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
-from models_pods import Pod, Password, PodResponse, PodPermissionsResponse, PodCredentialsResponse, PodLogsResponse, ExecutePodCommands
+from models_pods import Pod, Password, PodResponse, PodPermissionsResponse, PodCredentialsResponse, PodLogsResponse, ExecutePodCommands, PodBaseFull
 from models_templates_tags import Template, TemplateTag, TemplateTagResponse, NewTemplateTagFromPod
 from models_templates_utils import combine_pod_and_template_recursively
 from models_misc import SetPermission
@@ -804,10 +804,23 @@ async def start_pod(pod_id):
         raise RuntimeError(f"Pod must be in 'STOPPED' status to run 'start_pod'. Please run 'stop_pod' or 'restart_pod' instead.")
     else:
         # Resolve secrets before starting the pod
+        # IMPORTANT: If pod uses a template, merge template's secret_map first
+        # so template-defined secrets get resolved and sent to spawner
         resolved_secrets = {}
-        if pod.secret_map:
+        
+        # Derive merged secret_map if pod uses a template
+        if pod.template:
+            pod_copy = PodBaseFull(**pod.dict().copy())
+            derived_pod = combine_pod_and_template_recursively(
+                pod_copy, pod.template, tenant=g.request_tenant_id, site=g.site_id
+            )
+            merged_secret_map = getattr(derived_pod, 'secret_map', {}) or {}
+        else:
+            merged_secret_map = pod.secret_map or {}
+        
+        if merged_secret_map:
             resolved_secrets, secret_errors = resolve_secret_map(
-                pod.secret_map,
+                merged_secret_map,
                 site_id=g.site_id,
                 tenant_id=g.request_tenant_id,
                 actor=g.username,

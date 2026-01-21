@@ -520,7 +520,7 @@ class TemplateTagPodDefinition(TapisModel):
         custom_allow_list += conf.get('image_allow_list', [])
 
         if v.split(':')[0] not in custom_allow_list:
-            raise ValueError(f"Custom pod.image images must be in allowlist. View available images at /pods/images or contact admin via github issue or slack (cgarcia). Image derived: {image}")
+            raise ValueError(f"Custom pod.image images must be in allowlist. View available images at /pods/images or contact admin via github issue or slack (cgarcia). Image derived: {v}")
 
         return v
 
@@ -690,10 +690,10 @@ class TemplateTag(TapisTemplateTagBaseFull, table=True, validate=True):
         """
         display = self.dict()
         
-        # Redact config_content in pod_definition.volume_mounts if not requested
+        # Redact config_content in pod_definition.volume_mounts if not requested (for both ephemeral and tapisvolume types)
         if not include_configs and display.get('pod_definition') and display['pod_definition'].get('volume_mounts'):
             for mount_path, mount_config in display['pod_definition']['volume_mounts'].items():
-                if mount_config and mount_config.get('type') == 'ephemeral' and mount_config.get('config_content'):
+                if mount_config and mount_config.get('type') in ('ephemeral', 'tapisvolume') and mount_config.get('config_content'):
                     content_size = len(mount_config['config_content'])
                     mount_config['config_content'] = f"<{content_size} bytes - use ?include_configs=true to retrieve>"
         
