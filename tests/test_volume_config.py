@@ -22,6 +22,7 @@ from api import api
 # Import test utilities like test_pods.py
 from tests.test_utils import headers, response_format, basic_response_checks, regular_headers
 from tests.test_utils import exec_command, verify_env_var, verify_file_content, wait_for_pod_status
+from tests.test_utils import get_tapis_token_headers
 
 # Import volume_mounts utilities at module level
 from models_volume_mounts_utils import (
@@ -62,6 +63,22 @@ test_pod_tapisvol_exec = "testpodtapisvolexec"
 test_pod_secret_config = f"testpodsecretcfg{test_timestamp}"
 test_pod_secret_both = f"testpodsecretboth{test_timestamp}"
 
+# mounted_by tracking test IDs (timestamped to avoid conflicts)
+test_volume_mounted_by_1 = f"testvmb1{test_timestamp}"
+test_volume_mounted_by_2 = f"testvmb2{test_timestamp}"
+test_snapshot_mounted_by = f"testsnpmb{test_timestamp}"
+test_pod_mounted_by_vol = f"testpodmbvol{test_timestamp}"
+test_pod_mounted_by_snap = f"testpodmbsnap{test_timestamp}"
+test_pod_mounted_by_update = f"testpodmbupd{test_timestamp}"
+test_pod_mounted_by_tmpl = f"testpodmbtmpl{test_timestamp}"
+test_template_mounted_by = f"testtmplmb{test_timestamp}"
+
+# User 2 headers for testing user change scenarios
+@pytest.fixture(scope="module")
+def user2_headers():
+    """Get headers for a second test user (_pods_testuser_regular)."""
+    return get_tapis_token_headers('_pods_testuser_regular', None)
+
 
 # ============================================================================
 # Teardown
@@ -76,9 +93,14 @@ def teardown(headers):
             "testpodtmpleph", "testpodoverride", "testpodremove",
             "testpodrandompass", "testpodrandommulti", "testpodnetref", "testpodnetcfg",
             test_pod_secret_env, test_pod_secret_config, test_pod_secret_both,
-            test_pod_tapisvol_exec]
-    volumes = [test_volume_config, test_volume_exec]
-    templates = [test_template_vm, test_template_tapisvol]
+            test_pod_tapisvol_exec,
+            # mounted_by test pods
+            test_pod_mounted_by_vol, test_pod_mounted_by_snap, test_pod_mounted_by_update,
+            test_pod_mounted_by_tmpl, f"testephonly{test_timestamp}", f"testbackcompat{test_timestamp}",
+            f"testmountperm{test_timestamp}"]
+    volumes = [test_volume_config, test_volume_exec,
+               test_volume_mounted_by_1, test_volume_mounted_by_2]
+    templates = [test_template_vm, test_template_tapisvol, test_template_mounted_by]
     secrets = [test_secret_for_env, test_secret_for_config]
     
     for pod_id in pods:
@@ -87,6 +109,13 @@ def teardown(headers):
         client.delete(f'/pods/volumes/{vol_id}', headers=headers)
     for template_id in templates:
         client.delete(f'/pods/templates/{template_id}', headers=headers)
+    
+    # Delete snapshot
+    time.sleep(2)
+    try:
+        client.delete(f'/pods/snapshots/{test_snapshot_mounted_by}', headers=headers)
+    except:
+        pass
     
     time.sleep(3)  # Wait for pods to be deleted before deleting secrets
     for secret_id in secrets:
@@ -654,6 +683,195 @@ class TestVolumeMountsValidationErrors:
         assert any(error_substr in msg.lower() for msg in data['message'])
 
 
+class TestTemplateVolumeMountsValidation:
+    """API tests for template volume_mounts validation - templates must use placeholders."""
+    
+    # Template IDs for these tests (timestamped to avoid conflicts)
+    test_template_validation = f"testtmplval{test_timestamp}"
+    
+    def test_template_rejects_literal_source_id_tapisvolume(self, headers):
+        """Template creation should reject literal source_id for tapisvolume."""
+        # First create template
+        template_def = {"template_id": f"testtmplval1{test_timestamp}", "description": "Test template"}
+        rsp = client.post("/pods/templates", data=json.dumps(template_def), headers=headers)
+        basic_response_checks(rsp)
+        
+        try:
+            # Try to add tag with literal source_id
+            tag_def = {
+                "pod_definition": {
+                    "image": "notchristiangarcia/testserver:fastapi",
+                    "volume_mounts": {
+                        "/etc/data": {
+                            "type": "tapisvolume",
+                            "source_id": "some-literal-volume-id"  # Not allowed!
+                        }
+                    }
+                },
+                "commit_message": "Tag with literal source_id"
+            }
+            rsp = client.post(f"/pods/templates/testtmplval1{test_timestamp}/tags", 
+                              data=json.dumps(tag_def), headers=headers)
+            
+            assert rsp.status_code == 400, f"Expected 400, got {rsp.status_code}: {rsp.text}"
+            data = response_format(rsp)
+            # Check for clear error message about requiring placeholder
+            error_text = str(data.get('message', '')).lower()
+            assert 'placeholder' in error_text or 'literal' in error_text
+        finally:
+            # Cleanup - always runs even if assertions fail
+            client.delete(f"/pods/templates/testtmplval1{test_timestamp}", headers=headers)
+    
+    def test_template_rejects_literal_source_id_tapissnapshot(self, headers):
+        """Template creation should reject literal source_id for tapissnapshot."""
+        # First create template
+        template_def = {"template_id": f"testtmplval2{test_timestamp}", "description": "Test template"}
+        rsp = client.post("/pods/templates", data=json.dumps(template_def), headers=headers)
+        basic_response_checks(rsp)
+        
+        try:
+            # Try to add tag with literal source_id for snapshot
+            tag_def = {
+                "pod_definition": {
+                    "image": "notchristiangarcia/testserver:fastapi",
+                    "volume_mounts": {
+                        "/snapshots": {
+                            "type": "tapissnapshot",
+                            "source_id": "some-literal-snapshot-id"  # Not allowed!
+                        }
+                    }
+                },
+                "commit_message": "Tag with literal snapshot source_id"
+            }
+            rsp = client.post(f"/pods/templates/testtmplval2{test_timestamp}/tags", 
+                              data=json.dumps(tag_def), headers=headers)
+            
+            assert rsp.status_code == 400, f"Expected 400, got {rsp.status_code}: {rsp.text}"
+            data = response_format(rsp)
+            error_text = str(data.get('message', '')).lower()
+            assert 'placeholder' in error_text or 'literal' in error_text
+        finally:
+            # Cleanup - always runs even if assertions fail
+            client.delete(f"/pods/templates/testtmplval2{test_timestamp}", headers=headers)
+    
+    def test_template_accepts_placeholder_source_id(self, headers):
+        """Template creation should accept placeholder source_id."""
+        # First create template
+        template_def = {"template_id": f"testtmplval3{test_timestamp}", "description": "Test template"}
+        rsp = client.post("/pods/templates", data=json.dumps(template_def), headers=headers)
+        basic_response_checks(rsp)
+        
+        try:
+            # Add tag with proper placeholder
+            tag_def = {
+                "pod_definition": {
+                    "image": "notchristiangarcia/testserver:fastapi",
+                    "volume_mounts": {
+                        "/data": {
+                            "type": "tapisvolume",
+                            "source_id": "${:?User data volume for persistent storage}"
+                        }
+                    }
+                },
+                "commit_message": "Tag with placeholder source_id"
+            }
+            rsp = client.post(f"/pods/templates/testtmplval3{test_timestamp}/tags", 
+                              data=json.dumps(tag_def), headers=headers)
+            result = basic_response_checks(rsp)
+            
+            # Verify placeholder was stored
+            assert '/data' in result['pod_definition']['volume_mounts']
+            assert '${:?' in result['pod_definition']['volume_mounts']['/data']['source_id']
+        finally:
+            # Cleanup - always runs even if assertions fail
+            client.delete(f"/pods/templates/testtmplval3{test_timestamp}", headers=headers)
+    
+    def test_template_accepts_ephemeral_without_source_id(self, headers):
+        """Template creation should accept ephemeral mounts (no source_id needed)."""
+        # First create template
+        template_def = {"template_id": f"testtmplval4{test_timestamp}", "description": "Test template"}
+        rsp = client.post("/pods/templates", data=json.dumps(template_def), headers=headers)
+        basic_response_checks(rsp)
+        
+        try:
+            # Add tag with ephemeral mount
+            tag_def = {
+                "pod_definition": {
+                    "image": "notchristiangarcia/testserver:fastapi",
+                    "volume_mounts": {
+                        "/etc/config.yml": {
+                            "type": "ephemeral",
+                            "config_content": "key: value\napp: test"
+                        }
+                    }
+                },
+                "commit_message": "Tag with ephemeral mount"
+            }
+            rsp = client.post(f"/pods/templates/testtmplval4{test_timestamp}/tags", 
+                              data=json.dumps(tag_def), headers=headers)
+            result = basic_response_checks(rsp)
+            
+            # Verify ephemeral was stored
+            assert '/etc/config.yml' in result['pod_definition']['volume_mounts']
+            assert result['pod_definition']['volume_mounts']['/etc/config.yml']['type'] == 'ephemeral'
+        finally:
+            # Cleanup - always runs even if assertions fail
+            client.delete(f"/pods/templates/testtmplval4{test_timestamp}", headers=headers)
+    
+    def test_tapisvolume_missing_source_id_error_is_clean(self, headers):
+        """Error message for missing source_id should be clean (no Pydantic URL)."""
+        pod_def = {
+            "pod_id": f"testcleanerr{test_timestamp}",
+            "image": "notchristiangarcia/testserver:fastapi",
+            "volume_mounts": {
+                "/etc/data": {
+                    "type": "tapisvolume",
+                    "sub_path": "",
+                    "read_only": False
+                    # Missing source_id!
+                }
+            }
+        }
+        rsp = client.post("/pods", data=json.dumps(pod_def), headers=headers)
+        
+        assert rsp.status_code == 400
+        data = response_format(rsp)
+        error_text = str(data.get('message', ''))
+        
+        # Should have clear error about source_id
+        assert 'source_id' in error_text.lower()
+        # Should NOT have Pydantic error URL
+        assert 'errors.pydantic.dev' not in error_text
+        # Should NOT have [type=value_error, ...] suffix
+        assert '[type=' not in error_text
+        assert 'input_value' not in error_text
+    
+    def test_ephemeral_missing_config_content_error_is_clean(self, headers):
+        """Error message for missing config_content should be clean."""
+        pod_def = {
+            "pod_id": f"testcleanerr2{test_timestamp}",
+            "image": "notchristiangarcia/testserver:fastapi",
+            "volume_mounts": {
+                "/etc/config.yml": {
+                    "type": "ephemeral"
+                    # Missing config_content!
+                }
+            }
+        }
+        rsp = client.post("/pods", data=json.dumps(pod_def), headers=headers)
+        
+        assert rsp.status_code == 400
+        data = response_format(rsp)
+        error_text = str(data.get('message', ''))
+        
+        # Should have clear error about config_content
+        assert 'config_content' in error_text.lower()
+        # Should NOT have Pydantic error URL
+        assert 'errors.pydantic.dev' not in error_text
+        # Should NOT have verbose type info
+        assert '[type=' not in error_text
+
+
 # ============================================================================
 # Secret Map Integration Tests
 # ============================================================================
@@ -1180,13 +1398,14 @@ database:
   type: sqlite3
   path: /var/lib/headscale/db.sqlite
 """
+        # Templates must use placeholders for source_id, not literal volume IDs
         tag_def = {
             "pod_definition": {
                 "image": "notchristiangarcia/testserver:fastapi",
                 "volume_mounts": {
                     "/etc/headscale": {
                         "type": "tapisvolume",
-                        "source_id": test_volume_exec,
+                        "source_id": "${:?Volume for headscale config storage}",  # Placeholder!
                         "config_filename": "config.yaml",
                         "config_content": config_content,
                         "config_permissions": "0644",
@@ -1216,6 +1435,8 @@ database:
         # Should be redacted (not the actual content)
         assert "bytes - use ?include_configs=true" in mount['config_content']
         assert "headscale-test" not in mount['config_content']
+        # Verify source_id is the placeholder
+        assert mount['source_id'] == "${:?Volume for headscale config storage}"
     
     def test_template_tag_config_shown_with_flag(self, headers):
         """Verify config_content is shown when include_configs=true."""
@@ -1230,12 +1451,19 @@ database:
         # Should show actual content
         assert "headscale-test" in mount['config_content']
         assert "listen_addr: 0.0.0.0:8080" in mount['config_content']
+        # Verify source_id is still the placeholder
+        assert mount['source_id'] == "${:?Volume for headscale config storage}"
     
     def test_create_pod_from_template_with_tapisvolume_config(self, headers):
-        """Create a pod from the template with tapisvolume config."""
+        """Create a pod from the template with tapisvolume config, overriding the volume placeholder."""
         pod_def = {
             "pod_id": test_pod_tapisvol_exec,
-            "template": f"{test_template_tapisvol}:withconfig"
+            "template": f"{test_template_tapisvol}:withconfig",
+            "template_overrides": {
+                "volume_mounts": {
+                    "/etc/headscale": {"source_id": test_volume_exec}
+                }
+            }
         }
         rsp = client.post("/pods", data=json.dumps(pod_def), headers=headers)
         basic_response_checks(rsp)
@@ -1358,4 +1586,395 @@ class TestTapisvolumeConfigUpdateMode:
         assert "config_filename" in rsp.text.lower()
         # time sleep so pod gets created before the delete during teardown that leaves it hanging weirdly.
         time.sleep(3)
+
+
+# ============================================================================
+# mounted_by Tracking Tests
+# ============================================================================
+
+class TestMountedBySetup:
+    """Create test volumes and snapshot for mounted_by tests."""
+    
+    def test_create_volume_1(self, headers):
+        """Create first test volume for mounted_by tests."""
+        vol_def = {
+            "volume_id": test_volume_mounted_by_1,
+            "description": "Test volume 1 for mounted_by testing"
+        }
+        rsp = client.post("/pods/volumes", data=json.dumps(vol_def), headers=headers)
+        result = basic_response_checks(rsp)
+        assert result['volume_id'] == test_volume_mounted_by_1
+    
+    def test_create_volume_2(self, headers):
+        """Create second test volume for mounted_by tests."""
+        vol_def = {
+            "volume_id": test_volume_mounted_by_2,
+            "description": "Test volume 2 for mounted_by testing"
+        }
+        rsp = client.post("/pods/volumes", data=json.dumps(vol_def), headers=headers)
+        result = basic_response_checks(rsp)
+        assert result['volume_id'] == test_volume_mounted_by_2
+    
+    def test_wait_for_mounted_by_volumes(self, headers):
+        """Wait for mounted_by test volumes to be available."""
+        for vol_id in [test_volume_mounted_by_1, test_volume_mounted_by_2]:
+            for i in range(20):
+                rsp = client.get(f"/pods/volumes/{vol_id}", headers=headers)
+                result = basic_response_checks(rsp)
+                if result['status'] == "AVAILABLE":
+                    break
+                time.sleep(2)
+            else:
+                pytest.fail(f"Volume {vol_id} never became available")
+    
+    def test_grant_user2_read_on_volume_2(self, headers):
+        """Grant regular user READ permission on volume_2 for update tests."""
+        perm_def = {
+            "user": "_pods_testuser_regular",
+            "level": "READ"
+        }
+        rsp = client.post(f"/pods/volumes/{test_volume_mounted_by_2}/permissions", data=json.dumps(perm_def), headers=headers)
+        result = basic_response_checks(rsp)
+        assert "_pods_testuser_regular:READ" in result['permissions']
+    
+    def test_create_snapshot_for_mounted_by(self, headers):
+        """Create a snapshot from volume_1 for snapshot tests."""
+        snap_def = {
+            "snapshot_id": test_snapshot_mounted_by,
+            "source_volume_id": test_volume_mounted_by_1,
+            "source_volume_path": "/",
+            "description": "Test snapshot for mounted_by testing"
+        }
+        rsp = client.post("/pods/snapshots", data=json.dumps(snap_def), headers=headers)
+        result = basic_response_checks(rsp)
+        assert result['snapshot_id'] == test_snapshot_mounted_by
+    
+    def test_wait_for_mounted_by_snapshot(self, headers):
+        """Wait for mounted_by snapshot to be available."""
+        for i in range(20):
+            rsp = client.get(f"/pods/snapshots/{test_snapshot_mounted_by}", headers=headers)
+            result = basic_response_checks(rsp)
+            if result['status'] == "AVAILABLE":
+                break
+            time.sleep(2)
+        else:
+            pytest.fail(f"Snapshot {test_snapshot_mounted_by} never became available")
+
+
+class TestMountedByOnCreate:
+    """Test that mounted_by is set correctly on each volume mount entry during pod creation."""
+    
+    def test_create_pod_with_tapisvolume_has_mounted_by(self, headers):
+        """Create pod with tapisvolume and verify mounted_by is set on the mount entry."""
+        pod_def = {
+            "pod_id": test_pod_mounted_by_vol,
+            "image": "notchristiangarcia/testserver:fastapi",
+            "status_requested": "OFF",
+            "volume_mounts": {
+                "/data": {
+                    "type": "tapisvolume",
+                    "source_id": test_volume_mounted_by_1
+                }
+            }
+        }
+        rsp = client.post("/pods", data=json.dumps(pod_def), headers=headers)
+        result = basic_response_checks(rsp)
         
+        # Verify pod was created
+        assert result['pod_id'] == test_pod_mounted_by_vol
+        assert '/data' in result['volume_mounts']
+        
+        # Verify mounted_by is set on the mount entry itself
+        data_mount = result['volume_mounts']['/data']
+        assert 'mounted_by' in data_mount
+        assert data_mount['mounted_by'] == '_pods_testuser_admin'
+    
+    def test_create_pod_with_tapissnapshot_has_mounted_by(self, headers):
+        """Create pod with tapissnapshot and verify mounted_by is set on the mount entry."""
+        pod_def = {
+            "pod_id": test_pod_mounted_by_snap,
+            "image": "notchristiangarcia/testserver:fastapi",
+            "status_requested": "OFF",
+            "volume_mounts": {
+                "/snapshot_data": {
+                    "type": "tapissnapshot",
+                    "source_id": test_snapshot_mounted_by
+                }
+            }
+        }
+        rsp = client.post("/pods", data=json.dumps(pod_def), headers=headers)
+        result = basic_response_checks(rsp)
+        
+        # Verify pod was created
+        assert result['pod_id'] == test_pod_mounted_by_snap
+        assert '/snapshot_data' in result['volume_mounts']
+        
+        # Verify mounted_by is set on the snapshot mount entry
+        snapshot_mount = result['volume_mounts']['/snapshot_data']
+        assert 'mounted_by' in snapshot_mount
+        assert snapshot_mount['mounted_by'] == '_pods_testuser_admin'
+    
+    def test_ephemeral_mount_has_no_mounted_by(self, headers):
+        """Ephemeral mounts should NOT have mounted_by (no volume permission needed)."""
+        pod_def = {
+            "pod_id": f"testephonly{test_timestamp}",
+            "image": "notchristiangarcia/testserver:fastapi",
+            "status_requested": "OFF",
+            "volume_mounts": {
+                "/config": {
+                    "type": "ephemeral",
+                    "config_content": "key=value"
+                }
+            }
+        }
+        rsp = client.post("/pods", data=json.dumps(pod_def), headers=headers)
+        result = basic_response_checks(rsp)
+        
+        # Verify mounted_by is NOT set on ephemeral mounts
+        assert result['volume_mounts']['/config'].get('mounted_by') is None
+
+
+class TestMountedByOnUpdate:
+    """Test that mounted_by updates when volume_mounts change."""
+    
+    def test_create_pod_for_update_tests(self, headers):
+        """Create a pod that will be updated by different users."""
+        pod_def = {
+            "pod_id": test_pod_mounted_by_update,
+            "image": "notchristiangarcia/testserver:fastapi",
+            "status_requested": "OFF",
+            "volume_mounts": {
+                "/data": {
+                    "type": "tapisvolume",
+                    "source_id": test_volume_mounted_by_1
+                }
+            }
+        }
+        rsp = client.post("/pods", data=json.dumps(pod_def), headers=headers)
+        result = basic_response_checks(rsp)
+        
+        # Verify initial mounted_by
+        assert result['volume_mounts']['/data']['mounted_by'] == '_pods_testuser_admin'
+    
+    def test_grant_user2_admin_on_pod(self, headers):
+        """Grant user2 ADMIN permission so they can modify mounts."""
+        perm_def = {"user": "_pods_testuser_regular", "level": "ADMIN"}
+        rsp = client.post(f"/pods/{test_pod_mounted_by_update}/permissions", data=json.dumps(perm_def), headers=headers)
+        result = basic_response_checks(rsp)
+        assert "_pods_testuser_regular:ADMIN" in result['permissions']
+    
+    def test_user2_updates_volume_mount_changes_mounted_by(self, user2_headers):
+        """When user2 (ADMIN) changes a mount, mounted_by updates to user2."""
+        update_def = {
+            "volume_mounts": {
+                "/data": {
+                    "type": "tapisvolume",
+                    "source_id": test_volume_mounted_by_2  # User2 has READ on this
+                }
+            }
+        }
+        rsp = client.put(f"/pods/{test_pod_mounted_by_update}", data=json.dumps(update_def), headers=user2_headers)
+        result = basic_response_checks(rsp)
+        
+        # Verify mounted_by now shows user2
+        assert result['volume_mounts']['/data']['mounted_by'] == '_pods_testuser_regular'
+    
+    def test_adding_mount_preserves_existing_mounted_by(self, headers):
+        """Adding a new mount preserves mounted_by on existing mounts."""
+        rsp = client.get(f"/pods/{test_pod_mounted_by_update}", headers=headers)
+        result = basic_response_checks(rsp)
+        current_mounts = result['volume_mounts']
+        
+        # Add a new mount
+        current_mounts['/config'] = {
+            "type": "tapisvolume",
+            "source_id": test_volume_mounted_by_1
+        }
+        
+        update_def = {"volume_mounts": current_mounts}
+        rsp = client.put(f"/pods/{test_pod_mounted_by_update}", data=json.dumps(update_def), headers=headers)
+        result = basic_response_checks(rsp)
+        
+        # /data should still show user2 (unchanged), /config shows admin (new)
+        assert result['volume_mounts']['/data']['mounted_by'] == '_pods_testuser_regular'
+        assert result['volume_mounts']['/config']['mounted_by'] == '_pods_testuser_admin'
+
+
+class TestMountedByPermissionRestrictions:
+    """Test that non-ADMIN users cannot modify mounts they didn't create."""
+    
+    def test_create_pod_for_permission_tests(self, headers):
+        """Create a pod with admin's mount, give user2 USER permission."""
+        pod_def = {
+            "pod_id": f"testmountperm{test_timestamp}",
+            "image": "notchristiangarcia/testserver:fastapi",
+            "status_requested": "OFF",
+            "volume_mounts": {
+                "/admin-data": {
+                    "type": "tapisvolume",
+                    "source_id": test_volume_mounted_by_1
+                }
+            }
+        }
+        rsp = client.post("/pods", data=json.dumps(pod_def), headers=headers)
+        basic_response_checks(rsp)
+        
+        # Grant user2 USER (not ADMIN) permission
+        perm_def = {"user": "_pods_testuser_regular", "level": "USER"}
+        client.post(f"/pods/testmountperm{test_timestamp}/permissions", data=json.dumps(perm_def), headers=headers)
+    
+    def test_user_cannot_modify_admin_mount(self, user2_headers):
+        """Non-ADMIN user cannot modify a mount created by another user."""
+        update_def = {
+            "volume_mounts": {
+                "/admin-data": {
+                    "type": "tapisvolume",
+                    "source_id": test_volume_mounted_by_2  # Trying to change
+                }
+            }
+        }
+        rsp = client.put(f"/pods/testmountperm{test_timestamp}", data=json.dumps(update_def), headers=user2_headers)
+        
+        # Should fail
+        assert rsp.status_code == 400, f"Expected 400, got {rsp.status_code}: {rsp.text}"
+        assert "mounted by" in rsp.text.lower() or "cannot modify" in rsp.text.lower()
+    
+    def test_user_cannot_remove_admin_mount(self, user2_headers):
+        """Non-ADMIN user cannot remove a mount created by another user."""
+        update_def = {"volume_mounts": {}}  # Trying to remove all mounts
+        rsp = client.put(f"/pods/testmountperm{test_timestamp}", data=json.dumps(update_def), headers=user2_headers)
+        
+        # Should fail
+        assert rsp.status_code == 400, f"Expected 400, got {rsp.status_code}: {rsp.text}"
+        assert "mounted by" in rsp.text.lower() or "cannot remove" in rsp.text.lower()
+    
+    def test_user_can_add_new_mount(self, user2_headers):
+        """Non-ADMIN user CAN add a new mount if they have volume access."""
+        # Get current state first
+        rsp = client.get(f"/pods/testmountperm{test_timestamp}", headers=user2_headers)
+        result = basic_response_checks(rsp)
+        current_mounts = result['volume_mounts']
+        
+        # Add a NEW mount (keeping admin's mount unchanged)
+        current_mounts['/user-data'] = {
+            "type": "tapisvolume",
+            "source_id": test_volume_mounted_by_2  # User2 has READ
+        }
+        
+        update_def = {"volume_mounts": current_mounts}
+        rsp = client.put(f"/pods/testmountperm{test_timestamp}", data=json.dumps(update_def), headers=user2_headers)
+        result = basic_response_checks(rsp)
+        
+        # Both mounts should exist with correct mounted_by
+        assert result['volume_mounts']['/admin-data']['mounted_by'] == '_pods_testuser_admin'
+        assert result['volume_mounts']['/user-data']['mounted_by'] == '_pods_testuser_regular'
+    
+    def test_user_can_modify_own_mount(self, user2_headers):
+        """Non-ADMIN user CAN modify their own mount."""
+        rsp = client.get(f"/pods/testmountperm{test_timestamp}", headers=user2_headers)
+        result = basic_response_checks(rsp)
+        current_mounts = result['volume_mounts']
+        
+        # Modify own mount
+        current_mounts['/user-data']['sub_path'] = 'subdir'
+        
+        update_def = {"volume_mounts": current_mounts}
+        rsp = client.put(f"/pods/testmountperm{test_timestamp}", data=json.dumps(update_def), headers=user2_headers)
+        result = basic_response_checks(rsp)
+        
+        assert result['volume_mounts']['/user-data']['sub_path'] == 'subdir'
+        assert result['volume_mounts']['/user-data']['mounted_by'] == '_pods_testuser_regular'
+    
+    def test_admin_can_modify_any_mount(self, headers):
+        """ADMIN user can modify any mount regardless of who created it."""
+        rsp = client.get(f"/pods/testmountperm{test_timestamp}", headers=headers)
+        result = basic_response_checks(rsp)
+        current_mounts = result['volume_mounts']
+        
+        # Admin modifies user2's mount
+        if '/user-data' in current_mounts:
+            current_mounts['/user-data']['sub_path'] = 'admin-changed'
+            
+            update_def = {"volume_mounts": current_mounts}
+            rsp = client.put(f"/pods/testmountperm{test_timestamp}", data=json.dumps(update_def), headers=headers)
+            result = basic_response_checks(rsp)
+            
+            assert result['volume_mounts']['/user-data']['sub_path'] == 'admin-changed'
+
+
+class TestMountedByWithTemplates:
+    """Test mounted_by when using templates with placeholder system."""
+    
+    def test_create_template_for_mounted_by(self, headers):
+        """Create a template with volume_mounts placeholder."""
+        template_def = {
+            "template_id": test_template_mounted_by,
+            "description": "Template for mounted_by testing"
+        }
+        rsp = client.post("/pods/templates", data=json.dumps(template_def), headers=headers)
+        result = basic_response_checks(rsp)
+        assert result['template_id'] == test_template_mounted_by
+    
+    def test_add_template_tag_with_volume_placeholder(self, headers):
+        """Add template tag with volume_mounts using placeholder syntax."""
+        tag_def = {
+            "pod_definition": {
+                "image": "notchristiangarcia/testserver:fastapi",
+                "description": "Template tag with volume placeholder",
+                "volume_mounts": {
+                    "/data": {
+                        "type": "tapisvolume",
+                        "source_id": "${:?Volume ID for data storage}"
+                    }
+                }
+            },
+            "commit_message": "Initial tag with volume placeholder"
+        }
+        rsp = client.post(f"/pods/templates/{test_template_mounted_by}/tags", data=json.dumps(tag_def), headers=headers)
+        result = basic_response_checks(rsp)
+        assert '/data' in result['pod_definition']['volume_mounts']
+    
+    def test_create_pod_from_template_has_mounted_by(self, headers):
+        """Create pod from template - user who overrides placeholder is recorded as mounted_by."""
+        pod_def = {
+            "pod_id": test_pod_mounted_by_tmpl,
+            "template": f"{test_template_mounted_by}:latest",
+            "status_requested": "OFF",
+            "template_overrides": {
+                "volume_mounts": {
+                    "/data": {"source_id": test_volume_mounted_by_1}
+                }
+            }
+        }
+        rsp = client.post("/pods", data=json.dumps(pod_def), headers=headers)
+        result = basic_response_checks(rsp)
+        
+        # Verify mounted_by is set
+        assert result['volume_mounts']['/data']['source_id'] == test_volume_mounted_by_1
+        assert result['volume_mounts']['/data']['mounted_by'] == '_pods_testuser_admin'
+
+
+class TestMountedByBackwardCompatibility:
+    """Verify that existing pods/mounts without mounted_by don't break."""
+    
+    def test_pod_without_mounted_by_can_be_read(self, headers):
+        """System handles mounts without mounted_by gracefully (legacy data)."""
+        # Create a pod - it will have mounted_by set
+        pod_def = {
+            "pod_id": f"testbackcompat{test_timestamp}",
+            "image": "notchristiangarcia/testserver:fastapi",
+            "status_requested": "OFF",
+            "volume_mounts": {
+                "/data": {
+                    "type": "tapisvolume",
+                    "source_id": test_volume_mounted_by_1
+                }
+            }
+        }
+        rsp = client.post("/pods", data=json.dumps(pod_def), headers=headers)
+        result = basic_response_checks(rsp)
+        
+        # Reading the pod should work
+        rsp = client.get(f"/pods/testbackcompat{test_timestamp}", headers=headers)
+        result = basic_response_checks(rsp)
+        assert result['pod_id'] == f"testbackcompat{test_timestamp}"

@@ -9,7 +9,8 @@ from models_pods import PodBaseFull
 from models_volume_mounts_utils import (
     validate_pod_volume_mounts_against_template, 
     get_template_merged_volume_mounts,
-    validate_volume_mounts_permissions
+    validate_volume_mounts_permissions,
+    resolve_volume_placeholders
 )
 from secret_utils import get_placeholder_warnings, resolve_secret_map, resolve_random_passwords, resolve_pod_networking, expand_short_secret_references, get_config_secret_map_warnings, check_pod_unresolved_patterns
 from tapisservice.tapisfastapi.utils import g, ok
@@ -137,9 +138,41 @@ async def create_pod(new_pod: NewPod):
                 elif hasattr(pod_volume_mounts, 'dict'):
                     pod_volume_mounts = pod_volume_mounts.dict()
                 
-                # Validate pod's volume_mounts against template
+                # Get template_overrides.volume_mounts if present
+                template_overrides_mounts = None
+                if hasattr(pod, 'template_overrides') and pod.template_overrides:
+                    if hasattr(pod.template_overrides, 'model_dump'):
+                        overrides = pod.template_overrides.model_dump()
+                    elif hasattr(pod.template_overrides, 'dict'):
+                        overrides = pod.template_overrides.dict()
+                    else:
+                        overrides = dict(pod.template_overrides) if pod.template_overrides else {}
+                    template_overrides_mounts = overrides.get('volume_mounts', {})
+                
+                # Resolve volume placeholders from template
+                resolved_mounts, placeholder_errors, placeholder_meta = resolve_volume_placeholders(
+                    pod_mounts=pod_volume_mounts,
+                    template_mounts=template_volume_mounts,
+                    template_overrides_mounts=template_overrides_mounts
+                )
+                
+                # Check for unresolved placeholders
+                if placeholder_errors:
+                    raise ValueError(f"Volume mount placeholder errors: {'; '.join(placeholder_errors)}")
+                
+                # Store the resolved mounts on the pod - this includes:
+                # - Template mounts with placeholders resolved
+                # - User's volume_mounts (overrides/additions)
+                # - Explicit removals (None values) are already removed from resolved_mounts
+                pod.volume_mounts = resolved_mounts
+                
+                # Include placeholder resolution info in metadata
+                if placeholder_meta.get("volume_placeholders"):
+                    volume_mount_metadata.update(placeholder_meta)
+                
+                # Validate resolved volume_mounts (permissions check)
                 vm_validation = validate_pod_volume_mounts_against_template(
-                    pod_volume_mounts,
+                    resolved_mounts,
                     template_volume_mounts,
                     user=g.username,
                     tenant=g.request_tenant_id,
@@ -149,7 +182,16 @@ async def create_pod(new_pod: NewPod):
                 
                 # Capture volume mount warnings in metadata
                 if vm_validation.metadata:
-                    volume_mount_metadata = vm_validation.metadata
+                    volume_mount_metadata.update(vm_validation.metadata)
+                    # Set mounted_by on each volume mount entry for tracking who mounted each volume
+                    if vm_validation.metadata.get("mounted_by") and pod.volume_mounts:
+                        mounted_by = vm_validation.metadata["mounted_by"]
+                        for mount_path, user in mounted_by.items():
+                            if mount_path in pod.volume_mounts and pod.volume_mounts[mount_path]:
+                                if isinstance(pod.volume_mounts[mount_path], dict):
+                                    pod.volume_mounts[mount_path]["mounted_by"] = user
+                                elif hasattr(pod.volume_mounts[mount_path], 'mounted_by'):
+                                    pod.volume_mounts[mount_path].mounted_by = user
                 
         except Exception as e:
             logger.error(f"Error validating template placeholders for pod {pod.pod_id}: {e}")
@@ -196,6 +238,16 @@ async def create_pod(new_pod: NewPod):
         # For direct pod creation, permission errors should block
         if not vm_validation.is_valid:
             raise ValueError(vm_validation.error_message)
+        
+        # Set mounted_by on each volume mount entry for tracking who mounted each volume
+        if vm_validation.metadata and vm_validation.metadata.get("mounted_by") and pod.volume_mounts:
+            mounted_by = vm_validation.metadata["mounted_by"]
+            for mount_path, user in mounted_by.items():
+                if mount_path in pod.volume_mounts and pod.volume_mounts[mount_path]:
+                    if isinstance(pod.volume_mounts[mount_path], dict):
+                        pod.volume_mounts[mount_path]["mounted_by"] = user
+                    elif hasattr(pod.volume_mounts[mount_path], 'mounted_by'):
+                        pod.volume_mounts[mount_path].mounted_by = user
 
     # Merge metadata from both validations
     final_metadata = {}

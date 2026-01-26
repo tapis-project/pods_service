@@ -5,7 +5,7 @@ from models_templates_tags import Template, TemplateTag, TemplateTagResponse, Ne
 from models_templates_utils import combine_pod_and_template_recursively
 from models_misc import SetPermission
 from channels import CommandChannel
-from codes import OFF, ON, RESTART, REQUESTED, STOPPED, USER
+from codes import OFF, ON, RESTART, REQUESTED, STOPPED, USER, ADMIN, READ
 from secret_utils import resolve_secret_map
 import requests
 from tapisservice.tapisfastapi.utils import g, ok, error
@@ -15,6 +15,7 @@ from typing import List, Any
 from kubernetes_utils import run_k8_exec, k8s_copy_bytes_to_pod, NAMESPACE
 from utils import check_permissions
 from errors import ResourceError, PermissionsException
+from models_volume_mounts_utils import validate_volume_mounts_on_start
 from datetime import datetime
 import time
 import re
@@ -803,17 +804,38 @@ async def start_pod(pod_id):
     if not pod.status in [STOPPED]:
         raise RuntimeError(f"Pod must be in 'STOPPED' status to run 'start_pod'. Please run 'stop_pod' or 'restart_pod' instead.")
     else:
-        # Resolve secrets before starting the pod
-        # IMPORTANT: If pod uses a template, merge template's secret_map first
-        # so template-defined secrets get resolved and sent to spawner
-        resolved_secrets = {}
-        
-        # Derive merged secret_map if pod uses a template
+        # Validate volume mounts before starting:
+        # - Check mounted_by users still have permission on the pod
+        # - Check mounted_by users still have READ permission on volumes/snapshots
         if pod.template:
             pod_copy = PodBaseFull(**pod.dict().copy())
             derived_pod = combine_pod_and_template_recursively(
                 pod_copy, pod.template, tenant=g.request_tenant_id, site=g.site_id
             )
+            derived_volume_mounts = getattr(derived_pod, 'volume_mounts', {}) or {}
+        else:
+            derived_volume_mounts = pod.volume_mounts or {}
+        
+        if derived_volume_mounts:
+            vm_errors = validate_volume_mounts_on_start(
+                volume_mounts=derived_volume_mounts,
+                pod_permissions=pod.get_permissions(),
+                tenant=g.request_tenant_id,
+                site=g.site_id
+            )
+            if vm_errors:
+                return error(
+                    result=pod.display(),
+                    msg=f"Cannot start pod: {'; '.join(vm_errors)}"
+                )
+
+        # Resolve secrets before starting the pod
+        # IMPORTANT: If pod uses a template, merge template's secret_map first
+        # so template-defined secrets get resolved and sent to spawner
+        resolved_secrets = {}
+        
+        # Derive merged secret_map if pod uses a template (reuse derived_pod if already computed)
+        if pod.template:
             merged_secret_map = getattr(derived_pod, 'secret_map', {}) or {}
         else:
             merged_secret_map = pod.secret_map or {}

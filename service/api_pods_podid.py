@@ -7,7 +7,10 @@ from tapisservice.tapisfastapi.utils import g, ok, error
 from models_templates_utils import combine_pod_and_template_recursively, get_template_merged_secret_map, validate_pod_secret_map_against_template
 from kubernetes_utils import rm_pvc, KubernetesError, delete_configmap, NAMESPACE
 from secret_utils import resolve_secret_map, inject_secrets_into_env_vars, check_pod_unresolved_patterns
-from models_volume_mounts_utils import interpolate_config_content
+from models_volume_mounts_utils import interpolate_config_content, validate_volume_mounts_permissions
+from utils import check_permissions
+from errors import PermissionsException
+import codes
 
 from tapisservice.logs import get_logger
 logger = get_logger(__name__)
@@ -40,8 +43,118 @@ async def update_pod(pod_id, update_pod: UpdatePod):
 
     # Pod existence is already checked above. Now we validate update and update with values that are set.
     input_data = update_pod.dict(exclude_unset=True)
+    
+    # Check if volume_mounts is being updated
+    volume_mounts_changed = 'volume_mounts' in input_data
+    
     for key, value in input_data.items():
         setattr(pod, key, value)
+
+    # If volume_mounts changed, validate permissions and update mounted_by on each entry
+    if volume_mounts_changed:
+        # Get pre-update volume_mounts to check for modifications to other users' mounts
+        pre_volume_mounts = pre_update_pod.get('volume_mounts', {}) or {}
+        
+        # Check if user is ADMIN on this pod
+        user_is_admin = check_permissions(
+            user=g.username,
+            level=codes.ADMIN,
+            object=pod,
+            object_type="pod",
+            roles=getattr(g, 'roles', None),
+            tenant=g.request_tenant_id
+        )
+        
+        pod_volume_mounts = pod.volume_mounts or {}
+        if hasattr(pod_volume_mounts, 'dict'):
+            pod_volume_mounts = pod_volume_mounts.dict()
+        elif hasattr(pod_volume_mounts, 'model_dump'):
+            pod_volume_mounts = pod_volume_mounts.model_dump()
+        
+        # For non-ADMIN users, check if they're trying to modify/remove another user's mount
+        if not user_is_admin:
+            for mount_path, old_mount in pre_volume_mounts.items():
+                if old_mount is None:
+                    continue
+                old_mounted_by = old_mount.get('mounted_by') if isinstance(old_mount, dict) else getattr(old_mount, 'mounted_by', None)
+                
+                # Skip mounts without mounted_by (legacy data) - anyone can modify
+                if not old_mounted_by:
+                    continue
+                
+                # Check if this mount was modified or removed by someone other than the mounter
+                if old_mounted_by != g.username:
+                    new_mount = pod_volume_mounts.get(mount_path)
+                    
+                    # Check if mount was removed
+                    if new_mount is None or mount_path not in pod_volume_mounts:
+                        raise PermissionsException(f"Cannot remove mount at '{mount_path}' - mounted by '{old_mounted_by}', not '{g.username}'. Only ADMIN or the original mounter can remove.")
+                    
+                    # Check if mount was modified (compare source_id)
+                    old_source = old_mount.get('source_id') if isinstance(old_mount, dict) else getattr(old_mount, 'source_id', None)
+                    new_source = new_mount.get('source_id') if isinstance(new_mount, dict) else getattr(new_mount, 'source_id', None)
+                    if old_source != new_source:
+                        raise PermissionsException(f"Cannot modify mount at '{mount_path}' - mounted by '{old_mounted_by}', not '{g.username}'. Only ADMIN or the original mounter can modify.")
+        
+        # Only validate volume mount permissions for NEW or MODIFIED mounts
+        # Unchanged mounts were already validated when they were first added
+        if pod_volume_mounts:
+            # Build a dict of only new/modified mounts that need validation
+            mounts_to_validate = {}
+            for mount_path, mount_config in pod_volume_mounts.items():
+                if mount_config is None:
+                    continue
+                old_mount = pre_volume_mounts.get(mount_path)
+                if old_mount is None:
+                    # New mount - needs validation
+                    mounts_to_validate[mount_path] = mount_config
+                else:
+                    # Check if source_id changed
+                    old_source_id = old_mount.get('source_id') if isinstance(old_mount, dict) else getattr(old_mount, 'source_id', None)
+                    new_source_id = mount_config.get('source_id') if isinstance(mount_config, dict) else getattr(mount_config, 'source_id', None)
+                    if old_source_id != new_source_id:
+                        # Modified mount - needs validation
+                        mounts_to_validate[mount_path] = mount_config
+            
+            # Only call validation if there are new/modified mounts
+            if mounts_to_validate:
+                vm_validation = validate_volume_mounts_permissions(
+                    mounts_to_validate,
+                    user=g.username,
+                    tenant=g.request_tenant_id,
+                    site=g.site_id,
+                    roles=getattr(g, 'roles', None)
+                )
+                
+                # Permission errors should block the update
+                if not vm_validation.is_valid:
+                    raise PermissionsException(vm_validation.error_message)
+                
+                # Set mounted_by on new/modified mounts
+                if vm_validation.metadata and vm_validation.metadata.get("mounted_by"):
+                    new_mounted_by = vm_validation.metadata["mounted_by"]
+                    for mount_path in mounts_to_validate:
+                        mount_config = pod.volume_mounts.get(mount_path)
+                        if mount_config and mount_path in new_mounted_by:
+                            if isinstance(mount_config, dict):
+                                mount_config["mounted_by"] = new_mounted_by[mount_path]
+                            elif hasattr(mount_config, 'mounted_by'):
+                                mount_config.mounted_by = new_mounted_by[mount_path]
+            
+            # Preserve mounted_by on unchanged mounts
+            for mount_path, mount_config in pod.volume_mounts.items():
+                if mount_config is None:
+                    continue
+                if mount_path not in mounts_to_validate:
+                    # Unchanged mount - preserve original mounted_by
+                    old_mount = pre_volume_mounts.get(mount_path)
+                    if old_mount:
+                        old_mounted_by_user = old_mount.get('mounted_by') if isinstance(old_mount, dict) else getattr(old_mount, 'mounted_by', None)
+                        if old_mounted_by_user:
+                            if isinstance(mount_config, dict):
+                                mount_config["mounted_by"] = old_mounted_by_user
+                            elif hasattr(mount_config, 'mounted_by'):
+                                mount_config.mounted_by = old_mounted_by_user
 
     post_update_pod = pod.dict().copy()
 

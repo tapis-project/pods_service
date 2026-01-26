@@ -4,7 +4,15 @@ from models_misc import SetPermission
 from models_templates import Template, TemplatePermissionsResponse
 from models_templates_tags import TemplateTagsResponse, TemplateTagResponse, NewTemplateTag, TemplateTag, TemplateTagsSmallResponse
 from models_templates_utils import validate_template_tag_secret_map, validate_template_tag_env_vars
-from models_volume_mounts_utils import validate_template_volume_mounts
+from models_volume_mounts_utils import (
+    validate_template_volume_mounts,
+    validate_template_volume_mounts_placeholders,
+    get_volume_placeholder_warnings
+)
+from models_template_dependencies import (
+    is_user_allowed_for_dependencies,
+    get_template_dependencies
+)
 from tapisservice.tapisfastapi.utils import g, ok
 from tapisservice.config import conf
 from tapisservice.logs import get_logger
@@ -22,7 +30,8 @@ router = APIRouter()
 async def list_template_tags(
     template_id: str,
     full: bool = Query(True, description="Return pod_definition in tag when full=true"),
-    include_configs: bool = Query(False, description="Include full config_content for volume mounts using field. Default: false (shows placeholder with size)")
+    include_configs: bool = Query(False, description="Include full config_content for volume mounts using field. Default: false (shows placeholder with size)"),
+    include_dependencies: bool = Query(False, description="Include dependency information (admin only). Shows which pods and tags depend on each template tag.")
 ):
     """
     List tag entries the template has
@@ -32,12 +41,40 @@ async def list_template_tags(
     logger.info(f"GET /pods/templates/{template_id}/tags - Top of list_template_tags with full={full}.")
     template_tags = TemplateTag.db_get_where(where_params=[['template_id', '.eq', template_id]], sort_column='creation_ts', tenant="siteadmintable", site=g.site_id)
 
+    # Check if user can view dependencies
+    can_view_deps = include_dependencies #and is_user_allowed_for_dependencies(g.username, getattr(g, 'admin', False))
+    
+    # Get dependencies if requested and allowed
+    tag_deps_lookup = {}
+    if can_view_deps:
+        try:
+            deps = get_template_dependencies(
+                template_id=template_id,
+                tenant="siteadmintable",
+                site=g.site_id
+            )
+            for dep in deps:
+                tag_deps_lookup[dep['tag_timestamp']] = dep
+        except Exception as e:
+            logger.warning(f"Failed to fetch template dependencies: {e}")
+
     display_template_tags = []
     for template_tag in template_tags:
         if full:
-            display_template_tags.append(template_tag.display(include_configs=include_configs))
+            tag_display = template_tag.display(include_configs=include_configs)
         else:
-            display_template_tags.append(template_tag.display_small())
+            tag_display = template_tag.display_small()
+        
+        if can_view_deps:
+            tag_dep = tag_deps_lookup.get(template_tag.tag_timestamp, {})
+            tag_display['dependents'] = {
+                'dependant_pods': tag_dep.get('dependant_pods', []),
+                'dependant_pod_count': tag_dep.get('dependant_pod_count', 0),
+                'dependant_tags': tag_dep.get('dependant_tags', []),
+                'dependant_tags_count': tag_dep.get('dependant_tags_count', 0)
+            }
+        
+        display_template_tags.append(tag_display)
 
 
     return ok(result=display_template_tags, msg="Template tags retrieved successfully.")
@@ -86,7 +123,7 @@ async def add_template_tag(template_id: str, new_template_tag: NewTemplateTag):
         if not result.is_valid:
             raise ValueError(result.error_message)
     
-    # Validate volume_mounts - template creator must have access to referenced volumes/snapshots/configs
+    # Validate volume_mounts - templates must use placeholders for source_id, not literal volume IDs
     if pod_def and hasattr(pod_def, 'volume_mounts') and pod_def.volume_mounts:
         volume_mounts = pod_def.volume_mounts
         # Convert to dict if it's a Pydantic model with model_dump/dict method
@@ -95,6 +132,28 @@ async def add_template_tag(template_id: str, new_template_tag: NewTemplateTag):
         elif hasattr(volume_mounts, 'dict'):
             volume_mounts = volume_mounts.dict()
         
+        # First validate that templates use placeholders, not literal volume IDs
+        placeholder_valid, placeholder_errors = validate_template_volume_mounts_placeholders(volume_mounts)
+        if not placeholder_valid:
+            # Format error messages
+            error_msgs = [f"Mount '{e['mount_path']}': {e['description']}" for e in placeholder_errors]
+            raise ValueError(f"Template volume_mounts validation failed: {'; '.join(error_msgs)}")
+        
+        # Add placeholder info to metadata so users know what to override
+        placeholder_warnings, _ = get_volume_placeholder_warnings(volume_mounts)
+        if placeholder_warnings:
+            metadata["volume_placeholders"] = {
+                "required": [
+                    {
+                        "mount_path": w["mount_path"],
+                        "mount_type": w["mount_type"],
+                        "description": w["description"]
+                    }
+                    for w in placeholder_warnings
+                ]
+            }
+        
+        # Validate basic structure (ephemeral configs, etc.)
         result = validate_template_volume_mounts(
             volume_mounts=volume_mounts,
             user=g.username,

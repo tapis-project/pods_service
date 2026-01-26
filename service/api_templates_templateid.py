@@ -1,6 +1,10 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from models_templates import Template, TemplateResponse, TemplateDeleteResponse, NewTemplate, UpdateTemplate
 from models_templates_tags import TemplateTag
+from models_template_dependencies import (
+    is_user_allowed_for_dependencies,
+    get_template_dependencies
+)
 from channels import CommandChannel
 from tapisservice.tapisfastapi.utils import g, ok, error
 from tapisservice.config import conf
@@ -92,7 +96,10 @@ async def delete_template(template_id):
     summary="get_template",
     operation_id="get_template",
     response_model=TemplateResponse)
-async def get_template(template_id):
+async def get_template(
+    template_id: str,
+    include_dependencies: bool = Query(False, description="Include dependency information (admin only). Shows which pods and tags depend on each template tag.")
+):
     """
     Get a template.
 
@@ -102,5 +109,22 @@ async def get_template(template_id):
 
     # TODO search
     template = Template.db_get_with_pk(template_id, tenant="siteadmintable", site=g.site_id)
+    
+    template_display = template.display()
+    
+    # Check if user can view dependencies
+    can_view_deps = include_dependencies # and is_user_allowed_for_dependencies(g.username, getattr(g, 'admin', False))
+    
+    if can_view_deps:
+        try:
+            tag_dependents = get_template_dependencies(
+                template_id=template_id,
+                tenant="siteadmintable",
+                site=g.site_id
+            )
+            template_display['tag_dependents'] = tag_dependents
+        except Exception as e:
+            logger.warning(f"Failed to fetch template dependents: {e}")
+            template_display['tag_dependents'] = []
 
-    return ok(result=template.display(), msg="Template retrieved successfully.")
+    return ok(result=template_display, msg="Template retrieved successfully.")

@@ -508,6 +508,12 @@ def combine_pod_and_template_recursively(input_obj, template_name, seen_template
                 elif mod_key.startswith("volume_mount."):
                     pass  # Reserved for future per-mount overrides
                 elif mod_key == "volume_mounts":
+                    # Skip template merge if user explicitly modified volume_mounts at pod creation
+                    # The merge was already done at creation time and stored in pod.volume_mounts
+                    if "volume_mounts" in input_obj_modified_fields:
+                        logger.debug(f"volume_mounts in modified_fields - skipping template merge, using pod's stored value")
+                        continue
+                    
                     # Use only user's volume_mounts by default, or merge if _TAPIS_INTERNAL_USE_TEMPLATE_VOLUMES is True
                     # Dict-based structure: keys are mount_paths, values are VolumeMount configs or None
                     from models_volume_mounts_utils import merge_pod_volume_mounts_with_template

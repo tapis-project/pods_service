@@ -28,6 +28,7 @@ from models_misc import PermissionsModel, CredentialsModel, LogsModel
 from models_images import Image
 from models_volumes import Volume
 from models_snapshots import Snapshot
+from models_volume_mounts_utils import is_volume_placeholder
 from models_volume_mounts_utils import VolumeMount, validate_and_convert_volume_mounts, VALID_VOLUME_MOUNT_TYPES
 from typing import Optional
 
@@ -363,7 +364,11 @@ class TemplateTagPodDefinition(TapisModel):
     arguments: List[str] | None = Field(None, description = "Arguments for the Pod's command.", sa_column=Column(ARRAY(String)))
     environment_variables: Dict[str, Any] = Field({}, description = "Environment variables to inject into pod. Use `${pods:secrets:KEY}` to reference secret_map entries.", sa_column=Column(JSON))
     secret_map: Dict[str, str] = Field({}, description = "Map of keys to secret references or placeholders. Use ${secret:name} for user secrets, ${pods:default:val:?desc} for placeholders with defaults, ${:?desc} for required placeholders. Secrets resolved at pod start.", sa_column=Column(JSON))
-    volume_mounts: Dict[str, Any] = Field({}, description = 'Volume mounts keyed by mount_path. Ex: {"/data": {"type": "tapisvolume", "source_id": "myvolume"}, "/etc/config.ini": {"type": "ephemeral", "config_content": "key=value"}}', sa_column=Column(JSON))
+    volume_mounts: Dict[str, Optional[VolumeMount]] = Field(
+        {}, 
+        description = 'Volume mounts keyed by mount_path. For templates, tapisvolume/tapissnapshot MUST use placeholder source_id (e.g., "${:?Description}"). Ex: {"/data": {"type": "tapisvolume", "source_id": "${:?User data volume}"}, "/etc/config.ini": {"type": "ephemeral", "config_content": "key=value"}}',
+        sa_column=Column(JSON)
+    )
     time_to_stop_default: int | None = Field(None, description = "Default time (sec) for pod to run from instance start. -1 for unlimited. 12 hour default.")
     time_to_stop_instance: int | None = Field(None, description = "Time (sec) for pod to run from instance start. Reset each time instance is started. -1 for unlimited. None uses default.")
     networking: Dict[str, Networking] = Field({}, description = 'Networking information. `{"url_suffix": {"protocol": "http"  "tcp", "port": int}}`', sa_column=Column(JSON))
@@ -438,7 +443,11 @@ class TemplateTagPodDefinition(TapisModel):
 
     @model_validator(mode="after")
     def check_volume_mounts_db(cls, values):
-        """Validate that referenced volumes/snapshots exist in database."""
+        """Validate that referenced volumes/snapshots exist in database.
+        
+        Note: Placeholders (${:?description}) are skipped - they're validated
+        separately and resolved when pods are created from templates.
+        """
         volume_mounts = getattr(values, 'volume_mounts', None)
         tenant_id = g.tenant_id if hasattr(g, 'tenant_id') else None
         site_id = g.site_id if hasattr(g, 'site_id') else None
@@ -449,21 +458,26 @@ class TemplateTagPodDefinition(TapisModel):
                 if mount_config is None:
                     continue
                 
-                vol_type = mount_config.get('type', '').lower()
-                source_id = mount_config.get('source_id', '')
+                # Handle both dict and VolumeMount object
+                if isinstance(mount_config, dict):
+                    vol_type = mount_config.get('type', '').lower()
+                    source_id = mount_config.get('source_id', '')
+                else:
+                    vol_type = (getattr(mount_config, 'type', '') or '').lower()
+                    source_id = getattr(mount_config, 'source_id', '') or ''
                 
-                if vol_type == "tapisvolume":
-                    volume = Volume.db_get_with_pk(source_id, tenant=tenant_id, site=site_id)
-                    if not volume:
-                        raise ValueError(f"volume_mounts['{mount_path}'] source_id '{source_id}' not found. No volume with this ID exists.")
-                
-                elif vol_type == "tapissnapshot":
-                    snapshot = Snapshot.db_get_with_pk(source_id, tenant=tenant_id, site=site_id)
-                    if not snapshot:
-                        raise ValueError(f"volume_mounts['{mount_path}'] source_id '{source_id}' not found. No snapshot with this ID exists.")
+                # For tapisvolume and tapissnapshot in templates, source_id must be a placeholder
+                # Templates define structure, pods provide actual volume bindings
+                if vol_type in ("tapisvolume", "tapissnapshot"):
+                    if source_id and not is_volume_placeholder(source_id):
+                        raise ValueError(
+                            f"Template volume_mounts['{mount_path}'] has literal source_id '{source_id}'. "
+                            f"Templates must use placeholders for {vol_type} mounts (e.g., '${{:?Description of volume needed}}'). "
+                            f"Pod creators will override with their own volume IDs."
+                        )
                 
                 # 'ephemeral' doesn't need db validation - config is inline
-                # 'pvc' type doesn't need db validation - it references k8s PVC
+                # 'pvc' type is admin-only and may use literal PVC names
         
         return values
 

@@ -431,7 +431,11 @@ class PodBase(TapisApiModel):
     secret_map: Dict[str, str] = Field({}, description = "Map of keys to secret values. Syntax: ${secret:name} (user secret), ${secret:user:name} (explicit owner). Reference in environment_variables via ${pods:secrets:KEY}. Resolved at pod start.", sa_column=Column(JSON))
     #probes: Dict[str, Any] = Field({}, description = "Probes to run on pod. ex. `{\"livenessProbe\": {\"httpGet\": {\"path\": \"/\", \"port\": 5000}}}`", sa_column=Column(JSON))
     status_requested: str = Field("ON", description = "Status requested by user, `ON`, `OFF`, or `RESTART`.")
-    volume_mounts: Dict[str, Any] = Field({}, description = 'Volume mounts keyed by mount_path. Ex: {"/data": {"type": "tapisvolume", "source_id": "myvolume"}, "/etc/config.ini": {"type": "ephemeral", "config_content": "key=value"}}', sa_column=Column(JSON))
+    volume_mounts: Dict[str, Optional[VolumeMount]] = Field(
+        {}, 
+        description = 'Volume mounts keyed by mount_path. Values are VolumeMount objects (see schema) or null (to remove inherited mount). Ex: {"/data": {"type": "tapisvolume", "source_id": "myvolume"}, "/etc/config.ini": {"type": "ephemeral", "config_content": "key=value"}}',
+        sa_column=Column(JSON)
+    )
     time_to_stop_default: int = Field(43200, description = "Default time (sec) for pod to run from instance start. -1 for unlimited. 12 hour default.")
     time_to_stop_instance: int | None = Field(None, description = "Time (sec) for pod to run from instance start. Reset each time instance is started. -1 for unlimited. None uses default.")
     networking: Dict[str, Networking] = Field({"default": {"protocol": "http", "port": 5000}}, description = 'Networking information. `{"url_suffix": {"protocol": "http"  "tcp", "port": int}}`', sa_column=Column(JSON))
@@ -589,8 +593,13 @@ class Pod(TapisPodBaseFull, table=True, validate=True):
                 if mount_config is None:
                     continue
                 
-                vol_type = mount_config.get('type', '').lower()
-                source_id = mount_config.get('source_id', '')
+                # Handle both dict and VolumeMount object
+                if isinstance(mount_config, dict):
+                    vol_type = mount_config.get('type', '').lower()
+                    source_id = mount_config.get('source_id', '')
+                else:
+                    vol_type = (getattr(mount_config, 'type', '') or '').lower()
+                    source_id = getattr(mount_config, 'source_id', '') or ''
                 
                 if vol_type == "tapisvolume":
                     volume = Volume.db_get_with_pk(source_id, tenant=tenant_id, site=site_id)
@@ -968,7 +977,11 @@ class UpdatePod(TapisApiModel):
     arguments: List[str] | None = Field(None, description = "Arguments for the Pod's command.", sa_column=Column(ARRAY(String)))
     environment_variables: Optional[Dict[str, Any]] = Field({}, description = "Environment variables to inject into k8 pod.", sa_column=Column(JSON))
     status_requested: Optional[str] = Field("ON", description = "Status requested by user, `ON`, `OFF`, or `RESTART`.")
-    volume_mounts: Optional[List[VolumeMount]] = Field([], description = 'List of volume mounts. Each mount specifies type, source_id, mount_path, and optionally sub_path and read_only.', sa_column=Column(JSON))
+    volume_mounts: Optional[Dict[str, Optional[VolumeMount]]] = Field(
+        {}, 
+        description = 'Volume mounts keyed by mount_path. Values are VolumeMount objects (see schema) or null (to remove inherited mount). Ex: {"/data": {"type": "tapisvolume", "source_id": "myvolume"}, "/etc/config.ini": {"type": "ephemeral", "config_content": "key=value"}}',
+        sa_column=Column(JSON)
+    )
     time_to_stop_default: Optional[int] = Field(43200, description = "Default time (sec) for pod to run from instance start. -1 for unlimited. 12 hour default.")
     time_to_stop_instance: Optional[int] = Field(None, description = "Time (sec) for pod to run from instance start. Reset each time instance is started. -1 for unlimited. None uses default.")
     networking: Optional[Dict[str, Networking]] = Field({"default": {"protocol": "http", "port": 5000}}, description = 'Networking information. {"url_suffix": {"protocol": "http"  "tcp", "port": int}}', sa_column=Column(JSON))

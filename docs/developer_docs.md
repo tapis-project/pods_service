@@ -640,6 +640,222 @@ When using `volume_mounts` directly, you must **repeat the full config**:
 
 ---
 
+## Volume Mounts Placeholder System
+
+Templates **must use placeholders** for `source_id` in `tapisvolume` and `tapissnapshot` mounts. This ensures templates don't assume access to specific volumes, and forces pod creators to provide volumes they have permission to use via template_overrides field.
+
+### source_id Syntax Reference
+
+| Context | Syntax | Description | Example |
+|---------|--------|-------------|---------|
+| **Template** | `${:?description}` | Required placeholder - pod must override | `${:?User data volume}` |
+| **Pod** | `volume-id` | Literal volume ID | `my-data-vol` |
+| **Pod** (ephemeral type) | N/A or `volume-id` | Ephemeral does not require volume source | - |
+
+### Pod vs Template Volume Mount Rules
+
+| Field | Pod | Template | Notes |
+|-------|-----|----------|-------|
+| `source_id` (tapisvolume) | ✅ Literal ID | ❌ Must use `${:?desc}` | Template can't assume volume access |
+| `source_id` (tapissnapshot) | ✅ Literal ID | ❌ Must use `${:?desc}` | Template can't assume snapshot access |
+| `source_id` (pvc) | ✅ PVC name | ✅ PVC name | PVC is k8s-native, admin feature |
+| `config_content` | ✅ Literal content | ✅ Literal content | Supports `${pods:secrets:KEY}` |
+| `config_filename` | ✅ Literal name | ✅ Literal name | Required for tapisvolume+config |
+| Other fields | ✅ All allowed | ✅ All allowed | type, sub_path, read_only, etc. |
+
+### Permission Model for Volumes source in Volume Mounts
+
+| Scenario | Who Must Have Permission To Volume  |
+|----------|---------------------------------------|
+| Pod create with volume_mounts | Requesting user; volume will be `mounted_by` said user |
+| Pod update changing volume_mounts | Requesting user; volume will be `mounted_by` said user |
+| Pod start/restart | `mounted_by` user must still have ADMIN/USER on pod AND READ on volume |
+| Template with placeholder | No check (placeholder) |
+
+**Key Points:**
+- The user who adds a volume to `volume_mounts` must have READ permission on that volume (if tapisvolume/tapissnapshot)
+- On start/restart, each `mounted_by` user must still have pod permission (ADMIN or USER) AND volume READ access
+- If a `mounted_by` user loses pod or volume permission, the pod cannot start until the mount is removed or re-added by a permitted user
+- `mounted_by` field on each volume mount entry tracks which user mounted that volume.
+
+### The `mounted_by` Field
+
+Each volume mount entry can have a `mounted_by` field that tracks which user mounted it:
+
+```python
+"volume_mounts": {
+    "/data": {
+        "type": "tapisvolume",
+        "source_id": "team-data-volume",
+        "mounted_by": "alice"           # Alice mounted this volume
+    },
+    "/snapshot": {
+        "type": "tapissnapshot",
+        "source_id": "data-backup",
+        "mounted_by": "bob"             # Bob mounted this snapshot
+    }
+}
+```
+
+**Behavior:**
+- Set automatically by the service when volumes are added to `volume_mounts`
+- Updated when a user updates `volume_mounts` to change/add volumes
+- Only set for `tapisvolume` and `tapissnapshot` types (not ephemeral/pvc)
+- If user A creates a pod with volumes, then user B updates `volume_mounts`:
+  - Changed/added mounts show the user who made the change
+  - Unchanged mounts keep their original `mounted_by` value
+- Existing pods without `mounted_by` continue to work (backward compatible).
+
+### Template Example
+
+```python
+# Template defines placeholders - does NOT embed specific volumes
+POST /pods/templates/myapp/tags
+{
+    "tag": "v1",
+    "pod_definition": {
+        "image": "myorg/webapp:1.0",
+        "volume_mounts": {
+            "/data": {
+                "type": "tapisvolume",
+                "source_id": "${:?User data volume for persistent storage}",  # Placeholder!
+                "config_content": "[app]\ndata_dir=/data",
+                "config_filename": "app.conf",
+                "config_update_mode": "once"
+            },
+            "/etc/app/config.yml": {
+                "type": "ephemeral",  # Ephemeral is fine - no source_id needed
+                "config_content": "logging:\n  level: INFO"
+            }
+        },
+        "secret_map": {
+            "DB_PASSWORD": "${:?Database password}"
+        }
+    }
+}
+# Response includes metadata.volume_placeholders showing required overrides
+```
+
+### Pod Override Examples
+
+```python
+# Option 1: Override in volume_mounts (full replacement)
+POST /pods
+{
+    "pod_id": "my-webapp",
+    "template": "myapp:v1",
+    "volume_mounts": {
+        "/data": {
+            "type": "tapisvolume",
+            "source_id": "my-data-volume",  # Your volume ID
+            "config_content": "[app]\ndata_dir=/data",  # Must repeat if needed
+            "config_filename": "app.conf",
+            "config_update_mode": "once"
+        }
+    },
+    "secret_map": {
+        "DB_PASSWORD": "${secret:my-db-pass}"
+    }
+}
+
+# Option 2: Override via template_overrides (recommended - partial merge)
+POST /pods
+{
+    "pod_id": "my-webapp",
+    "template": "myapp:v1",
+    "template_overrides": {
+        "volume_mounts": {
+            "/data": {"source_id": "my-data-volume"}  # Only override source_id
+        },
+        "secret_map": {
+            "DB_PASSWORD": "${secret:my-db-pass}"
+        }
+    }
+}
+# Result: /data uses my-data-volume with ALL original template config preserved
+```
+
+### Team Workflow Example
+
+```python
+# Scenario: 3 admins (Alice, Bob, Carol) + 1 user (Dave) on a pod
+# Alice owns "team-data-volume", Dave owns "dave-config-volume"
+
+# Alice creates pod with her volume
+POST /pods  # as Alice
+{
+    "pod_id": "team-app",
+    "template": "myapp:v1",
+    "template_overrides": {
+        "volume_mounts": {"/data": {"source_id": "team-data-volume"}}
+    }
+}
+# Alice has READ on team-data-volume, mount succeeds
+# volume_mounts["/data"].mounted_by = "alice"
+
+# Alice adds Carol as ADMIN and Dave as USER
+POST /pods/team-app/permissions  # as Alice
+{"user": "carol", "level": "ADMIN"}
+POST /pods/team-app/permissions  # as Alice
+{"user": "dave", "level": "USER"}
+
+# Carol can start the pod even though she doesn't own the volume
+GET /pods/team-app/start  # as Carol
+# Succeeds because Alice (a pod ADMIN) has READ on the volume
+
+# Dave (USER level) CAN add a NEW mount he has access to
+PUT /pods/team-app  # as Dave
+{
+    "volume_mounts": {
+        "/data": {"source_id": "team-data-volume"},      # Keep existing (unchanged)
+        "/dave-config": {"type": "tapisvolume", "source_id": "dave-config-volume"}  # NEW
+    }
+}
+# Succeeds: Dave has READ on dave-config-volume
+# volume_mounts["/data"].mounted_by = "alice"        (unchanged)
+# volume_mounts["/dave-config"].mounted_by = "dave"  (new)
+
+
+# Dave CANNOT modify Alice's mount
+PUT /pods/team-app  # as Dave
+{
+    "volume_mounts": {
+        "/data": {"source_id": "some-other-volume"}  # Trying to change Alice's mount
+    }
+}
+# Error: Cannot modify mount at '/data' - mounted by 'alice', not 'dave'
+```
+
+**Permission Summary:**
+Start/restart pod:
+- Both ADMIN and USER can start/restart, provided the mounted_by user still has pod permission AND READ access to the volume
+
+Add new volume mount:
+- Both ADMIN and USER can add new mounts if they have READ permission on the volume
+
+Modify own mount (where mounted_by = self):
+- Both ADMIN and USER can modify mounts they created
+
+Modify another user's mount:
+- ADMIN: allowed
+- USER: not allowed
+
+Remove another user's mount:
+- ADMIN: allowed
+- USER: not allowed
+
+### Validation Functions Reference
+
+| Function | Purpose | Location |
+|----------|---------|----------|
+| `is_volume_placeholder()` | Check if source_id is a placeholder | `models_volume_mounts_utils.py` |
+| `validate_volume_mounts_on_start()` | Check mounted_by users still have pod + volume perms | `models_volume_mounts_utils.py` |
+| `validate_template_volume_mounts_placeholders()` | Ensure templates use placeholders | `models_volume_mounts_utils.py` |
+| `resolve_volume_placeholders()` | Merge pod values over template placeholders | `models_volume_mounts_utils.py` |
+| `validate_volume_mounts_permissions()` | Check user has READ on volumes | `models_volume_mounts_utils.py` |
+
+---
+
 ### Legacy Migration
 
 List format auto-converts to object-keyed. Migration via alembic, user shouldn't need to touch.

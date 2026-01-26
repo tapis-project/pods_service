@@ -4,8 +4,26 @@ Volume mount validation utilities for object-based volume_mounts structure.
 The volume_mounts field is a Dict[str, VolumeMount | None] where:
 - Keys are mount_path strings
 - Values are VolumeMount objects or None (to remove inherited mounts)
+
+Volume Mount Placeholder System:
+    Templates MUST use placeholders for source_id in tapisvolume/tapissnapshot mounts:
+    - "${:?description}" - Required placeholder that pod creator must override
+    
+    Pods override placeholders with actual volume IDs:
+    - "my-volume-id" - Literal volume ID (user must have READ permission)
+    
+    This ensures templates don't assume access to specific volumes, and the pod
+    creator (who provides the volume ID) must have permission to use it.
+
+Permission Model:
+    - On pod create/update: The user making the change must have READ on any
+      volumes they're adding to volume_mounts. This user is recorded as "mounted_by".
+    - On pod start/restart: At least one pod ADMIN must have READ on each volume.
+      This allows team workflows where volume-admin adds mount, then others start pod.
+    - Snapshots follow same rules but are always read-only.
 """
-from typing import Dict, Optional, Any, List
+from typing import Dict, Optional, Any, List, Tuple, Literal
+from dataclasses import dataclass
 from pydantic import Field, field_validator, model_validator
 import re
 import hashlib
@@ -19,6 +37,327 @@ except ImportError:
 
 # Valid volume mount types
 VALID_VOLUME_MOUNT_TYPES = {"tapisvolume", "tapissnapshot", "ephemeral", "pvc"}
+
+# Type alias for volume mount type field (for OpenAPI schema generation)
+VolumeMountType = Literal["tapisvolume", "tapissnapshot", "ephemeral", "pvc"]
+
+# =============================================================================
+# Volume Placeholder Patterns and Parsing
+# =============================================================================
+
+# Pattern for required placeholder: ${:?description}
+# Used in templates to indicate pod creator must provide a volume ID
+VOLUME_PLACEHOLDER_PATTERN = re.compile(r'^\$\{:\?([^}]+)\}$')
+
+# Pattern to detect any unresolved placeholder in source_id
+VOLUME_UNRESOLVED_PATTERN = re.compile(r'\$\{[^}]+\}')
+
+
+@dataclass
+class VolumeSourceReference:
+    """Parsed source_id reference from volume mount."""
+    raw_value: str
+    is_placeholder: bool
+    description: Optional[str]  # Description from placeholder (for user guidance)
+    volume_id: Optional[str]  # The actual volume ID if literal value
+
+
+def _parse_volume_source_id(value: str) -> Tuple[VolumeSourceReference, Optional[str]]:
+    """
+    Parse a volume_mounts source_id value. Internal use only.
+    
+    Templates should use placeholders:
+        - "${:?description}" - Required placeholder (pod must override)
+    
+    Pods should use literal volume IDs:
+        - "my-volume-id" - Actual volume ID
+    
+    Args:
+        value: The source_id value to parse
+        
+    Returns:
+        Tuple of (VolumeSourceReference, error_message)
+        - On success: (VolumeSourceReference, None)
+        - On failure: (None, error_message)
+    """
+    if not value:
+        return (None, "source_id cannot be empty")
+    
+    # Check for required placeholder: ${:?description}
+    placeholder_match = VOLUME_PLACEHOLDER_PATTERN.match(value)
+    if placeholder_match:
+        description = placeholder_match.group(1)
+        return (VolumeSourceReference(
+            raw_value=value,
+            is_placeholder=True,
+            description=description,
+            volume_id=None
+        ), None)
+    
+    # Check for any unresolved placeholder pattern (error case)
+    if VOLUME_UNRESOLVED_PATTERN.search(value):
+        return (None, f"Invalid source_id format: '{value}'. Use '${{:?description}}' for placeholders or a literal volume ID.")
+    
+    # It's a literal volume ID - validate format
+    if not re.fullmatch(r'[a-z][a-z0-9\-]+', value):
+        return (None, f"source_id must be lowercase alphanumeric (hyphens allowed). First character must be alpha. Got: {value}")
+    
+    return (VolumeSourceReference(
+        raw_value=value,
+        is_placeholder=False,
+        description=None,
+        volume_id=value
+    ), None)
+
+
+def is_volume_placeholder(source_id: str) -> bool:
+    """Check if a source_id is a placeholder pattern."""
+    if not source_id:
+        return False
+    return bool(VOLUME_PLACEHOLDER_PATTERN.match(source_id))
+
+
+def get_volume_placeholder_warnings(
+    volume_mounts: Dict[str, Any]
+) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """
+    Check volume_mounts for unresolved placeholders and return warnings.
+    
+    Args:
+        volume_mounts: Dict mapping mount paths to VolumeMount configs
+        
+    Returns:
+        Tuple of (warnings list, parsing errors list)
+        - warnings: List of dicts with mount_path, placeholder, description, type
+        - errors: List of parsing error messages for invalid formats
+    """
+    warnings = []
+    errors = []
+    
+    if not volume_mounts:
+        return (warnings, errors)
+    
+    for mount_path, mount_config in volume_mounts.items():
+        if mount_config is None:
+            continue
+        
+        # Get source_id from config
+        if isinstance(mount_config, dict):
+            source_id = mount_config.get("source_id")
+            mount_type = mount_config.get("type")
+        else:
+            source_id = getattr(mount_config, "source_id", None)
+            mount_type = getattr(mount_config, "type", None)
+        
+        if not source_id:
+            continue
+        
+        # Check if it's a placeholder
+        ref, error = _parse_volume_source_id(source_id)
+        if error:
+            errors.append(f"Mount '{mount_path}': {error}")
+            continue
+        
+        if ref.is_placeholder:
+            warnings.append({
+                "mount_path": mount_path,
+                "mount_type": mount_type,
+                "placeholder": ref.raw_value,
+                "description": ref.description or "No description provided"
+            })
+    
+    return (warnings, errors)
+
+
+def validate_template_volume_mounts_placeholders(
+    volume_mounts: Dict[str, Any]
+) -> Tuple[bool, List[Dict[str, str]]]:
+    """
+    Validate that a template's volume_mounts uses placeholders for source_id,
+    not literal volume IDs.
+    
+    Templates should define placeholders that users override with actual volumes.
+    Literal volume IDs are not allowed because:
+    1. Templates are shared - they shouldn't assume access to specific volumes
+    2. Templates define structure - pods provide the actual volume bindings
+    3. Permission model requires the pod creator to have access to volumes
+    
+    Valid template source_id values:
+        - "${:?description}" - Required placeholder
+    
+    Invalid for templates (tapisvolume/tapissnapshot only):
+        - "my-volume-id" - Literal volume ID
+    
+    Note: ephemeral and pvc types don't use this validation:
+        - ephemeral has no source_id (uses config_content)
+        - pvc is admin-only and may use literal PVC names
+    
+    Args:
+        volume_mounts: Dict mapping mount paths to VolumeMount configs
+        
+    Returns:
+        Tuple of (is_valid, list of error dicts)
+        Each error dict contains:
+        - mount_path: The mount path with the invalid source_id
+        - source_id: The invalid value
+        - mount_type: The type of mount
+        - description: User-friendly description of the issue
+    """
+    errors = []
+    
+    if not volume_mounts:
+        return (True, [])
+    
+    for mount_path, mount_config in volume_mounts.items():
+        if mount_config is None:
+            continue
+        
+        # Get fields from config
+        if isinstance(mount_config, dict):
+            source_id = mount_config.get("source_id")
+            mount_type = mount_config.get("type")
+        else:
+            source_id = getattr(mount_config, "source_id", None)
+            mount_type = getattr(mount_config, "type", None)
+        
+        # Only validate tapisvolume and tapissnapshot - these reference user resources
+        if mount_type not in ("tapisvolume", "tapissnapshot"):
+            continue
+        
+        if not source_id:
+            # source_id is required for these types, but that's validated elsewhere
+            continue
+        
+        # Parse the source_id
+        ref, parse_error = _parse_volume_source_id(source_id)
+        
+        if parse_error:
+            errors.append({
+                "mount_path": mount_path,
+                "source_id": source_id,
+                "mount_type": mount_type,
+                "description": parse_error
+            })
+            continue
+        
+        # Check for literal volume IDs - NOT allowed in templates
+        if not ref.is_placeholder:
+            errors.append({
+                "mount_path": mount_path,
+                "source_id": source_id,
+                "mount_type": mount_type,
+                "description": (
+                    f"Templates cannot contain literal volume IDs for {mount_type} mounts. "
+                    f"Templates define placeholders that pod creators override with their volumes. "
+                    f"Use '${{:?Describe the volume needed}}' as a required placeholder. "
+                    f"Example: '${{:?User data volume for persistent storage}}'"
+                )
+            })
+    
+    return (len(errors) == 0, errors)
+
+
+def resolve_volume_placeholders(
+    pod_mounts: Optional[Dict[str, Any]],
+    template_mounts: Optional[Dict[str, Any]],
+    template_overrides_mounts: Optional[Dict[str, Any]] = None
+) -> Tuple[Dict[str, Any], List[str], Dict[str, Any]]:
+    """
+    Resolve volume mount placeholders by applying pod values over template placeholders.
+    
+    Resolution order:
+    1. Start with template_mounts as base
+    2. Apply template_overrides_mounts (partial field overrides)
+    3. Apply pod_mounts (full mount replacement)
+    
+    Args:
+        pod_mounts: Pod's volume_mounts (full mount replacements)
+        template_mounts: Template's volume_mounts (may contain placeholders)
+        template_overrides_mounts: Partial field overrides from template_overrides
+        
+    Returns:
+        Tuple of (resolved_mounts, errors, metadata)
+        - resolved_mounts: Final merged volume_mounts dict
+        - errors: List of error messages for unresolved required placeholders
+        - metadata: Dict with placeholder resolution info
+    """
+    errors = []
+    metadata = {"volume_placeholders": {"resolved": [], "unresolved": []}}
+    
+    # Start with template
+    merged = dict(template_mounts) if template_mounts else {}
+    
+    # Apply template_overrides (partial merges)
+    if template_overrides_mounts:
+        for mount_path, override_config in template_overrides_mounts.items():
+            if mount_path in merged and merged[mount_path] is not None:
+                # Merge override fields into existing mount
+                if isinstance(merged[mount_path], dict):
+                    merged[mount_path] = {**merged[mount_path], **override_config}
+                else:
+                    # Convert to dict if needed
+                    base = merged[mount_path].model_dump() if hasattr(merged[mount_path], 'model_dump') else dict(merged[mount_path])
+                    merged[mount_path] = {**base, **override_config}
+    
+    # Apply pod_mounts (full replacements)
+    if pod_mounts:
+        for mount_path, mount_config in pod_mounts.items():
+            if mount_config is None:
+                # None removes inherited mount
+                merged.pop(mount_path, None)
+            else:
+                # Full replacement
+                merged[mount_path] = mount_config
+    
+    # Check for unresolved placeholders
+    for mount_path, mount_config in merged.items():
+        if mount_config is None:
+            continue
+        
+        if isinstance(mount_config, dict):
+            source_id = mount_config.get("source_id")
+            mount_type = mount_config.get("type")
+        else:
+            source_id = getattr(mount_config, "source_id", None)
+            mount_type = getattr(mount_config, "type", None)
+        
+        if not source_id:
+            continue
+        
+        ref, _ = _parse_volume_source_id(source_id)
+        if ref and ref.is_placeholder:
+            # Still a placeholder - not resolved
+            metadata["volume_placeholders"]["unresolved"].append({
+                "mount_path": mount_path,
+                "mount_type": mount_type,
+                "placeholder": source_id,
+                "description": ref.description
+            })
+            errors.append(
+                f"Required volume placeholder at '{mount_path}' not overridden. "
+                f"Description: {ref.description}. "
+                f"Provide a volume ID in volume_mounts or template_overrides.volume_mounts."
+            )
+        elif ref and ref.volume_id:
+            # Track resolved placeholders (for audit/logging)
+            # Check if this was originally a placeholder in template
+            template_source_id = None
+            if template_mounts and mount_path in template_mounts:
+                t_mount = template_mounts[mount_path]
+                if isinstance(t_mount, dict):
+                    template_source_id = t_mount.get("source_id")
+                else:
+                    template_source_id = getattr(t_mount, "source_id", None)
+            
+            if template_source_id and is_volume_placeholder(template_source_id):
+                metadata["volume_placeholders"]["resolved"].append({
+                    "mount_path": mount_path,
+                    "mount_type": mount_type,
+                    "original_placeholder": template_source_id,
+                    "resolved_to": ref.volume_id
+                })
+    
+    return (merged, errors, metadata)
 
 # Maximum config content size (1MB)
 MAX_CONFIG_CONTENT_SIZE = 1024 * 1024  # 1MB
@@ -196,7 +535,21 @@ def validate_and_convert_volume_mounts(volume_mounts: Any, use_full_validation: 
                 vm = VolumeMount(**mount_config)
                 validated[mount_path] = vm.model_dump(exclude_none=True)
             except Exception as e:
-                raise ValueError(f"Invalid volume mount at '{mount_path}': {e}")
+                # Extract clean error message without Pydantic URLs and type info
+                error_msg = str(e)
+                # Remove Pydantic error URL references
+                if 'For further information visit' in error_msg:
+                    error_msg = error_msg.split('For further information visit')[0].strip()
+                # Remove [type=..., input_value=..., input_type=...] suffix
+                if '[type=' in error_msg:
+                    error_msg = error_msg.split('[type=')[0].strip()
+                # Extract the actual validation error message
+                if 'Value error,' in error_msg:
+                    # Get just the error description after 'Value error,'
+                    parts = error_msg.split('Value error,')
+                    if len(parts) > 1:
+                        error_msg = parts[-1].strip().rstrip(']').strip()
+                raise ValueError(f"Invalid volume mount at '{mount_path}': {error_msg}")
         else:
             # Basic validation only
             validated[mount_path] = validate_volume_mount_entry(mount_path, mount_config)
@@ -215,12 +568,17 @@ class VolumeMount(TapisModel):
     - read_only: Whether mount is read-only (default varies by type)
     - config_content: For ephemeral type, the inline config file content (max 1MB)
     - config_permissions: For ephemeral type, Unix file permissions (default 0644)
+    - mounted_by: Service-managed field tracking which user mounted this volume (set by API, not user)
     """
-    # Required field
-    type: str = Field(..., description="Type of mount: 'tapisvolume', 'tapissnapshot', 'ephemeral', or 'pvc'.")
+    
+    # Required field - using Literal for proper OpenAPI enum generation
+    type: VolumeMountType = Field(..., description="Type of mount: 'tapisvolume', 'tapissnapshot', 'ephemeral', or 'pvc'.")
     
     # Required for storage types, not used for ephemeral
     source_id: Optional[str] = Field(None, description="ID of the volume, snapshot, or PVC to mount. Required for tapisvolume/tapissnapshot/pvc.")
+    
+    # Service-managed field (not user-settable)
+    mounted_by: Optional[str] = Field(None, description="Service-managed: Username who mounted this volume. Set automatically when volume_mounts are created/updated.")
     
     # Optional fields for storage types
     sub_path: str = Field("", description="Sub-path within the source volume/snapshot to mount. Not used for ephemeral.")
@@ -232,23 +590,25 @@ class VolumeMount(TapisModel):
     config_filename: Optional[str] = Field(None, description="Filename for config file when using tapisvolume with config_content. Defaults to basename of mount_path.")
     config_update_mode: str = Field("always", description="Config update behavior: 'always' recreates config on each pod start, 'once' only creates if file/ConfigMap doesn't exist.")
 
-    @field_validator('type')
+    @field_validator('type', mode='before')
     @classmethod
     def check_type(cls, v):
-        v = v.lower()
-        valid_types = list(VALID_VOLUME_MOUNT_TYPES)
-        if v not in valid_types:
-            raise ValueError(f"volume_mounts type must be one of: {valid_types}. Got: '{v}'")
+        # Normalize to lowercase before Literal validation
+        if isinstance(v, str):
+            v = v.lower()
         return v
 
     @field_validator('source_id')
     @classmethod
     def check_source_id(cls, v):
         if v is not None and v != "":
-            # Regex match to ensure a-z0-9
+            # Allow placeholder pattern ${:?description} for templates
+            if VOLUME_PLACEHOLDER_PATTERN.match(v):
+                return v
+            # Otherwise validate as literal volume ID (a-z0-9 with hyphens)
             res = re.fullmatch(r'[a-z][a-z0-9\-]+', v)
             if not res:
-                raise ValueError(f"volume_mounts source_id must be lowercase alphanumeric (hyphens allowed). First character must be alpha. Got: {v}")
+                raise ValueError(f"volume_mounts source_id must be lowercase alphanumeric (hyphens allowed), first character must be alpha, or a placeholder '${{:?description}}'. Got: {v}")
         return v
 
     @field_validator('config_content')
@@ -499,6 +859,91 @@ def validate_volume_mounts_dict(volume_mounts: Any) -> Dict[str, Any]:
     return validated
 
 
+def validate_volume_mounts_on_start(
+    volume_mounts: Dict[str, Any],
+    pod_permissions: Dict[str, str],
+    tenant: str,
+    site: str
+) -> List[str]:
+    """
+    Validate volume mounts before starting/restarting a pod.
+    
+    For each tapisvolume/tapissnapshot mount WITH a `mounted_by` user set:
+    1. Check that the mounted_by user still has ADMIN or USER permission on the pod
+    2. Check that the mounted_by user still has READ permission on the volume/snapshot
+    
+    Note: Mounts without `mounted_by` are allowed (backward compatibility for older pods).
+    
+    Args:
+        volume_mounts: Dict of mount_path -> VolumeMount config (can be dict or VolumeMount object)
+        pod_permissions: Dict from pod.get_permissions() - {username: level}
+        tenant: Tenant ID
+        site: Site ID
+        
+    Returns:
+        List of error messages (empty if all valid)
+    """
+    if not volume_mounts:
+        return []
+    
+    # Import here to avoid circular imports
+    from models_volumes import Volume
+    from models_snapshots import Snapshot
+    from utils import check_permissions
+    import codes
+    
+    errors = []
+    
+    for mount_path, mount_config in volume_mounts.items():
+        if mount_config is None:
+            continue
+        
+        # Handle both dict and VolumeMount object
+        def get_field(field):
+            return mount_config.get(field) if isinstance(mount_config, dict) else getattr(mount_config, field, None)
+        
+        mount_type = get_field("type")
+        source_id = get_field("source_id")
+        mounted_by = get_field("mounted_by")
+        
+        # Only check tapisvolume/tapissnapshot with mounted_by set
+        if mount_type not in ("tapisvolume", "tapissnapshot") or not mounted_by or not source_id:
+            continue
+        
+        # Skip placeholders (shouldn't happen at start time)
+        if is_volume_placeholder(source_id):
+            continue
+        
+        # Check 1: mounted_by user must still have ADMIN or USER permission on the pod
+        if pod_permissions.get(mounted_by) not in (codes.ADMIN, codes.USER):
+            errors.append(
+                f"Volume at '{mount_path}' was mounted by '{mounted_by}' who no longer has "
+                f"ADMIN/USER permission on this pod. Remove the mount or re-add with a permitted user."
+            )
+            continue
+        
+        # Check 2: mounted_by user must still have READ permission on the volume/snapshot
+        try:
+            obj_type = "volume" if mount_type == "tapisvolume" else "snapshot"
+            Model = Volume if mount_type == "tapisvolume" else Snapshot
+            
+            resource = Model.db_get_with_pk(source_id, tenant=tenant, site=site)
+            if not resource:
+                errors.append(f"{obj_type.capitalize()} '{source_id}' at '{mount_path}' not found.")
+                continue
+            
+            if not check_permissions(user=mounted_by, level=codes.READ, object=resource, 
+                                     object_type=obj_type, roles=None, tenant=tenant):
+                errors.append(
+                    f"User '{mounted_by}' no longer has READ permission on {obj_type} '{source_id}' "
+                    f"at '{mount_path}'. Remove the mount or have a permitted user re-add it."
+                )
+        except Exception as e:
+            errors.append(f"Error checking {mount_type} '{source_id}' at '{mount_path}': {e}")
+    
+    return errors
+
+
 class VolumeMountValidationResult:
     """Result object for volume mount validation."""
     def __init__(self, is_valid: bool = True, errors: List[str] = None, warnings: List[str] = None, metadata: Dict[str, Any] = None):
@@ -519,24 +964,38 @@ def validate_volume_mounts_permissions(
     site: str = None,
     roles: List[str] = None,
     template_source: str = None,
-    is_blocking: bool = True
+    is_blocking: bool = True,
+    pod_admins: List[str] = None,
+    check_any_admin: bool = False
 ) -> VolumeMountValidationResult:
     """
     Validate that user has permission to use the volumes/snapshots in volume_mounts.
     
+    Permission Model:
+    - If check_any_admin=False (default, for create/update): 
+      The requesting user must have READ permission on volumes they're adding.
+    - If check_any_admin=True (for start/restart):
+      At least one pod admin must have READ permission on each volume.
+    
     Args:
         volume_mounts: Dict of mount_path -> VolumeMount config
-        user: Username making the request
+        user: Username making the request (required for permission checks)
         tenant: The tenant ID
         site: The site ID
-        roles: User's roles
+        roles: User's roles (for admin bypass)
         template_source: Source template for error messages
         is_blocking: If True, permission failures are errors. If False, they're warnings.
+        pod_admins: List of usernames with ADMIN permission on the pod (for check_any_admin)
+        check_any_admin: If True, check if ANY pod admin has permission (for start/restart)
         
     Returns:
-        VolumeMountValidationResult with is_valid, errors, warnings
+        VolumeMountValidationResult with is_valid, errors, warnings, and metadata
+        metadata includes:
+        - mounted_by: Dict of mount_path -> username who has permission (for audit)
+        - volume_placeholders: Any placeholder info
     """
     result = VolumeMountValidationResult()
+    result.metadata["mounted_by"] = {}
     
     if not volume_mounts:
         return result
@@ -544,6 +1003,8 @@ def validate_volume_mounts_permissions(
     # Import here to avoid circular imports
     from models_volumes import Volume
     from models_snapshots import Snapshot
+    from utils import check_permissions
+    import codes
     
     for mount_path, mount_config in volume_mounts.items():
         if mount_config is None:
@@ -551,6 +1012,10 @@ def validate_volume_mounts_permissions(
         
         mount_type = mount_config.get("type") if isinstance(mount_config, dict) else getattr(mount_config, "type", None)
         source_id = mount_config.get("source_id") if isinstance(mount_config, dict) else getattr(mount_config, "source_id", None)
+        
+        # Skip if source_id is a placeholder (templates only)
+        if source_id and is_volume_placeholder(source_id):
+            continue
         
         if mount_type == "tapisvolume" and source_id:
             try:
@@ -564,6 +1029,56 @@ def validate_volume_mounts_permissions(
                         result.is_valid = False
                     else:
                         result.warnings.append(msg)
+                    continue
+                
+                # Check permissions
+                if check_any_admin and pod_admins:
+                    # For start/restart: check if ANY pod admin has permission
+                    found_admin_with_access = None
+                    for admin_user in pod_admins:
+                        has_perm = check_permissions(
+                            user=admin_user,
+                            level=codes.READ,
+                            object=volume,
+                            object_type="volume",
+                            roles=None,  # Don't pass roles for other users
+                            tenant=tenant
+                        )
+                        if has_perm:
+                            found_admin_with_access = admin_user
+                            break
+                    
+                    if found_admin_with_access:
+                        result.metadata["mounted_by"][mount_path] = found_admin_with_access
+                    else:
+                        msg = f"No pod admin has READ permission on volume '{source_id}' at mount path '{mount_path}'"
+                        if is_blocking:
+                            result.errors.append(msg)
+                            result.is_valid = False
+                        else:
+                            result.warnings.append(msg)
+                elif user:
+                    # For create/update: requesting user must have permission
+                    has_perm = check_permissions(
+                        user=user,
+                        level=codes.READ,
+                        object=volume,
+                        object_type="volume",
+                        roles=roles,
+                        tenant=tenant
+                    )
+                    if has_perm:
+                        result.metadata["mounted_by"][mount_path] = user
+                    else:
+                        msg = f"User '{user}' does not have READ permission on volume '{source_id}' at mount path '{mount_path}'"
+                        if template_source:
+                            msg += f" (from template {template_source})"
+                        if is_blocking:
+                            result.errors.append(msg)
+                            result.is_valid = False
+                        else:
+                            result.warnings.append(msg)
+                            
             except Exception as e:
                 msg = f"Error checking volume '{source_id}': {e}"
                 result.warnings.append(msg)
@@ -580,6 +1095,54 @@ def validate_volume_mounts_permissions(
                         result.is_valid = False
                     else:
                         result.warnings.append(msg)
+                    continue
+                
+                # Check permissions (same logic as volumes)
+                if check_any_admin and pod_admins:
+                    found_admin_with_access = None
+                    for admin_user in pod_admins:
+                        has_perm = check_permissions(
+                            user=admin_user,
+                            level=codes.READ,
+                            object=snapshot,
+                            object_type="snapshot",
+                            roles=None,
+                            tenant=tenant
+                        )
+                        if has_perm:
+                            found_admin_with_access = admin_user
+                            break
+                    
+                    if found_admin_with_access:
+                        result.metadata["mounted_by"][mount_path] = found_admin_with_access
+                    else:
+                        msg = f"No pod admin has READ permission on snapshot '{source_id}' at mount path '{mount_path}'"
+                        if is_blocking:
+                            result.errors.append(msg)
+                            result.is_valid = False
+                        else:
+                            result.warnings.append(msg)
+                elif user:
+                    has_perm = check_permissions(
+                        user=user,
+                        level=codes.READ,
+                        object=snapshot,
+                        object_type="snapshot",
+                        roles=roles,
+                        tenant=tenant
+                    )
+                    if has_perm:
+                        result.metadata["mounted_by"][mount_path] = user
+                    else:
+                        msg = f"User '{user}' does not have READ permission on snapshot '{source_id}' at mount path '{mount_path}'"
+                        if template_source:
+                            msg += f" (from template {template_source})"
+                        if is_blocking:
+                            result.errors.append(msg)
+                            result.is_valid = False
+                        else:
+                            result.warnings.append(msg)
+                            
             except Exception as e:
                 msg = f"Error checking snapshot '{source_id}': {e}"
                 result.warnings.append(msg)

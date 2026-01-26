@@ -46,6 +46,7 @@ from models_volumes import Volume
 from models_snapshots import Snapshot
 from models_templates_utils import combine_pod_and_template_recursively
 from secret_utils import resolve_secret_map
+from models_volume_mounts_utils import validate_volume_mounts_on_start
 from psycopg2 import ProgrammingError
 from sqlmodel import select
 from tapisservice.config import conf
@@ -438,26 +439,44 @@ def check_db_pods(k8_pods):
                     logger.info(f"pod_id: {pod.pod_id} in RESTART and STOPPED, so switching status_requested back to ON.")
                     pod.status_requested = ON
 
-                # Resolve secrets at central health layer before sending to spawner
-                # This allows edge spawners to work without direct SK access
-                #
-                # IMPORTANT: If pod uses a template, merge template's secret_map first
-                # so template-defined secrets get resolved and sent to spawner
-                resolved_secrets = {}
-                
-                # Derive merged secret_map if pod uses a template
+                # Derive template info first (needed for both volume and secret validation)
+                derived_pod = None
                 if pod.template:
                     try:
                         pod_copy = PodBaseFull(**pod.dict().copy())
                         derived_pod = combine_pod_and_template_recursively(
                             pod_copy, pod.template, tenant=pod.tenant_id, site=pod.site_id
                         )
-                        merged_secret_map = getattr(derived_pod, 'secret_map', {}) or {}
                     except Exception as e:
                         logger.error(f"Failed to derive template for pod {pod.pod_id}: {e}")
                         pod.status = ERROR
                         pod.db_update(f"health failed to derive template: {str(e)}")
                         continue
+
+                # Validate volume mounts before starting:
+                # - Check mounted_by users still have permission on the pod
+                # - Check mounted_by users still have READ permission on volumes/snapshots
+                derived_volume_mounts = getattr(derived_pod, 'volume_mounts', {}) if derived_pod else (pod.volume_mounts or {})
+                if derived_volume_mounts:
+                    vm_errors = validate_volume_mounts_on_start(
+                        volume_mounts=derived_volume_mounts,
+                        pod_permissions=pod.get_permissions(),
+                        tenant=pod.tenant_id,
+                        site=pod.site_id
+                    )
+                    if vm_errors:
+                        logger.error(f"Volume mount validation failed for pod {pod.pod_id}: {'; '.join(vm_errors)}")
+                        pod.status = ERROR
+                        pod.db_update(f"health volume mount validation failed: {'; '.join(vm_errors)}")
+                        continue
+
+                # Resolve secrets at central health layer before sending to spawner
+                # This allows edge spawners to work without direct SK access
+                resolved_secrets = {}
+                
+                # Get merged secret_map (use derived_pod if already computed)
+                if derived_pod:
+                    merged_secret_map = getattr(derived_pod, 'secret_map', {}) or {}
                 else:
                     merged_secret_map = pod.secret_map or {}
                 
