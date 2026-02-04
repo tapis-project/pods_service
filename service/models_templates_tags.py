@@ -5,7 +5,7 @@ from sre_constants import ANY
 from string import ascii_letters, digits
 from secrets import choice
 from datetime import datetime
-from typing import List, Dict, Literal, Any, Set
+from typing import List, Dict, Literal, Any, Set, Optional
 from wsgiref import validate
 from pydantic import BaseModel, Field, validator, model_validator, conint, create_model
 from codes import PermissionLevel
@@ -720,6 +720,26 @@ class TemplateTag(TapisTemplateTagBaseFull, table=True, validate=True):
         return display
 
 
+class TemplateTagDependents(TapisApiModel):
+    """Dependency information for a template tag."""
+    dependant_pods: List[str] = Field([], description="List of pod IDs that depend on this template tag.")
+    dependant_pod_count: int = Field(0, description="Number of pods that depend on this template tag.")
+    dependant_tags: List[str] = Field([], description="List of template tag timestamps that depend on this template tag.")
+    dependant_tags_count: int = Field(0, description="Number of template tags that depend on this template tag.")
+
+
+class TemplateTagWithDependents(TemplateTagBaseRead):
+    """Template tag with optional dependency information."""
+    # Include all fields from TemplateTagBaseFull
+    tenant_id: str = Field("", description="Tapis tenant used during creation of this template tag.")
+    site_id: str = Field("", description="Tapis site used during creation of this template tag.")
+    # Optional dependents field
+    dependents: Optional[TemplateTagDependents] = Field(None, description="Dependency information (only present when include_dependencies=true).")
+
+    class Config:
+        extra = "allow"
+
+
 class TemplateTagNoDefinition(TapisApiModel):
     creation_ts: datetime | None = Field(None, description = "Time (UTC) that this template tag was created.")
     added_by: str = Field("", description = "User who added this template tag.")
@@ -752,6 +772,15 @@ class TemplateTagResponse(TapisApiModel):
     version: str
 
 
+class TemplateTagDeleteResponse(TapisApiModel):
+    """Response type for delete operations that may return None result on error."""
+    message: str
+    metadata: Dict
+    result: Optional[Dict] = None
+    status: str
+    version: str
+
+
 class TemplateTagsResponse(TapisApiModel):
     message: str
     metadata: Dict
@@ -763,5 +792,23 @@ class TemplateTagsSmallResponse(TapisApiModel):
     message: str
     metadata: Dict
     result: List[TemplateTagNoDefinition]
+    status: str
+    version: str
+
+
+class TemplateTagsWithDependentsResponse(TapisApiModel):
+    """Response type for template tags list with optional dependency information."""
+    message: str
+    metadata: Dict
+    result: List[TemplateTagWithDependents]
+    status: str
+    version: str
+
+
+class TemplateTagWithDependentsResponse(TapisApiModel):
+    """Response type for a single template tag with optional dependency information."""
+    message: str
+    metadata: Dict
+    result: TemplateTagWithDependents
     status: str
     version: str

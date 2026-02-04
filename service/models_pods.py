@@ -975,7 +975,8 @@ class UpdatePod(TapisApiModel):
     description: Optional[str] = Field("", description = "Description of this pod.")
     command: Optional[List[str]] = Field(None, description = 'Command to run in pod. ex. ["sleep", "5000"] or ["/bin/bash", "-c", "(exec myscript.sh)"]', sa_column=Column(ARRAY(String)))
     arguments: List[str] | None = Field(None, description = "Arguments for the Pod's command.", sa_column=Column(ARRAY(String)))
-    environment_variables: Optional[Dict[str, Any]] = Field({}, description = "Environment variables to inject into k8 pod.", sa_column=Column(JSON))
+    environment_variables: Optional[Dict[str, Any]] = Field({}, description = "Environment variables to inject into k8 pod. Use `${pods:secrets:KEY}` to reference secret_map entries.", sa_column=Column(JSON))
+    secret_map: Optional[Dict[str, str]] = Field(None, description = "Map of keys to secret values. Syntax: ${secret:name} (user secret), ${secret:user:name} (explicit owner). Reference in environment_variables via ${pods:secrets:KEY}. Resolved at pod start.", sa_column=Column(JSON))
     status_requested: Optional[str] = Field("ON", description = "Status requested by user, `ON`, `OFF`, or `RESTART`.")
     volume_mounts: Optional[Dict[str, Optional[VolumeMount]]] = Field(
         {}, 
@@ -987,6 +988,7 @@ class UpdatePod(TapisApiModel):
     networking: Optional[Dict[str, Networking]] = Field({"default": {"protocol": "http", "port": 5000}}, description = 'Networking information. {"url_suffix": {"protocol": "http"  "tcp", "port": int}}', sa_column=Column(JSON))
     resources: Optional[Resources] = Field({}, description = 'Pod resource management {"cpu_limit": 3000, "mem_limit": 3000, "cpu_request": 500, "mem_limit": 500, "gpu": 0}', sa_column=Column(JSON))
     compute_queue: str = Field("default", description = "Queue to run pod in. `default` is the default queue.")
+    template_overrides: Optional[Dict[str, Any]] = Field(None, description = 'Partial overrides for template values. Override volume_mounts or secret_map values without rewriting full template field. Ex: {"volume_mounts": {"/data": {"source_id": "my-vol"}}, "secret_map": {"DB_PASS": "${secret:mypass}"}}', sa_column=Column(JSON))
 
     
 class ExecutePodCommands(BaseModel):

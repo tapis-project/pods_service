@@ -14,6 +14,7 @@ from tapisservice.errors import BaseTapisError
 from volume_utils import get_nfs_ip
 import os
 import hashlib
+import re
 
 logger = get_logger(__name__)
 
@@ -122,10 +123,20 @@ def start_generic_pod(input_pod, revision: int, resolved_secrets: dict = None):
                 read_only = vol_type in ['tapissnapshot', 'ephemeral']
             
             # Generate unique k8 name using hash of mount_path
-            # Kubernetes volume names must be <= 63 characters
+            # Kubernetes volume names must be <= 63 characters and RFC 1123 compliant
+            # (lowercase alphanumeric or '-', must start/end with alphanumeric)
             mount_hash = hashlib.md5(mount_path.encode()).hexdigest()[:8]
             source_name = source_id if source_id else "ephemeral"
             source_name = source_name[:9]
+            # Sanitize source_name: remove invalid characters for K8s names
+            # Only allow lowercase alphanumeric and hyphens, must start/end with alphanumeric
+            source_name = re.sub(r'[^a-z0-9-]', '', source_name.lower())
+            if not source_name or not source_name[0].isalnum():
+                source_name = "vol" + source_name
+            if source_name and not source_name[-1].isalnum():
+                source_name = source_name.rstrip('-')
+            if not source_name:
+                source_name = "ephemeral"
             full_k8_name = f"{pod.k8_name}--{source_name}--{mount_hash}"
             # Truncate to 63 chars if needed (hash at end ensures uniqueness)
             if len(full_k8_name) > 62:

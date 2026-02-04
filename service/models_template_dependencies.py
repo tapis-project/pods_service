@@ -22,7 +22,7 @@ logger = get_logger(__name__)
 
 
 # Users allowed to access template dependencies (besides admins)
-ALLOWED_DEPENDENCY_USERS = ['cgarcia']
+ALLOWED_DEPENDENCY_USERS = ['cgarcia', '_pods_testuser_admin']
 
 
 def is_user_allowed_for_dependencies(username: str, is_admin: bool) -> bool:
@@ -71,9 +71,9 @@ def get_template_dependencies(
         FROM template_dependencies
         WHERE template_id = :template_id
         ORDER BY tag_timestamp DESC
-    """)
+    """).bindparams(template_id=template_id)
     
-    result = store.run("execute", query, fn_params={"parameters": {"template_id": template_id}}, all=True)
+    result = store.run("execute", query, all=True)
     
     dependencies = []
     for row in result:
@@ -126,8 +126,7 @@ def get_tag_dependencies(
                 dependant_tags_count
             FROM template_dependencies
             WHERE template_id = :template_id AND tag_timestamp = :tag_timestamp
-        """)
-        params = {"template_id": template_id, "tag_timestamp": tag_timestamp}
+        """).bindparams(template_id=template_id, tag_timestamp=tag_timestamp)
     else:
         # Just tag name, match by prefix
         query = text("""
@@ -142,10 +141,9 @@ def get_tag_dependencies(
             FROM template_dependencies
             WHERE template_id = :template_id AND tag_timestamp LIKE :tag_pattern
             ORDER BY tag_timestamp DESC
-        """)
-        params = {"template_id": template_id, "tag_pattern": f"{tag_timestamp}@%"}
+        """).bindparams(template_id=template_id, tag_pattern=f"{tag_timestamp}@%")
     
-    result = store.run("execute", query, fn_params={"parameters": params}, all=True)
+    result = store.run("execute", query, all=True)
     
     dependencies = []
     for row in result:

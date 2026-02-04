@@ -914,15 +914,25 @@ def validate_volume_mounts_on_start(
         if is_volume_placeholder(source_id):
             continue
         
-        # Check 1: mounted_by user must still have ADMIN or USER permission on the pod
-        if pod_permissions.get(mounted_by) not in (codes.ADMIN, codes.USER):
+        # Check 1: mounted_by user must exist in pod_permissions
+        current_permission = pod_permissions.get(mounted_by)
+        if current_permission is None:
             errors.append(
-                f"Volume at '{mount_path}' was mounted by '{mounted_by}' who no longer has "
-                f"ADMIN/USER permission on this pod. Remove the mount or re-add with a permitted user."
+                f"Volume at '{mount_path}' was mounted by '{mounted_by}' who is no longer in this pod's "
+                f"permissions list. Remove the mount or re-add with a permitted user."
             )
             continue
         
-        # Check 2: mounted_by user must still have READ permission on the volume/snapshot
+        # Check 2: mounted_by user must have ADMIN or USER permission on the pod
+        # Note: pod_permissions values are strings, so compare against string literals
+        if current_permission not in ("ADMIN", "USER"):
+            errors.append(
+                f"Volume at '{mount_path}' was mounted by '{mounted_by}' who has '{current_permission}' permission "
+                f"but requires ADMIN or USER. Remove the mount or re-add with a permitted user."
+            )
+            continue
+        
+        # Check 3: mounted_by user must still have READ permission on the volume/snapshot
         try:
             obj_type = "volume" if mount_type == "tapisvolume" else "snapshot"
             Model = Volume if mount_type == "tapisvolume" else Snapshot
@@ -935,8 +945,9 @@ def validate_volume_mounts_on_start(
             if not check_permissions(user=mounted_by, level=codes.READ, object=resource, 
                                      object_type=obj_type, roles=None, tenant=tenant):
                 errors.append(
-                    f"User '{mounted_by}' no longer has READ permission on {obj_type} '{source_id}' "
-                    f"at '{mount_path}'. Remove the mount or have a permitted user re-add it."
+                    f"User '{mounted_by}' (who has '{current_permission}' on pod) no longer has READ permission on "
+                    f"{obj_type} '{source_id}' at '{mount_path}'. Remove the mount or have a user with both "
+                    f"pod ADMIN/USER permission AND {obj_type} READ permission re-add it."
                 )
         except Exception as e:
             errors.append(f"Error checking {mount_type} '{source_id}' at '{mount_path}': {e}")

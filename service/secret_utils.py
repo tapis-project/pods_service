@@ -660,8 +660,8 @@ def resolve_secret_map(
     secret_map: Dict[str, str],
     site_id: str,
     tenant_id: str,
-    actor: str,
-    pod_id: str,
+    actor: str = None,
+    pod_id: str = None,
     pod: Any = None
 ) -> Tuple[Dict[str, str], List[str]]:
     """
@@ -679,7 +679,9 @@ def resolve_secret_map(
         secret_map: Dict mapping env var names to secret references
         site_id: Site ID for secret lookup
         tenant_id: Tenant ID of the pod owner
-        actor: Username performing the action
+        actor: Username performing the action. If None, uses owner from secret notation.
+               When provided, secret owner must match actor (API mode).
+               When None, trusts the owner embedded in secret notation (health mode).
         pod_id: Pod ID for logging
         pod: Optional Pod object for networking resolution and random password persistence
         
@@ -712,7 +714,7 @@ def resolve_secret_map(
             log_secret_event(
                 event_type="SECRET_RESOLUTION_FAILED",
                 secret_id=value,
-                actor=actor,
+                actor=actor or "unknown",
                 pod_id=pod_id,
                 tenant_id=tenant_id,
                 site_id=site_id,
@@ -731,7 +733,7 @@ def resolve_secret_map(
                 log_secret_event(
                     event_type="SECRET_RESOLUTION_FAILED",
                     secret_id=env_var,
-                    actor=actor,
+                    actor=actor or "unknown",
                     pod_id=pod_id,
                     tenant_id=tenant_id,
                     site_id=site_id,
@@ -752,11 +754,14 @@ def resolve_secret_map(
         
         # User secret reference - fetch from SK
         if ref.is_user_secret:
-            # Ownership check from notation (defense-in-depth)
-            if ref.secret_owner != actor:
+            # The effective actor is always the secret owner from notation
+            effective_actor = ref.secret_owner
+            
+            # If actor provided (API mode), verify it matches the secret owner
+            if actor and effective_actor != actor:
                 errors.append(
-                    f"Key '{env_var}': Secret reference specifies user '{ref.secret_owner}' "
-                    f"but pod owner is '{actor}'."
+                    f"Key '{env_var}': Secret reference specifies user '{effective_actor}' "
+                    f"but requesting user is '{actor}'."
                 )
                 log_secret_event(
                     event_type="SECRET_RESOLUTION_FAILED",
@@ -767,8 +772,8 @@ def resolve_secret_map(
                     site_id=site_id,
                     details={
                         "reason": "Ownership mismatch at resolution",
-                        "reference_owner": ref.secret_owner,
-                        "pod_owner": actor
+                        "reference_owner": effective_actor,
+                        "requesting_user": actor
                     }
                 )
                 continue
@@ -780,7 +785,7 @@ def resolve_secret_map(
                     log_secret_event(
                         event_type="SECRET_RESOLUTION_FAILED",
                         secret_id=ref.secret_id,
-                        actor=actor,
+                        actor=effective_actor,
                         pod_id=pod_id,
                         tenant_id=tenant_id,
                         site_id=site_id,
@@ -789,23 +794,23 @@ def resolve_secret_map(
                     continue
                 
                 # Double-check DB ownership (defense-in-depth)
-                if secret.added_by != actor:
+                if secret.added_by != effective_actor:
                     errors.append(
                         f"Key '{env_var}': Secret '{ref.secret_id}' is owned by "
-                        f"'{secret.added_by}' in database, not '{actor}'."
+                        f"'{secret.added_by}' in database, not '{effective_actor}'."
                     )
                     log_secret_event(
                         event_type="SECRET_RESOLUTION_FAILED",
                         secret_id=ref.secret_id,
                         sk_secret_name=secret.sk_secret_name,
-                        actor=actor,
+                        actor=effective_actor,
                         pod_id=pod_id,
                         tenant_id=tenant_id,
                         site_id=site_id,
                         details={
                             "reason": "DB ownership mismatch at resolution",
                             "secret_owner": secret.added_by,
-                            "requesting_user": actor
+                            "requesting_user": effective_actor
                         }
                     )
                     continue
@@ -826,7 +831,7 @@ def resolve_secret_map(
                     event_type="SECRET_INJECTED",
                     secret_id=ref.secret_id,
                     sk_secret_name=secret.sk_secret_name,
-                    actor=actor,
+                    actor=effective_actor,
                     pod_id=pod_id,
                     tenant_id=tenant_id,
                     site_id=site_id,
@@ -840,7 +845,7 @@ def resolve_secret_map(
                 log_secret_event(
                     event_type="SECRET_RESOLUTION_FAILED",
                     secret_id=ref.secret_id,
-                    actor=actor,
+                    actor=effective_actor,
                     pod_id=pod_id,
                     tenant_id=tenant_id,
                     site_id=site_id,

@@ -54,6 +54,11 @@ test_template_tag_secrets_invalid = "invalidsecrets"
 test_pod_secrets_template = "testpodsecretstmpl"
 test_pod_secrets_override = "testpodsecretsovrde"
 
+# Template Tag Delete Tests variables
+test_template_tag_delete_by_tag = "deletetag"
+test_template_tag_delete_by_timestamp = "deletetimestamp"
+test_template_tag_delete_with_force = "deleteforce"
+
 
 ##### Teardown
 @pytest.fixture(scope="module", autouse=True)
@@ -365,6 +370,278 @@ def test_list_template_tags_with_period(headers):
     assert len(result) == 6
     for tag in result:
         assert tag['tag'] in [test_template_tag_0, test_template_tag_1, test_template_tag_2, test_template_tag_3, test_template_tag_4, test_template_tag_5]
+
+
+###
+### Template Tag Delete Tests
+###
+def test_add_tags_for_delete_tests(headers):
+    """Add template tags to test deletion."""
+    # Add tag for delete by tag name
+    tag_def = {
+        "pod_definition": {"image": "notchristiangarcia/testserver:fastapi"},
+        "tag": test_template_tag_delete_by_tag,
+        "commit_message": "Tag for delete by tag name test"
+    }
+    rsp = client.post(f"/pods/templates/{test_template_1}/tags", data=json.dumps(tag_def), headers=headers)
+    result = basic_response_checks(rsp)
+    assert test_template_tag_delete_by_tag in result['tag_timestamp']
+    
+    # Add tag for delete by timestamp
+    tag_def["tag"] = test_template_tag_delete_by_timestamp
+    rsp = client.post(f"/pods/templates/{test_template_1}/tags", data=json.dumps(tag_def), headers=headers)
+    result = basic_response_checks(rsp)
+    global delete_by_timestamp_full
+    delete_by_timestamp_full = result['tag_timestamp']
+    
+    # Add tag for force delete
+    tag_def["tag"] = test_template_tag_delete_with_force
+    rsp = client.post(f"/pods/templates/{test_template_1}/tags", data=json.dumps(tag_def), headers=headers)
+    result = basic_response_checks(rsp)
+    global delete_force_full_timestamp
+    delete_force_full_timestamp = result['tag_timestamp']
+
+
+def test_delete_template_tag_by_tag_name(headers):
+    """Test deleting a template tag by tag name only."""
+    rsp = client.delete(f"/pods/templates/{test_template_1}/tags/{test_template_tag_delete_by_tag}", headers=headers)
+    result = basic_response_checks(rsp)
+    
+    # Confirm tag no longer exists
+    rsp = client.get(f"/pods/templates/{test_template_1}/tags", headers=headers)
+    result = basic_response_checks(rsp)
+    tags = [tag['tag'] for tag in result]
+    assert test_template_tag_delete_by_tag not in tags
+
+
+def test_delete_template_tag_by_full_timestamp(headers):
+    """Test deleting a template tag by tag@timestamp."""
+    rsp = client.delete(f"/pods/templates/{test_template_1}/tags/{delete_by_timestamp_full}", headers=headers)
+    result = basic_response_checks(rsp)
+    
+    # Confirm tag no longer exists
+    rsp = client.get(f"/pods/templates/{test_template_1}/tags", headers=headers)
+    result = basic_response_checks(rsp)
+    tags = [tag['tag'] for tag in result]
+    assert test_template_tag_delete_by_timestamp not in tags
+
+
+def test_delete_template_tag_with_force(headers):
+    """Test deleting a tag with force=true."""
+    rsp = client.delete(f"/pods/templates/{test_template_1}/tags/{delete_force_full_timestamp}?force=true", headers=headers)
+    result = basic_response_checks(rsp)
+    
+    # Confirm tag no longer exists
+    rsp = client.get(f"/pods/templates/{test_template_1}/tags", headers=headers)
+    result = basic_response_checks(rsp)
+    tags = [tag['tag'] for tag in result]
+    assert test_template_tag_delete_with_force not in tags
+
+
+def test_delete_nonexistent_template_tag_fails(headers):
+    """Test that deleting a non-existent tag returns appropriate error."""
+    rsp = client.delete(f"/pods/templates/{test_template_1}/tags/nonexistenttag", headers=headers)
+    assert rsp.status_code in [400, 404], f"Expected 400 or 404, got {rsp.status_code}"
+
+
+###
+### Template Dependencies Tests (include_dependencies parameter)
+###
+def test_list_template_tags_with_include_dependencies(headers):
+    """Test that list_template_tags endpoint returns dependents when include_dependencies=true."""
+    rsp = client.get(f"/pods/templates/{test_template_1}/tags?include_dependencies=true", headers=headers)
+    result = basic_response_checks(rsp)
+    
+    # Should have template tags
+    assert len(result) >= 1
+    
+    # Each tag should have a dependents field when include_dependencies=true
+    for tag in result:
+        assert 'dependents' in tag, f"Tag {tag.get('tag')} missing 'dependents' field"
+        dependents = tag['dependents']
+        # Check structure of dependents object
+        assert 'dependant_pods' in dependents
+        assert 'dependant_pod_count' in dependents
+        assert 'dependant_tags' in dependents
+        assert 'dependant_tags_count' in dependents
+        # Values should be appropriate types
+        assert isinstance(dependents['dependant_pods'], list)
+        assert isinstance(dependents['dependant_pod_count'], int)
+        assert isinstance(dependents['dependant_tags'], list)
+        assert isinstance(dependents['dependant_tags_count'], int)
+
+
+def test_list_template_tags_without_include_dependencies(headers):
+    """Test that list_template_tags endpoint does NOT return dependents when include_dependencies is not set."""
+    rsp = client.get(f"/pods/templates/{test_template_1}/tags", headers=headers)
+    result = basic_response_checks(rsp)
+    
+    # Should have template tags
+    assert len(result) >= 1
+    
+    # Tags should NOT have dependents field when include_dependencies is not set
+    for tag in result:
+        assert 'dependents' not in tag, f"Tag {tag.get('tag')} should not have 'dependents' field when include_dependencies is false"
+
+
+def test_list_template_tags_include_dependencies_false(headers):
+    """Test that list_template_tags endpoint does NOT return dependents when include_dependencies=false."""
+    rsp = client.get(f"/pods/templates/{test_template_1}/tags?include_dependencies=false", headers=headers)
+    result = basic_response_checks(rsp)
+    
+    # Should have template tags
+    assert len(result) >= 1
+    
+    # Tags should NOT have dependents field
+    for tag in result:
+        assert 'dependents' not in tag, f"Tag {tag.get('tag')} should not have 'dependents' field when include_dependencies=false"
+
+
+def test_list_template_tags_with_full_and_include_dependencies(headers):
+    """Test that list_template_tags endpoint works with both full=true and include_dependencies=true."""
+    rsp = client.get(f"/pods/templates/{test_template_1}/tags?full=true&include_dependencies=true", headers=headers)
+    result = basic_response_checks(rsp)
+    
+    assert len(result) >= 1
+    
+    for tag in result:
+        # Should have pod_definition when full=true
+        assert 'pod_definition' in tag, f"Tag {tag.get('tag')} missing 'pod_definition' field"
+        # Should have dependents when include_dependencies=true
+        assert 'dependents' in tag, f"Tag {tag.get('tag')} missing 'dependents' field"
+
+
+def test_get_template_tag_with_include_dependencies(headers):
+    """Test that get_template_tag endpoint (specific tag) returns dependents when include_dependencies=true."""
+    rsp = client.get(f"/pods/templates/{test_template_1}/tags/{test_template_tag_1}?include_dependencies=true", headers=headers)
+    result = basic_response_checks(rsp)
+    
+    # Should return at least one tag
+    assert len(result) >= 1
+    
+    # Each returned tag should have dependents
+    for tag in result:
+        assert 'dependents' in tag, f"Tag {tag.get('tag')} missing 'dependents' field"
+        dependents = tag['dependents']
+        assert 'dependant_pods' in dependents
+        assert 'dependant_pod_count' in dependents
+        assert 'dependant_tags' in dependents
+        assert 'dependant_tags_count' in dependents
+
+
+def test_get_template_with_include_dependencies(headers):
+    """Test that get_template endpoint returns tag_dependents when include_dependencies=true."""
+    rsp = client.get(f"/pods/templates/{test_template_1}?include_dependencies=true", headers=headers)
+    result = basic_response_checks(rsp)
+    
+    # Should have template info
+    assert result['template_id'] == test_template_1
+    
+    # Should have tag_dependents field when include_dependencies=true
+    assert 'tag_dependents' in result, "Template missing 'tag_dependents' field"
+    tag_dependents = result['tag_dependents']
+    
+    # tag_dependents should be a list
+    assert isinstance(tag_dependents, list)
+    
+    # If there are dependents, check their structure
+    for dep in tag_dependents:
+        assert 'tag_timestamp' in dep
+        assert 'dependant_pods' in dep
+        assert 'dependant_pod_count' in dep
+        assert 'dependant_tags' in dep
+        assert 'dependant_tags_count' in dep
+
+
+def test_get_template_without_include_dependencies(headers):
+    """Test that get_template endpoint does NOT return tag_dependents when include_dependencies is not set."""
+    rsp = client.get(f"/pods/templates/{test_template_1}", headers=headers)
+    result = basic_response_checks(rsp)
+    
+    # Should have template info
+    assert result['template_id'] == test_template_1
+    
+    # Should NOT have tag_dependents field
+    assert 'tag_dependents' not in result, "Template should not have 'tag_dependents' field when include_dependencies is false"
+
+
+def test_list_templates_with_include_dependencies(headers):
+    """Test that list_templates endpoint returns tag_dependents when include_dependencies=true."""
+    rsp = client.get("/pods/templates?include_dependencies=true", headers=headers)
+    result = basic_response_checks(rsp)
+    
+    # Should have templates
+    assert len(result) >= 1
+    
+    # Find our test template and check it has tag_dependents
+    test_template_found = False
+    for template in result:
+        if template.get('template_id') == test_template_1:
+            test_template_found = True
+            assert 'tag_dependents' in template, f"Template {test_template_1} missing 'tag_dependents' field"
+            assert isinstance(template['tag_dependents'], list)
+            break
+    
+    assert test_template_found, f"Test template {test_template_1} not found in list"
+
+
+def test_list_templates_without_include_dependencies(headers):
+    """Test that list_templates endpoint does NOT return tag_dependents when include_dependencies is not set."""
+    rsp = client.get("/pods/templates", headers=headers)
+    result = basic_response_checks(rsp)
+    
+    # Should have templates
+    assert len(result) >= 1
+    
+    # Templates should NOT have tag_dependents field
+    for template in result:
+        assert 'tag_dependents' not in template, f"Template {template.get('template_id')} should not have 'tag_dependents' field"
+
+
+def test_list_templates_and_tags_with_include_dependencies(headers):
+    """Test that list_templates_and_tags endpoint returns dependents when include_dependencies=true."""
+    rsp = client.get("/pods/templates/tags?include_dependencies=true", headers=headers)
+    result = basic_response_checks(rsp)
+    
+    # Result is a dict with template_id as keys
+    assert isinstance(result, dict)
+    assert len(result) >= 1
+    
+    # Find our test template
+    assert test_template_1 in result, f"Test template {test_template_1} not found"
+    
+    template_data = result[test_template_1]
+    assert 'tags' in template_data
+    
+    # Each tag should have dependents
+    for tag in template_data['tags']:
+        assert 'dependents' in tag, f"Tag {tag.get('tag')} missing 'dependents' field"
+        dependents = tag['dependents']
+        assert 'dependant_pods' in dependents
+        assert 'dependant_pod_count' in dependents
+        assert 'dependant_tags' in dependents
+        assert 'dependant_tags_count' in dependents
+
+
+def test_list_templates_and_tags_without_include_dependencies(headers):
+    """Test that list_templates_and_tags endpoint does NOT return dependents when include_dependencies is not set."""
+    rsp = client.get("/pods/templates/tags", headers=headers)
+    result = basic_response_checks(rsp)
+    
+    # Result is a dict with template_id as keys
+    assert isinstance(result, dict)
+    assert len(result) >= 1
+    
+    # Find our test template
+    assert test_template_1 in result, f"Test template {test_template_1} not found"
+    
+    template_data = result[test_template_1]
+    assert 'tags' in template_data
+    
+    # Tags should NOT have dependents field
+    for tag in template_data['tags']:
+        assert 'dependents' not in tag, f"Tag {tag.get('tag')} should not have 'dependents' field"
+
 
 ###
 ### Create pods with templates

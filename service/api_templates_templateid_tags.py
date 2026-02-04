@@ -2,7 +2,7 @@ from typing import Union
 from fastapi import Query, Path, File, APIRouter
 from models_misc import SetPermission
 from models_templates import Template, TemplatePermissionsResponse
-from models_templates_tags import TemplateTagsResponse, TemplateTagResponse, NewTemplateTag, TemplateTag, TemplateTagsSmallResponse
+from models_templates_tags import TemplateTagsResponse, TemplateTagResponse, NewTemplateTag, TemplateTag, TemplateTagsSmallResponse, TemplateTagsWithDependentsResponse
 from models_templates_utils import validate_template_tag_secret_map, validate_template_tag_env_vars
 from models_volume_mounts_utils import (
     validate_template_volume_mounts,
@@ -26,7 +26,8 @@ router = APIRouter()
     tags=["Templates"],
     summary="list_template_tags",
     operation_id="list_template_tags",
-    response_model=TemplateTagsResponse)
+    response_model=Union[TemplateTagsWithDependentsResponse, TemplateTagsResponse],
+    response_model_exclude_none=True)
 async def list_template_tags(
     template_id: str,
     full: bool = Query(True, description="Return pod_definition in tag when full=true"),
@@ -38,11 +39,12 @@ async def list_template_tags(
 
     Returns the ledger of template tags
     """
-    logger.info(f"GET /pods/templates/{template_id}/tags - Top of list_template_tags with full={full}.")
+    logger.info(f"GET /pods/templates/{template_id}/tags - Top of list_template_tags with full={full}, include_dependencies={include_dependencies}.")
     template_tags = TemplateTag.db_get_where(where_params=[['template_id', '.eq', template_id]], sort_column='creation_ts', tenant="siteadmintable", site=g.site_id)
 
     # Check if user can view dependencies
     can_view_deps = include_dependencies #and is_user_allowed_for_dependencies(g.username, getattr(g, 'admin', False))
+    logger.debug(f"can_view_deps={can_view_deps}")
     
     # Get dependencies if requested and allowed
     tag_deps_lookup = {}
@@ -53,6 +55,7 @@ async def list_template_tags(
                 tenant="siteadmintable",
                 site=g.site_id
             )
+            logger.debug(f"Got {len(deps)} dependency records for template {template_id}")
             for dep in deps:
                 tag_deps_lookup[dep['tag_timestamp']] = dep
         except Exception as e:

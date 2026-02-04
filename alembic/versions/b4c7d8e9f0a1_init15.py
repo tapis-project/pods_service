@@ -52,13 +52,14 @@ def upgrade_alltenants():
     if schema != 'siteadmintable':
         return
     
-    # Get all tenant schemas that have a pod table
+    # Get all tenant schemas that have a pod table WITH a template column
     result = connection.execute(sa.text("""
-        SELECT DISTINCT table_schema 
-        FROM information_schema.tables 
-        WHERE table_name = 'pod' 
-        AND table_schema NOT IN ('information_schema', 'pg_catalog', 'public')
-        ORDER BY table_schema
+        SELECT DISTINCT c.table_schema 
+        FROM information_schema.columns c
+        WHERE c.table_name = 'pod' 
+        AND c.column_name = 'template'
+        AND c.table_schema NOT IN ('information_schema', 'pg_catalog', 'public')
+        ORDER BY c.table_schema
     """))
     tenant_schemas = [row[0] for row in result]
     

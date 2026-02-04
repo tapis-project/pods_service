@@ -3,9 +3,10 @@ from codes import ERROR, SPAWNER_SETUP, CREATING, \
 from models_templates_tags import TemplateTag, TemplateTagPodDefinition, derive_template_info
 from kubernetes_utils import create_pod, create_service, create_pvc, KubernetesError
 from kubernetes import client, config
+from models_volume_mounts_utils import resolve_volume_placeholders
 
 import re
-from typing import Dict, List, Tuple, Any
+from typing import Dict, List, Tuple, Any, Optional
 from dataclasses import dataclass
 
 from tapisservice.tapisfastapi.utils import g
@@ -572,14 +573,44 @@ def combine_pod_and_template_recursively(input_obj, template_name, seen_template
             logger.debug(f'Got exception when attempting to combine pod and templates: {e}')
 
     # Apply template_overrides if present (partial overrides for volume_mounts and secret_map)
+    # This uses resolve_volume_placeholders for proper source_id replacement and placeholder tracking
     if hasattr(input_obj, 'template_overrides') and input_obj.template_overrides:
+        # Get current volume_mounts (from template merge)
         vol_mounts = getattr(input_obj, 'volume_mounts', {}) or {}
+        if hasattr(vol_mounts, 'model_dump'):
+            vol_mounts = vol_mounts.model_dump()
+        elif hasattr(vol_mounts, 'dict'):
+            vol_mounts = vol_mounts.dict()
+        
+        # Get template_overrides
+        template_overrides = input_obj.template_overrides
+        if hasattr(template_overrides, 'model_dump'):
+            template_overrides = template_overrides.model_dump()
+        elif hasattr(template_overrides, 'dict'):
+            template_overrides = template_overrides.dict()
+        
+        template_overrides_mounts = template_overrides.get('volume_mounts', {}) if template_overrides else {}
+        
+        # Use resolve_volume_placeholders for proper source_id replacement
+        # Pass vol_mounts as template_mounts (base), and template_overrides_mounts as overrides
+        resolved_mounts, placeholder_errors, placeholder_meta = resolve_volume_placeholders(
+            pod_mounts=None,  # No additional pod mounts at derivation time
+            template_mounts=vol_mounts,  # Current merged mounts as base
+            template_overrides_mounts=template_overrides_mounts
+        )
+        
+        setattr(input_obj, 'volume_mounts', resolved_mounts)
+        
+        # Log any placeholder warnings (unresolved placeholders will be caught later at start time)
+        for err in placeholder_errors:
+            logger.warning(f"template_overrides placeholder: {err}")
+        
+        # Also apply secret_map overrides using apply_template_overrides
         sec_map = getattr(input_obj, 'secret_map', {}) or {}
-        updated_vol, updated_sec, warnings = apply_template_overrides(vol_mounts, sec_map, input_obj.template_overrides)
-        setattr(input_obj, 'volume_mounts', updated_vol)
+        _, updated_sec, sec_warnings = apply_template_overrides({}, sec_map, input_obj.template_overrides)
         setattr(input_obj, 'secret_map', updated_sec)
-        # Log warnings for missing paths/keys (non-blocking)
-        for warn in warnings:
+        
+        for warn in sec_warnings:
             logger.warning(f"template_overrides: {warn}")
 
     return input_obj

@@ -482,11 +482,12 @@ def check_db_pods(k8_pods):
                 
                 if merged_secret_map:
                     try:
+                        # Resolve secrets without actor - uses owner from notation
+                        # Security: secret owner is validated against DB's added_by field
                         resolved_secrets, secret_errors = resolve_secret_map(
                             merged_secret_map,
                             site_id=pod.site_id,
                             tenant_id=pod.tenant_id,
-                            actor=pod.pod_owner or "pods_service",
                             pod_id=pod.pod_id,
                             pod=pod
                         )

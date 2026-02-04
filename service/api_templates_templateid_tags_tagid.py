@@ -2,7 +2,7 @@ from typing import Union
 from fastapi import Query, Path, File, APIRouter
 from models_misc import SetPermission
 from models_templates import Template, TemplatePermissionsResponse
-from models_templates_tags import TemplateTagsResponse, TemplateTagResponse, NewTemplateTag, TemplateTag, TemplateTagsSmallResponse
+from models_templates_tags import TemplateTagsResponse, TemplateTagResponse, TemplateTagDeleteResponse, NewTemplateTag, TemplateTag, TemplateTagsSmallResponse, TemplateTagsWithDependentsResponse
 from models_template_dependencies import (
     is_user_allowed_for_dependencies,
     get_tag_dependencies
@@ -10,6 +10,7 @@ from models_template_dependencies import (
 from tapisservice.tapisfastapi.utils import g, ok, error
 from tapisservice.config import conf
 from tapisservice.logs import get_logger
+from errors import ResourceError
 logger = get_logger(__name__)
 
 router = APIRouter()
@@ -20,7 +21,8 @@ router = APIRouter()
     tags=["Templates"],
     summary="get_template_tag",
     operation_id="get_template_tag",
-    response_model=TemplateTagsResponse)
+    response_model=Union[TemplateTagsWithDependentsResponse, TemplateTagsResponse],
+    response_model_exclude_none=True)
 async def get_template_tag(
     template_id: str,
     tag_id: str,
@@ -41,7 +43,7 @@ async def get_template_tag(
     template_tags = TemplateTag.db_get_where(where_params=where_params, sort_column="creation_ts", tenant="siteadmintable", site=g.site_id)
 
     # Check if user can view dependencies
-    can_view_deps = include_dependencies and is_user_allowed_for_dependencies(g.username, getattr(g, 'admin', False))
+    can_view_deps = include_dependencies #and is_user_allowed_for_dependencies(g.username, getattr(g, 'admin', False))
     
     # Get dependencies if requested and allowed
     tag_deps_lookup = {}
@@ -82,7 +84,7 @@ async def get_template_tag(
     tags=["Templates"],
     summary="delete_template_tag",
     operation_id="delete_template_tag",
-    response_model=TemplateTagResponse)
+    response_model=TemplateTagDeleteResponse)
 async def delete_template_tag(
     template_id: str,
     tag_id: str,
@@ -120,7 +122,7 @@ async def delete_template_tag(
     )
     
     if not template_tags:
-        return error(result=None, msg=f"Template tag '{tag_id}' not found for template '{template_id}'.")
+        raise ResourceError(f"Template tag '{tag_id}' not found for template '{template_id}'.", 404)
     
     # For safety, only delete one tag at a time when using tag name (not full timestamp)
     # If multiple tags match (same tag name, different timestamps), require full tag_id

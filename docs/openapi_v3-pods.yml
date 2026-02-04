@@ -105,7 +105,10 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/TemplatesResponse'
+                anyOf:
+                - $ref: '#/components/schemas/TemplatesWithDependentsResponse'
+                - $ref: '#/components/schemas/TemplatesResponse'
+                title: Response List Templates
         '422':
           description: Validation Error
           content:
@@ -287,7 +290,10 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/TemplateResponse'
+                anyOf:
+                - $ref: '#/components/schemas/TemplateWithDependentsResponse'
+                - $ref: '#/components/schemas/TemplateResponse'
+                title: Response Get Template
         '422':
           description: Validation Error
           content:
@@ -348,7 +354,10 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/TemplateTagsResponse'
+                anyOf:
+                - $ref: '#/components/schemas/TemplateTagsWithDependentsResponse'
+                - $ref: '#/components/schemas/TemplateTagsResponse'
+                title: Response List Template Tags
         '422':
           description: Validation Error
           content:
@@ -576,7 +585,10 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/TemplateTagsResponse'
+                anyOf:
+                - $ref: '#/components/schemas/TemplateTagsWithDependentsResponse'
+                - $ref: '#/components/schemas/TemplateTagsResponse'
+                title: Response Get Template Tag
         '422':
           description: Validation Error
           content:
@@ -627,7 +639,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/TemplateTagResponse'
+                $ref: '#/components/schemas/TemplateTagDeleteResponse'
         '422':
           description: Validation Error
           content:
@@ -3110,7 +3122,7 @@ components:
           - type: 'null'
           title: Creation Ts
           description: Time (UTC) that this image was created.
-          default: '2026-02-03T18:40:38.029371'
+          default: '2026-02-12T01:16:30.260488'
         added_by:
           type: string
           title: Added By
@@ -4368,6 +4380,115 @@ components:
       required:
       - template_id
       title: TemplateTag
+    TemplateTagDeleteResponse:
+      properties:
+        message:
+          type: string
+          title: Message
+        metadata:
+          additionalProperties: true
+          type: object
+          title: Metadata
+        result:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Result
+        status:
+          type: string
+          title: Status
+        version:
+          type: string
+          title: Version
+      additionalProperties: false
+      type: object
+      required:
+      - message
+      - metadata
+      - status
+      - version
+      title: TemplateTagDeleteResponse
+      description: Response type for delete operations that may return None result
+        on error.
+    TemplateTagDependencyInfo:
+      properties:
+        template_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Template Id
+          description: Template ID this tag belongs to.
+        tag_timestamp:
+          type: string
+          title: Tag Timestamp
+          description: Tag timestamp identifier.
+          default: ''
+        full_tag:
+          type: string
+          title: Full Tag
+          description: Full tag reference (template_id:tag@timestamp).
+          default: ''
+        dependant_pods:
+          items:
+            type: string
+          type: array
+          title: Dependant Pods
+          description: List of pod IDs that depend on this template tag.
+          default: []
+        dependant_pod_count:
+          type: integer
+          title: Dependant Pod Count
+          description: Number of pods that depend on this template tag.
+          default: 0
+        dependant_tags:
+          items:
+            type: string
+          type: array
+          title: Dependant Tags
+          description: List of template tag timestamps that depend on this template
+            tag.
+          default: []
+        dependant_tags_count:
+          type: integer
+          title: Dependant Tags Count
+          description: Number of template tags that depend on this template tag.
+          default: 0
+      additionalProperties: false
+      type: object
+      title: TemplateTagDependencyInfo
+      description: Dependency information for a single template tag.
+    TemplateTagDependents:
+      properties:
+        dependant_pods:
+          items:
+            type: string
+          type: array
+          title: Dependant Pods
+          description: List of pod IDs that depend on this template tag.
+          default: []
+        dependant_pod_count:
+          type: integer
+          title: Dependant Pod Count
+          description: Number of pods that depend on this template tag.
+          default: 0
+        dependant_tags:
+          items:
+            type: string
+          type: array
+          title: Dependant Tags
+          description: List of template tag timestamps that depend on this template
+            tag.
+          default: []
+        dependant_tags_count:
+          type: integer
+          title: Dependant Tags Count
+          description: Number of template tags that depend on this template tag.
+          default: 0
+      additionalProperties: false
+      type: object
+      title: TemplateTagDependents
+      description: Dependency information for a template tag.
     TemplateTagPodDefinition:
       properties:
         image:
@@ -4495,6 +4616,74 @@ components:
       - status
       - version
       title: TemplateTagResponse
+    TemplateTagWithDependents:
+      properties:
+        template_id:
+          type: string
+          title: Template Id
+          description: template_id this tag is linked to
+        pod_definition:
+          $ref: '#/components/schemas/TemplateTagPodDefinition'
+          description: Pod definition for this template.
+          default: {}
+        commit_message:
+          type: string
+          title: Commit Message
+          description: Commit message for this template tag.
+          default: ''
+        tag:
+          type: string
+          title: Tag
+          description: Tag for this template. Default is 'latest'.
+          default: latest
+        description:
+          type: string
+          title: Description
+          description: Description of template tag.
+          default: ''
+        archive_message:
+          type: string
+          title: Archive Message
+          description: If set, metadata message to give users of this template tag.
+          default: ''
+        tag_timestamp:
+          type: string
+          title: Tag Timestamp
+          description: tag@timestamp for this template tag.
+          default: ''
+        added_by:
+          type: string
+          title: Added By
+          description: User who added this template tag.
+          default: ''
+        creation_ts:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Creation Ts
+          description: Time (UTC) that this template tag was created.
+        tenant_id:
+          type: string
+          title: Tenant Id
+          description: Tapis tenant used during creation of this template tag.
+          default: ''
+        site_id:
+          type: string
+          title: Site Id
+          description: Tapis site used during creation of this template tag.
+          default: ''
+        dependents:
+          anyOf:
+          - $ref: '#/components/schemas/TemplateTagDependents'
+          - type: 'null'
+          description: Dependency information (only present when include_dependencies=true).
+      additionalProperties: true
+      type: object
+      required:
+      - template_id
+      title: TemplateTagWithDependents
+      description: Template tag with optional dependency information.
     TemplateTagsResponse:
       properties:
         message:
@@ -4524,6 +4713,115 @@ components:
       - status
       - version
       title: TemplateTagsResponse
+    TemplateTagsWithDependentsResponse:
+      properties:
+        message:
+          type: string
+          title: Message
+        metadata:
+          additionalProperties: true
+          type: object
+          title: Metadata
+        result:
+          items:
+            $ref: '#/components/schemas/TemplateTagWithDependents'
+          type: array
+          title: Result
+        status:
+          type: string
+          title: Status
+        version:
+          type: string
+          title: Version
+      additionalProperties: false
+      type: object
+      required:
+      - message
+      - metadata
+      - result
+      - status
+      - version
+      title: TemplateTagsWithDependentsResponse
+      description: Response type for template tags list with optional dependency information.
+    TemplateWithDependentsModel:
+      properties:
+        template_id:
+          type: string
+          title: Template Id
+          description: Name of template.
+        description:
+          type: string
+          title: Description
+          description: Description of template.
+          default: ''
+        metatags:
+          items:
+            type: string
+          type: array
+          title: Metatags
+          description: Metadata tags for additional search/listing functionality for
+            the template.
+          default: []
+        archive_message:
+          type: string
+          title: Archive Message
+          description: If set, metadata message to give users of this template.
+          default: ''
+        creation_ts:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Creation Ts
+          description: Time (UTC) that this template was created.
+        update_ts:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Update Ts
+          description: Time (UTC) that this template was updated.
+        tag_dependents:
+          anyOf:
+          - items:
+              $ref: '#/components/schemas/TemplateTagDependencyInfo'
+            type: array
+          - type: 'null'
+          title: Tag Dependents
+          description: List of tag dependency information (only present when include_dependencies=true).
+      additionalProperties: true
+      type: object
+      required:
+      - template_id
+      title: TemplateWithDependentsModel
+      description: Template model with optional tag dependency information.
+    TemplateWithDependentsResponse:
+      properties:
+        message:
+          type: string
+          title: Message
+        metadata:
+          additionalProperties: true
+          type: object
+          title: Metadata
+        result:
+          $ref: '#/components/schemas/TemplateWithDependentsModel'
+        status:
+          type: string
+          title: Status
+        version:
+          type: string
+          title: Version
+      additionalProperties: false
+      type: object
+      required:
+      - message
+      - metadata
+      - result
+      - status
+      - version
+      title: TemplateWithDependentsResponse
+      description: Response type for a single template with optional dependency information.
     TemplatesResponse:
       properties:
         message:
@@ -4553,6 +4851,36 @@ components:
       - status
       - version
       title: TemplatesResponse
+    TemplatesWithDependentsResponse:
+      properties:
+        message:
+          type: string
+          title: Message
+        metadata:
+          additionalProperties: true
+          type: object
+          title: Metadata
+        result:
+          items:
+            $ref: '#/components/schemas/TemplateWithDependentsModel'
+          type: array
+          title: Result
+        status:
+          type: string
+          title: Status
+        version:
+          type: string
+          title: Version
+      additionalProperties: false
+      type: object
+      required:
+      - message
+      - metadata
+      - result
+      - status
+      - version
+      title: TemplatesWithDependentsResponse
+      description: Response type for list of templates with optional dependency information.
     UpdatePod:
       properties:
         image:
@@ -4597,8 +4925,19 @@ components:
             type: object
           - type: 'null'
           title: Environment Variables
-          description: Environment variables to inject into k8 pod.
+          description: Environment variables to inject into k8 pod. Use `${pods:secrets:KEY}`
+            to reference secret_map entries.
           default: {}
+        secret_map:
+          anyOf:
+          - additionalProperties:
+              type: string
+            type: object
+          - type: 'null'
+          title: Secret Map
+          description: 'Map of keys to secret values. Syntax: ${secret:name} (user
+            secret), ${secret:user:name} (explicit owner). Reference in environment_variables
+            via ${pods:secrets:KEY}. Resolved at pod start.'
         status_requested:
           anyOf:
           - type: string
@@ -4660,6 +4999,15 @@ components:
           title: Compute Queue
           description: Queue to run pod in. `default` is the default queue.
           default: default
+        template_overrides:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Template Overrides
+          description: 'Partial overrides for template values. Override volume_mounts
+            or secret_map values without rewriting full template field. Ex: {"volume_mounts":
+            {"/data": {"source_id": "my-vol"}}, "secret_map": {"DB_PASS": "${secret:mypass}"}}'
       additionalProperties: false
       type: object
       title: UpdatePod

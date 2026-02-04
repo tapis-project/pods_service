@@ -1,5 +1,6 @@
+from typing import Union
 from fastapi import APIRouter, Query
-from models_templates import Template, TemplateResponse, TemplateDeleteResponse, NewTemplate, UpdateTemplate
+from models_templates import Template, TemplateResponse, TemplateDeleteResponse, NewTemplate, UpdateTemplate, TemplateWithDependentsResponse
 from models_templates_tags import TemplateTag
 from models_template_dependencies import (
     is_user_allowed_for_dependencies,
@@ -95,7 +96,8 @@ async def delete_template(template_id):
     tags=["Templates"],
     summary="get_template",
     operation_id="get_template",
-    response_model=TemplateResponse)
+    response_model=Union[TemplateWithDependentsResponse, TemplateResponse],
+    response_model_exclude_none=True)
 async def get_template(
     template_id: str,
     include_dependencies: bool = Query(False, description="Include dependency information (admin only). Shows which pods and tags depend on each template tag.")

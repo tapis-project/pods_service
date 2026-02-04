@@ -216,11 +216,39 @@ class TemplateResponseModel(TemplateBaseRead):
     pass
 
 
+class TemplateTagDependencyInfo(TapisApiModel):
+    """Dependency information for a single template tag."""
+    template_id: Optional[str] = Field(None, description="Template ID this tag belongs to.")
+    tag_timestamp: str = Field("", description="Tag timestamp identifier.")
+    full_tag: str = Field("", description="Full tag reference (template_id:tag@timestamp).")
+    dependant_pods: List[str] = Field([], description="List of pod IDs that depend on this template tag.")
+    dependant_pod_count: int = Field(0, description="Number of pods that depend on this template tag.")
+    dependant_tags: List[str] = Field([], description="List of template tag timestamps that depend on this template tag.")
+    dependant_tags_count: int = Field(0, description="Number of template tags that depend on this template tag.")
+
+
+class TemplateWithDependentsModel(TemplateBaseRead):
+    """Template model with optional tag dependency information."""
+    tag_dependents: Optional[List[TemplateTagDependencyInfo]] = Field(None, description="List of tag dependency information (only present when include_dependencies=true).")
+
+    class Config:
+        extra = "allow"
+
+
 ### Templates
 class TemplateResponse(TapisApiModel):
     message: str
     metadata: Dict
     result: TemplateResponseModel
+    status: str
+    version: str
+
+
+class TemplateWithDependentsResponse(TapisApiModel):
+    """Response type for a single template with optional dependency information."""
+    message: str
+    metadata: Dict
+    result: TemplateWithDependentsModel
     status: str
     version: str
 
@@ -230,6 +258,16 @@ class TemplatesResponse(TapisApiModel):
     result: List[TemplateResponseModel]
     status: str
     version: str
+
+
+class TemplatesWithDependentsResponse(TapisApiModel):
+    """Response type for list of templates with optional dependency information."""
+    message: str
+    metadata: Dict
+    result: List[TemplateWithDependentsModel]
+    status: str
+    version: str
+
 
 class TemplatePermissionsResponse(TapisApiModel):
     message: str

@@ -139,6 +139,7 @@ def check_route_permissions(request):
         # TEMPLATES
         ["/pods/templates/tags", "GET", codes.NONE],
         ["/pods/templates/{template_id}/tags/{tag_id}", "GET", codes.READ],
+        ["/pods/templates/{template_id}/tags/{tag_id}", "DELETE", codes.ADMIN],
         ["/pods/templates/{template_id}/tags", "GET", codes.READ],
         ["/pods/templates/{template_id}/tags", "POST", codes.USER],
         ["/pods/templates/{template_id}/permissions", "GET", codes.USER],
