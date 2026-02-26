@@ -159,7 +159,7 @@ build-docker: vars
 	@printf "  🌎 : Using daemon: $(LCYAN)docker$(NC)\n"
 	@printf "\n"
 	docker build -t tapis/pods-api:$$TAG ./
-	docker build -t tapis/pods-api-remote:$$TAG -f Dockerfile.remote ./
+	#docker build -t tapis/pods-api-remote:$$TAG -f Dockerfile.remote ./
 	@printf "\n"
 
 

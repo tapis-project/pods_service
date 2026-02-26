@@ -5,7 +5,7 @@ from models_templates_tags import Template, TemplateTag, TemplateTagResponse, Ne
 from models_templates_utils import combine_pod_and_template_recursively
 from models_misc import SetPermission
 from channels import CommandChannel
-from codes import OFF, ON, RESTART, REQUESTED, STOPPED, USER, ADMIN, READ
+from codes import OFF, ON, RESTART, REQUESTED, STOPPED, USER, ADMIN, READ, APPROVEDADMIN, PermissionLevel
 from secret_utils import resolve_secret_map
 import requests
 from tapisservice.tapisfastapi.utils import g, ok, error
@@ -21,6 +21,59 @@ import time
 import re
 import asyncio
 import io
+
+# Special group strings for tapis_auth_allowed_users.
+# These resolve against the pod's permissions list at auth time.
+# Maps each group string to the minimum PermissionLevel required.
+AUTH_GROUP_LEVEL_MAP = {
+    "AUTHORIZED_READS": READ,         # READ, USER, ADMIN, APPROVEDADMIN
+    "AUTHORIZED_USERS": USER,         # USER, ADMIN, APPROVEDADMIN
+    "AUTHORIZED_ADMINS": ADMIN,       # ADMIN, APPROVEDADMIN
+}
+
+
+def check_tapis_auth_allowed(username: str, tapis_auth_allowed_users: list, pod_permissions: dict) -> bool:
+    """Check if a username is allowed by tapis_auth_allowed_users.
+
+    Supports:
+    - "*" wildcard: all authenticated users allowed.
+    - Literal usernames: exact match (case-insensitive).
+    - Special group strings that resolve against pod permissions:
+        AUTHORIZED_READS  -> users with READ or higher permission on the pod
+        AUTHORIZED_USERS  -> users with USER or higher permission on the pod
+        AUTHORIZED_ADMINS -> users with ADMIN or higher (including APPROVEDADMIN) permission on the pod
+
+    Args:
+        username: The authenticated Tapis username.
+        tapis_auth_allowed_users: The networking.tapis_auth_allowed_users list.
+        pod_permissions: Dict from pod.get_permissions(), e.g. {"user1": "ADMIN", "user2": "READ"}.
+
+    Returns:
+        True if the user is allowed, False otherwise.
+    """
+    if not tapis_auth_allowed_users:
+        return True  # empty list = no restriction
+
+    username_lower = username.lower()
+
+    # Check for wildcard
+    if "*" in tapis_auth_allowed_users:
+        return True
+
+    # Check for literal username match
+    if username_lower in [u.lower() for u in tapis_auth_allowed_users if u not in AUTH_GROUP_LEVEL_MAP and u != "*"]:
+        return True
+
+    # Check special group strings against pod permissions
+    user_perm_str = pod_permissions.get(username_lower) or pod_permissions.get(username)
+    if user_perm_str:
+        user_level = PermissionLevel(user_perm_str)
+        for group_str in tapis_auth_allowed_users:
+            required_level = AUTH_GROUP_LEVEL_MAP.get(group_str)
+            if required_level is not None and user_level >= required_level:
+                return True
+
+    return False
 
 CHUNK_TIMEOUT = 60  # seconds per chunk
 CHUNK_SIZE = 2 * 1024 * 1024  # 2MB chunkscv
@@ -1045,14 +1098,18 @@ async def pod_auth(pod_id_net, request: Request):
     users can specify:
      - tapis_auth=True/False - Turns on auth
      - tapis_auth_response_headers - dict[str] - headers to set on response and their values
-     - tapis_auth_allowed_users - list[str] - list of tapis users allowed to access pod
+     - tapis_auth_allowed_users - list[str] - list of tapis users or permission-based groups allowed to access pod.
+       Supports literal usernames, "*" (all authenticated users), and special group strings:
+         AUTHORIZED_READS  -> users with READ or higher permission on the pod
+         AUTHORIZED_USERS  -> users with USER or higher permission on the pod (default)
+         AUTHORIZED_ADMINS -> users with ADMIN or higher (including APPROVEDADMIN) permission on the pod
+       Groups resolve against the pod's permissions list at auth time.
+       Can mix groups with literal usernames, e.g. ["AUTHORIZED_ADMINS", "guest_user"].
      - tapis_auth_return_path - str - uri to return to after auth, default is "passthrough", which we save in cookies(?) and return to. x-forwarded-host?
     
      - response headers need to be slightly modifiable to allow for different application requirements
      - for example we have to pass username, but many apps require @email.bit, so user must be able to append to user.
      - tapis_auth_response_headers: {"X-Tapis-Username": "<<tapisusername>>@tapis.io", "FROM": "pods auth endpoint from <<tenant>>.<<site>>", "OAUTH2_USERNAME_KEY": "username"}
-
-     - tapis_auth_allowed_users, checks username against .lower() of username list to make sure it's in list. otherwise deny
     """
     logger.debug(f"GET /pods/{pod_id_net}/auth - pod-auth, headers: {request.headers}, request.cookies: {request.cookies}, request_tenant_id: {g.request_tenant_id}, site_id: {g.site_id}")
     # In cases where networking key is not 'default', the pod_id_net is f"{pod_id}-{network_key}"
@@ -1107,7 +1164,8 @@ async def pod_auth(pod_id_net, request: Request):
                 site_id=g.site_id
             )
             if tapis_auth_allowed_users:
-                if username.lower() not in tapis_auth_allowed_users and "*" not in tapis_auth_allowed_users:
+                pod_permissions = pod_init.get_permissions()
+                if not check_tapis_auth_allowed(username, tapis_auth_allowed_users, pod_permissions):
                     raise Exception(f"User {username} not in networking.tapis_auth_allowed_users for pod_id: {pod_id_net}.")
             return JSONResponse(content=ok("Already authenticated"), status_code=200, headers=tapis_auth_headers)
     except Exception as e:
@@ -1270,7 +1328,8 @@ def callback(pod_id_net, request: Request):
         # )
         tapis_auth_allowed_users = net_info.get("tapis_auth_allowed_users", [])
         if tapis_auth_allowed_users:
-            if username.lower() not in tapis_auth_allowed_users and "*" not in tapis_auth_allowed_users:
+            pod_permissions = pod_init.get_permissions()
+            if not check_tapis_auth_allowed(username, tapis_auth_allowed_users, pod_permissions):
                 raise Exception(f"User {username} not in networking.tapis_auth_allowed_users for pod_id: {pod_id_net}.")
 
         response = RedirectResponse(url=f"https://{net_info['url']}{net_info['tapis_auth_return_path']}", status_code=302)

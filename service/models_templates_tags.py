@@ -99,7 +99,7 @@ class Networking(TapisModel):
     ip_allow_list: list[str] = Field([], description = "List of IPs that are allowed to access this specific pod port. If empty, all IPs are allowed. ex. ['127.0.0.1/32', '192.168.1.7']")
     tapis_auth: bool = Field(False, description = "If true, will require Tapis auth to access the pod.")
     tapis_auth_response_headers: Dict[str, str] = Field({}, description = "Specification of headers to forward to the pod when using Tapis auth.")
-    tapis_auth_allowed_users: list[str] = Field(["*"], description = "List of users allowed to access the pod when using Tapis auth.")
+    tapis_auth_allowed_users: list[str] = Field(["AUTHORIZED_USERS"], description = "List of users allowed to access the pod when using Tapis auth. Supports literal usernames, '*' (all users), and permission-based groups: 'AUTHORIZED_READS' (READ+), 'AUTHORIZED_USERS' (USER+), 'AUTHORIZED_ADMINS' (ADMIN+, includes APPROVEDADMIN). Groups resolve against the pod's permissions list.")
     tapis_auth_return_path: str = Field("/", description = "Path to redirect to when accessing the pod via Tapis auth.")
     tapis_auth_excluded_paths: list[str] = Field([], description = "List of PathPrefix patterns to exclude from Tapis auth (no forwardAuth). Useful for static assets that don't need auth. ex. ['/assets', '/static', '/_app']")
     tapis_auth_excluded_path_regex: list[str] = Field([], description = "List of PathRegexp patterns to exclude from Tapis auth. ex. ['\\\\.(js|css|ico|png|jpg|jpeg|webp|gif|svg|woff2?|ttf|map)$']")
