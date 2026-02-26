@@ -94,6 +94,9 @@ POD_URL_SHORTHAND_PATTERN = re.compile(r'\$\{pods:url\}')
 # Shorthand for ${pods:networking:default:tapis_url}
 POD_TAPIS_URL_SHORTHAND_PATTERN = re.compile(r'\$\{pods:tapis_url\}')
 
+# Shorthand for pod_id: ${pods:pod_id}
+POD_ID_SHORTHAND_PATTERN = re.compile(r'\$\{pods:pod_id\}')
+
 # Pattern for random password generation: ${pods:random:length}
 # Length must be 8-128 characters
 RANDOM_PASSWORD_PATTERN = re.compile(r'\$\{pods:random:(\d+)\}')
@@ -488,6 +491,7 @@ SECRET_MAP_ONLY_PATTERNS = [
     (re.compile(r'\$\{pods:url\}'), 'pods:url', 'pod URL shorthand'),
     (re.compile(r'\$\{pods:tapis_url\}'), 'pods:tapis_url', 'Tapis base URL shorthand'),
     (re.compile(r'\$\{pods:random:\d+\}'), 'pods:random', 'random password generation'),
+    (re.compile(r'\$\{pods:pod_id\}'), 'pods:pod_id', 'pod ID reference'),
 ]
 
 
@@ -957,9 +961,9 @@ def resolve_pod_networking(
     pod: Any
 ) -> Tuple[Dict[str, str], List[str]]:
     """
-    Resolve ${pods:networking:name:field}, ${pods:url}, and ${pods:tapis_url} patterns in secret_map.
+    Resolve ${pods:networking:name:field}, ${pods:url}, ${pods:tapis_url}, and ${pods:pod_id} patterns in secret_map.
     
-    Replaces networking references with actual values from the pod's networking config.
+    Replaces networking references and pod identity with actual values from the pod's config.
     
     Args:
         secret_map: Dict mapping keys to values (may contain networking patterns)
@@ -969,6 +973,7 @@ def resolve_pod_networking(
         Tuple of (resolved dict, list of errors)
         
     Supported patterns:
+        ${pods:pod_id}                       -> "mypod" (the pod's ID)
         ${pods:networking:default:url}       -> "mypod.pods.tenant.tapis.io"
         ${pods:networking:default:hostname}  -> "mypod.pods.tenant.tapis.io"
         ${pods:networking:default:port}      -> "5000"
@@ -999,11 +1004,21 @@ def resolve_pod_networking(
     elif hasattr(networking, 'model_dump'):
         networking = networking.model_dump()
     
+    # Get pod_id for ${pods:pod_id} resolution
+    pod_id = getattr(pod, 'pod_id', None) if pod else None
+
     for key, value in secret_map.items():
         if not isinstance(value, str):
             continue
         
         new_value = value
+        
+        # Replace ${pods:pod_id} shorthand
+        if POD_ID_SHORTHAND_PATTERN.search(new_value):
+            if pod_id:
+                new_value = POD_ID_SHORTHAND_PATTERN.sub(pod_id, new_value)
+            else:
+                errors.append(f"Key '{key}': Pod has no pod_id available for ${{pods:pod_id}} resolution")
         
         # Replace ${pods:url} shorthand first
         if POD_URL_SHORTHAND_PATTERN.search(new_value):
@@ -1360,6 +1375,8 @@ def detect_unresolved_patterns(
             return 'pod_url'
         elif pattern_content == 'pods:tapis_url':
             return 'tapis_url'
+        elif pattern_content == 'pods:pod_id':
+            return 'pod_id'
         elif pattern_content.startswith('pods:random:'):
             return 'random_password'
         else:

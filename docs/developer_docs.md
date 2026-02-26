@@ -166,6 +166,7 @@ View [live-docs](https://tapis-project.github.io/live-docs/?service=Pods) for cu
 | `${secret:user:name}` | Another user's secret from SK (requires permission) | `${secret:jsmith:shared_key}` |
 | `${pods:random:int_length}` | Generate random password (8-128 chars), persisted to DB | `${pods:random:32}` |
 | `${pods:url}` | Pod's full URL | `mypod.pods.tacc.tapis.io` |
+| `${pods:pod_id}` | Pod's ID | `mypod` |
 | `${pods:tapis_url}` | Base Tapis URL | `tacc.tapis.io` |
 | `${pods:networking:net_name:FIELD}` | Networking field (url, hostname, port, protocol, tapis_url) | `${pods:networking:default:port}` |
 | `literal_value` | Plain text | `my-config-value` |
@@ -182,10 +183,10 @@ View [live-docs](https://tapis-project.github.io/live-docs/?service=Pods) for cu
 
 ### Environment Variables & Config File References
 
-> **⚠️ Important:** `${pods:url}`, `${pods:tapis_url}`, `${pods:random:int_length}`, `${pods:networking:...}` only work in `secret_map`. To use these values elsewhere, define them in `secret_map` first:
+> **⚠️ Important:** `${pods:url}`, `${pods:pod_id}`, `${pods:tapis_url}`, `${pods:random:int_length}`, `${pods:networking:...}` only work in `secret_map`. To use these values elsewhere, define them in `secret_map` first:
 > ```python
-> "secret_map": { "MY_URL": "${pods:url}" },
-> "environment_variables": { "APP_URL": "${pods:secrets:MY_URL}" }
+> "secret_map": { "MY_URL": "${pods:url}", "MY_POD_ID": "${pods:pod_id}" },
+> "environment_variables": { "APP_URL": "${pods:secrets:MY_URL}", "POD_NAME": "${pods:secrets:MY_POD_ID}" }
 > ```
 > **Only `${pods:secrets:KEY}` works in `environment_variables` and config files**
 
@@ -232,6 +233,7 @@ Reference pod networking dynamically with `${pods:networking:<networking_name>:F
 **Shorthands:**
 - `${pods:url}` = `${pods:networking:default:url}`
 - `${pods:tapis_url}` = `${pods:networking:default:tapis_url}`
+- `${pods:pod_id}` = the pod's `pod_id` value
 
 ### Random Password Generation
 
@@ -299,7 +301,7 @@ When a pod is started, secrets are resolved **at the API layer** before being se
 
 Resolution order:
 1. **Random passwords** (`${pods:random:int_length}`) - generates and persists to DB
-2. **Pod networking** (`${pods:networking:*}`, `${pods:url}`) - resolves pod URLs/ports
+2. **Pod networking & identity** (`${pods:networking:*}`, `${pods:url}`, `${pods:pod_id}`) - resolves pod URLs/ports/identity
 3. **SK secrets** (`${secret:name}`) - fetches from Security Kernel
 
 Flow - 
@@ -343,7 +345,7 @@ The following table documents the functions that parse and validate placeholder/
 | `validate_secret_map()` | Validate secret format and ownership | All `${secret:...}` patterns | Pod creation validation |
 | `resolve_secret_map()` | Resolve all secret_map values to final strings | All patterns → resolved values | `POST /pods` (on start), `GET /pods/{id}/derived?resolve_secrets=true` |
 | `resolve_random_passwords()` | Generate and persist random passwords | `${pods:random:N}` | `POST /pods` (before db_create) |
-| `resolve_pod_networking()` | Resolve pod URL/networking references | `${pods:networking:...}`, `${pods:url}`, `${pods:tapis_url}` | `POST /pods` (before db_create) |
+| `resolve_pod_networking()` | Resolve pod URL/networking references | `${pods:networking:...}`, `${pods:url}`, `${pods:tapis_url}`, `${pods:pod_id}` | `POST /pods` (before db_create) |
 | `inject_secrets_into_env_vars()` | Inject resolved secrets into environment_variables | `${pods:secrets:KEY}` or `${pods:secrets:KEY:?desc}` → actual value | `GET /pods/{id}/derived`, spawner |
 | `interpolate_config_content()` | Inject secrets into config file content | `${pods:secrets:KEY}` or `${pods:secrets:KEY:?desc}` in config_content | `GET /pods/{id}/derived`, spawner |
 | `validate_pod_secret_map_against_template()` | Validate pod overrides all required template placeholders | Required `${:?...}` must be overridden | `POST /pods`, `GET /pods/{id}/derived` |
@@ -356,7 +358,7 @@ The following table documents the functions that parse and validate placeholder/
 Pod Creation (POST /pods):
   1. expand_short_secret_references() - ${secret:name} → ${secret:user:name}
   2. resolve_random_passwords() - ${pods:random:N} → generated value
-  3. resolve_pod_networking() - ${pods:url}, ${pods:networking:...} → URLs
+  3. resolve_pod_networking() - ${pods:pod_id}, ${pods:url}, ${pods:networking:...} → values
   4. validate_environment_placeholders() - check ${pods:secrets:KEY} refs exist
   5. detect_unresolved_patterns() - report any remaining ${...} in metadata
   
