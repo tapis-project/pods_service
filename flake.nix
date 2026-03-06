@@ -33,6 +33,7 @@
           #python310Packages.pip###Doesn't seem to work
           #python310Packages.virtualenv
           python310Packages.requests
+          python310Packages.pyotp
           #python310Packages.sqlalchemy
         ];
 

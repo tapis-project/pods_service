@@ -21,6 +21,7 @@ import time
 import re
 import asyncio
 import io
+import jwt
 
 # Special group strings for tapis_auth_allowed_users.
 # These resolve against the pod's permissions list at auth time.
@@ -74,6 +75,54 @@ def check_tapis_auth_allowed(username: str, tapis_auth_allowed_users: list, pod_
                 return True
 
     return False
+
+
+def get_allowed_tenants_from_permissions(pod_permissions: dict) -> list:
+    """Extract allowed tenant IDs from pod permissions.
+
+    Scans pod permissions for entries matching the 'tenant.<tenant_id>' pattern
+    and returns a list of the tenant IDs.
+
+    Args:
+        pod_permissions: Dict from pod.get_permissions(), e.g. {"user1": "ADMIN", "tenant.public": "USER"}.
+
+    Returns:
+        List of tenant ID strings, e.g. ["public", "dev"].
+    """
+    tenants = []
+    for key in pod_permissions:
+        if key.startswith("tenant."):
+            tenant_id = key[len("tenant."):]
+            if tenant_id:
+                tenants.append(tenant_id)
+    return tenants
+
+
+def check_tapis_auth_tenant_allowed(token_tenant_id: str, request_tenant_id: str, tapis_auth_allowed_tenants: list) -> bool:
+    """Check if a token's tenant is allowed to access a pod.
+
+    The pod's own tenant (request_tenant_id) is always allowed.
+    Additional tenants can be allowed via the pod's permissions list
+    (extracted by get_allowed_tenants_from_permissions()).
+
+    Args:
+        token_tenant_id: The tenant_id from the JWT token (e.g. 'public').
+        request_tenant_id: The pod's host tenant from the URL (e.g. 'tacc').
+        tapis_auth_allowed_tenants: List of additional tenant IDs allowed (from pod permissions).
+
+    Returns:
+        True if the token's tenant is allowed, False otherwise.
+    """
+    if not token_tenant_id:
+        return True  # no token tenant info = allow (will be caught by token validation)
+    # Pod's own tenant is always allowed
+    if token_tenant_id == request_tenant_id:
+        return True
+    # Check against allowed tenants list
+    if token_tenant_id in tapis_auth_allowed_tenants:
+        return True
+    return False
+
 
 CHUNK_TIMEOUT = 60  # seconds per chunk
 CHUNK_SIZE = 2 * 1024 * 1024  # 2MB chunkscv
@@ -168,6 +217,16 @@ async def set_pod_permission(pod_id, set_permission: SetPermission):
     """
     Set a permission for a pod.
 
+    Permission formats:
+    - username:LEVEL - Standard user permission (e.g., 'jsmith:READ')
+    - tenant.<tenant_id>:READ - Cross-tenant auth permission. Allows users from <tenant_id> to authenticate
+      to this pod via tapis_auth. Only settable by admins. Must use READ level. ex. tenant.public, tenant.dev
+
+    Notes:
+    - 'tenant.*' permissions require admin privileges (like '**' on templates)
+    - 'tenant.*' permissions only support READ level (they gate cross-tenant auth access, not authorization)
+    - There are 3 levels of permissions, READ, USER, and ADMIN.
+
     Returns updated pod permissions.
     """
     logger.info(f"POST /pods/{pod_id}/permissions - Top of set_pod_permissions.")
@@ -175,7 +234,26 @@ async def set_pod_permission(pod_id, set_permission: SetPermission):
     inp_user = set_permission.user
     inp_level = set_permission.level
 
+    # Admin-only check for tenant-wide 'tenant.*' permissions
+    if inp_user.startswith("tenant.") and not g.admin:
+        raise KeyError("Only admins can set cross-tenant 'tenant.*' permissions on pods.")
+
     pod = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
+
+    # Validate tenant permission format
+    if inp_user.startswith("tenant."):
+        tenant_id = inp_user[len("tenant."):]
+        if not tenant_id:
+            raise ValueError("tenant. permission must include a tenant ID. e.g. 'tenant.public'")
+        if not tenant_id.isascii():
+            raise ValueError(f"tenant. permission tenant ID must be ASCII. Got '{tenant_id}'.")
+        res = re.fullmatch(r'[a-z][a-z0-9-]*', tenant_id)
+        if not res:
+            raise ValueError(f"tenant. permission tenant ID must be lowercase alphanumeric (with hyphens). Got '{tenant_id}'.")
+        if len(tenant_id) > 64:
+            raise ValueError(f"tenant. permission tenant ID must be less than 64 characters. Got length {len(tenant_id)}.")
+        if inp_level != "READ":
+            raise ValueError(f"tenant.* permissions only support READ level (cross-tenant auth gate). Got '{inp_level}'.")
 
     # Get formatted perms
     curr_perms = pod.get_permissions()
@@ -961,9 +1039,23 @@ async def restart_pod(pod_id, grab_latest_template_tag: bool = False):
     return ok(result=pod.display(), msg="Updated pod's status_requested to RESTART.")
 
 
+def get_token_tenant_id(token: str) -> str:
+    """
+    Extract the tenant_id from a Tapis JWT without full validation.
+    Returns the tenant_id string or None if extraction fails.
+    """
+    try:
+        claims = jwt.decode(token, options={"verify_signature": False}, algorithms=["RS256"])
+        return claims.get('tapis/tenant_id')
+    except Exception as e:
+        logger.debug(f"Could not extract tenant_id from token: {e}")
+        return None
+
+
 def validate_token(request: Request, token: str = None):
     """
     Validate a Tapis JWT from cookies or headers by making a call to the get_userinfo endpoint.
+    For cross-tenant tokens, the userinfo call is made to the token's tenant, not the request tenant.
     Returns authorized:bool, username:str, roles:List[str]
     """
     logger.debug(f"Validating token from request: cookies={request.cookies}, headers={request.headers}")
@@ -972,8 +1064,21 @@ def validate_token(request: Request, token: str = None):
         logger.debug("Token not found in cookies or headers.")
         return False, None, None
 
-    url = f"{request.base_url}v3/oauth2/userinfo".replace('http://', 'https://')
-    logger.debug(f"Running get_userinfo with url: {url}")
+    # Determine the correct base URL for userinfo.
+    # The token may be from a different tenant than the pod (cross-tenant auth),
+    # so we must call userinfo on the token's tenant, not the request base_url.
+    token_tenant = get_token_tenant_id(token)
+    if token_tenant:
+        try:
+            tenant_base_url = t.tenant_cache.get_tenant_config(tenant_id=token_tenant).base_url
+            url = f"{tenant_base_url}/v3/oauth2/userinfo"
+        except Exception as e:
+            logger.warning(f"Could not resolve base_url for token tenant '{token_tenant}', falling back to request base_url: {e}")
+            url = f"{request.base_url}v3/oauth2/userinfo".replace('http://', 'https://')
+    else:
+        url = f"{request.base_url}v3/oauth2/userinfo".replace('http://', 'https://')
+
+    logger.debug(f"Running get_userinfo with url: {url} (token_tenant: {token_tenant})")
     headers = {'X-Tapis-Token': token}
     try:
         rsp = requests.get(url, headers=headers)
@@ -1149,6 +1254,21 @@ async def pod_auth(pod_id_net, request: Request):
         except Exception as e:
             raise Exception(f"Error converting net_info to dict: {e}")
 
+    # Cross-tenant validation: if this is a cross-tenant request (flagged by auth.py),
+    # check that the token's tenant is in the pod's permissions list (tenant.<tenant_id> entries).
+    pod_permissions = pod_init.get_permissions()
+    tapis_auth_allowed_tenants = get_allowed_tenants_from_permissions(pod_permissions)
+    cross_tenant = getattr(g, 'cross_tenant_request', False)
+    if cross_tenant:
+        token_tenant_id = getattr(g, 'token_tenant_id', None)
+        if not check_tapis_auth_tenant_allowed(token_tenant_id, g.request_tenant_id, tapis_auth_allowed_tenants):
+            logger.info(f"Cross-tenant request rejected. token_tenant: {token_tenant_id}, pod_tenant: {g.request_tenant_id}, allowed: {tapis_auth_allowed_tenants}")
+            return JSONResponse(
+                content=f"Cross-tenant auth not allowed. Token tenant '{token_tenant_id}' is not in this pod's permissions (set via tenant.<tenant_id> permission entries).",
+                status_code=403
+            )
+        logger.info(f"Cross-tenant request allowed. token_tenant: {token_tenant_id}, pod_tenant: {g.request_tenant_id}")
+
     ## We now want to check if session/headers have a valid Tapis token for the current site/tenant. If so, we can return 200.
     ## Session and headers can both be manually modified, this is where we must validate the token is valid via a call to get_userinfo.
     try:
@@ -1157,6 +1277,16 @@ async def pod_auth(pod_id_net, request: Request):
         tapis_auth_allowed_users = net_info.get("tapis_auth_allowed_users", [])
         if authorized:
             logger.debug(f"User authenticated: {username}")
+
+            # Additional cross-tenant check on the actual token (not just header-level from auth.py).
+            # This catches cases where the token in cookies is from a different tenant than the pod.
+            # check_tapis_auth_tenant_allowed allows the pod's own tenant automatically.
+            token_str = request.cookies.get('X-Tapis-Token') or request.headers.get('X-Tapis-Token') or request.headers.get('x-tapis-token')
+            if token_str:
+                token_tenant = get_token_tenant_id(token_str)
+                if token_tenant and not check_tapis_auth_tenant_allowed(token_tenant, g.request_tenant_id, tapis_auth_allowed_tenants):
+                    raise Exception(f"Token tenant '{token_tenant}' not in allowed tenants for pod_id: {pod_id_net}. Pod tenant: '{g.request_tenant_id}'. Allowed extra tenants (via permissions): {tapis_auth_allowed_tenants}.")
+
             tapis_auth_headers = get_pod_networking_objects(
                 net_info=net_info,
                 username=username,
@@ -1164,19 +1294,18 @@ async def pod_auth(pod_id_net, request: Request):
                 site_id=g.site_id
             )
             if tapis_auth_allowed_users:
-                pod_permissions = pod_init.get_permissions()
                 if not check_tapis_auth_allowed(username, tapis_auth_allowed_users, pod_permissions):
                     raise Exception(f"User {username} not in networking.tapis_auth_allowed_users for pod_id: {pod_id_net}.")
             return JSONResponse(content=ok("Already authenticated"), status_code=200, headers=tapis_auth_headers)
     except Exception as e:
-        logger.debug(f"Authentication failed: {e.detail}")
+        logger.debug(f"Authentication failed: {getattr(e, 'detail', None) or e}")
 
     ## if request headers has X-Tapis-Token, we assume they're not browser based and want to use the token
     ## if it doesn't validate they need a warning message rather than getting an error due to redirect
     logger.debug(f"request_info dump: {request.headers}, {request.cookies}, {request.query_params}")
     if request.headers.get('X-Tapis-Token') or request.headers.get('x-tapis-token2'):
         logger.debug(f"X-Tapis-Token found in headers, but not authenticated. Returning 403.")
-        return JSONResponse(content="Not authenticated", status_code=403)
+        return JSONResponse(content="Pods Service tapis_auth - not authenticated", status_code=403)
     
 
     # Get info for clients
@@ -1274,6 +1403,20 @@ def callback(pod_id_net, request: Request):
         except Exception as e:
             raise Exception(f"Error converting net_info to dict: {e}")
 
+    # Cross-tenant validation for callback
+    pod_permissions = pod_init.get_permissions()
+    tapis_auth_allowed_tenants = get_allowed_tenants_from_permissions(pod_permissions)
+    cross_tenant = getattr(g, 'cross_tenant_request', False)
+    if cross_tenant:
+        token_tenant_id = getattr(g, 'token_tenant_id', None)
+        if not check_tapis_auth_tenant_allowed(token_tenant_id, g.request_tenant_id, tapis_auth_allowed_tenants):
+            logger.info(f"Cross-tenant callback rejected. token_tenant: {token_tenant_id}, pod_tenant: {g.request_tenant_id}, allowed: {tapis_auth_allowed_tenants}")
+            return JSONResponse(
+                content=f"Cross-tenant auth not allowed. Token tenant '{token_tenant_id}' is not in this pod's permissions (set via tenant.<tenant_id> permission entries).",
+                status_code=403
+            )
+        logger.info(f"Cross-tenant callback allowed. token_tenant: {token_tenant_id}, pod_tenant: {g.request_tenant_id}")
+
     pod_id, tapis_domain = net_info['url'].split('.pods.') ## Should return `mypod` & `tacc.tapis.io` with proper tenant and schmu
     tapis_tenant = tapis_domain.split('.')[0]
     if not net_info.get("tapis_auth", False):
@@ -1320,6 +1463,14 @@ def callback(pod_id_net, request: Request):
         
         logger.debug(f"GET /pods/{pod_id_net}/auth/callback - pod_auth_callback3, username: {username}, tapis_domain: {tapis_domain}")
 
+        # Cross-tenant check on the newly obtained token.
+        # check_tapis_auth_tenant_allowed allows the pod's own tenant automatically.
+        token_tenant = get_token_tenant_id(token)
+        if token_tenant and not check_tapis_auth_tenant_allowed(token_tenant, g.request_tenant_id, tapis_auth_allowed_tenants):
+            raise Exception(f"Token tenant '{token_tenant}' not in allowed tenants for pod_id: {pod_id_net}. Pod tenant: '{g.request_tenant_id}'. Allowed extra tenants (via permissions): {tapis_auth_allowed_tenants}.")
+        if token_tenant and token_tenant != g.request_tenant_id:
+            logger.info(f"Cross-tenant token accepted in callback. token_tenant: {token_tenant}, pod_tenant: {g.request_tenant_id}")
+
         # tapis_auth_headers = get_pod_networking_objects(
         #     net_info=net_info,
         #     username=username,
@@ -1328,7 +1479,6 @@ def callback(pod_id_net, request: Request):
         # )
         tapis_auth_allowed_users = net_info.get("tapis_auth_allowed_users", [])
         if tapis_auth_allowed_users:
-            pod_permissions = pod_init.get_permissions()
             if not check_tapis_auth_allowed(username, tapis_auth_allowed_users, pod_permissions):
                 raise Exception(f"User {username} not in networking.tapis_auth_allowed_users for pod_id: {pod_id_net}.")
 

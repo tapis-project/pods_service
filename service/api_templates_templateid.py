@@ -42,7 +42,7 @@ async def update_template(template_id, update_template: UpdateTemplate):
 
     if input_data.get("permissions"):
         for permission in input_data["permissions"]:
-            user, level = permission.split(":")
+            user, level = permission.split(":", 1)
             if user == "**" and not g.admin:
                 raise HTTPException(
                     status_code=403,

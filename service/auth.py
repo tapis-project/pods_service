@@ -247,10 +247,33 @@ def check_route_permissions(request):
     elif matched_route[2] == "NEED-BASEURL":
         ## Needed for auth where we need tenant/site info, but not token info.
         logger.debug(f"Matched NEED-BASEURL: g.request_tenant_id: {g.request_tenant_id}, g.username: {g.username}")
+        g.cross_tenant_request = False
         # We might not have g.request_tenant_id yet, so we need to resolve it
         if not g.request_tenant_id:
-            resolve_tenant_id_for_request(g, request, Tenants)
-            logger.debug(f"Resolved NEED-BASEURL route. g.request_tenant_id: {g.request_tenant_id}")
+            try:
+                resolve_tenant_id_for_request(g, request, Tenants)
+                logger.debug(f"Resolved NEED-BASEURL route. g.request_tenant_id: {g.request_tenant_id}")
+            except Exception as e:
+                # resolve_tenant_id_for_request raises PermissionsError when token tenant != URL tenant.
+                # For NEED-BASEURL routes (pod auth/callback), we allow this through and defer
+                # cross-tenant validation to the route handler, which checks pod permissions for tenant.* entries.
+                logger.info(f"resolve_tenant_id_for_request failed for NEED-BASEURL route, likely cross-tenant: {e}")
+                # g.request_tenant_id and g.token_tenant_id may already be set by resolve_tenant_id_for_request
+                # before it raised. If not, extract request_tenant_id from URL manually.
+                if not g.request_tenant_id:
+                    # Fallback: extract tenant from URL path. URL looks like /v3/pods/{pod_id_net}/auth
+                    # The tenant comes from the base_url/host, not the path.
+                    # resolve_tenant_id_for_request should have set it before raising, but just in case:
+                    try:
+                        host = request.headers.get('host', '') or str(request.url.hostname or '')
+                        # host is like 'tacc.tapis.io' or 'tacc.develop.tapis.io'
+                        g.request_tenant_id = host.split('.')[0]
+                        logger.info(f"Extracted request_tenant_id from host: {g.request_tenant_id}")
+                    except Exception as host_e:
+                        logger.error(f"Failed to extract tenant from host: {host_e}")
+                        raise PermissionsException(f"Unable to determine tenant for request: {e}")
+                g.cross_tenant_request = True
+                logger.info(f"Cross-tenant NEED-BASEURL request. request_tenant_id: {g.request_tenant_id}, token_tenant_id: {getattr(g, 'token_tenant_id', 'unknown')}")
         get_user_site_id()
         has_pem = True
         return
@@ -311,7 +334,11 @@ def check_route_permissions(request):
 
 
 def authentication(request):
-    if (request.url.path == '/redoc' or
+    # Pod OAuth routes handle their own auth flow — skip token checks entirely.
+    # Regex matches /pods/<pod_id_net>/auth and /pods/<pod_id_net>/auth/callback
+    if re.match(r'^/pods/[^/]+/auth(/callback)?$', request.url.path):
+        pass
+    elif (request.url.path == '/redoc' or
         request.url.path == '/docs' or
         request.url.path == '/openapi.json' or
         request.url.path == '/traefik-config' or

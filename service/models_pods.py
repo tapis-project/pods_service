@@ -638,6 +638,30 @@ class Pod(TapisPodBaseFull, table=True, validate=True):
         #By default add author permissions to model.
         if not v:
             v = [f"{g.username}:ADMIN"]
+        # Validate each permission entry format
+        for perm in v:
+            if ':' not in perm:
+                raise ValueError(f"Each permission must be in 'user:LEVEL' format. Got '{perm}'.")
+            user, level = perm.split(':', 1)
+            if not user:
+                raise ValueError(f"Permission user/key cannot be empty. Got '{perm}'.")
+            if level not in PERMISSION_LEVELS:
+                raise ValueError(f"Permission level must be one of {PERMISSION_LEVELS}. Got '{level}' in '{perm}'.")
+            # Validate user format: standard username (alphanumeric + _) or tenant.<tenant_id>
+            if user.startswith('tenant.'):
+                tenant_id = user[len('tenant.'):]
+                if not tenant_id:
+                    raise ValueError(f"'tenant.' permission must include a tenant ID. Got '{perm}'.")
+                res = re.fullmatch(r'[a-z][a-z0-9-]*', tenant_id)
+                if not res:
+                    raise ValueError(f"'tenant.' permission tenant ID must be lowercase alphanumeric (with hyphens). Got '{tenant_id}'.")
+                if level != 'READ':
+                    raise ValueError(f"tenant.* permissions only support READ level (cross-tenant auth gate). Got '{level}' in '{perm}'.")
+            else:
+                # Standard username: alphanumeric with underscores/hyphens
+                res = re.fullmatch(r'[a-zA-Z][a-zA-Z0-9_-]*', user)
+                if not res:
+                    raise ValueError(f"Permission username must be alphanumeric (with underscores/hyphens), starting with a letter. Got '{user}'.")
         return v
 
     @validator('environment_variables')

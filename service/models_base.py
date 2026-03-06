@@ -87,9 +87,10 @@ class TapisModel(SQLModel):
 
     def get_permissions(self):
         # create permissions dict {"username": [roles], ...} with current permissions.
+        # Uses split(':', 1) to support 'tenant.<id>:LEVEL' format safely.
         perm_dict = {}
         for permission in self.permissions:
-            user, level = permission.split(':')
+            user, level = permission.split(':', 1)
             perm_dict[user] = level
         return perm_dict
 

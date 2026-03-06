@@ -614,7 +614,7 @@ def create_pod(name: str,
             if tapis_permissions:
                 for permission in tapis_permissions:
                     if permission.startswith(image_pull_secret_user+":"):
-                        _, user_current_permission = permission.split(":")
+                        _, user_current_permission = permission.split(":", 1)
                         break
                     else:
                         user_current_permission = None
