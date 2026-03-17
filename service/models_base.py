@@ -11,6 +11,7 @@ logger = get_logger(__name__)
 
 from sqlalchemy import UniqueConstraint
 from sqlalchemy.inspection import inspect
+from sqlalchemy.orm import defer
 from sqlmodel import Field, Session, SQLModel, select, JSON, Column
 
 
@@ -63,6 +64,13 @@ class TapisModel(SQLModel):
         # 3a. if there's no current action_logs (after a migration)
         # 3b. or if log is not in the most recent action_logs log
         if table_name == 'pod' and log and (not self.action_logs or log not in self.action_logs[-1]):
+            # Tag actions performed via admin mode
+            try:
+                from tapisservice.tapisfastapi.utils import g as _g
+                if getattr(_g, 'admin_active', False):
+                    log = f"ADMIN {log}"
+            except Exception:
+                pass
             self.action_logs.append(f"{datetime.utcnow().strftime('%y/%m/%d %H:%M')}: {log}")
 
         # Run command
@@ -178,7 +186,7 @@ class TapisModel(SQLModel):
         return result
 
     @classmethod
-    def db_get_all(cls, tenant: str = None, site: str = None):
+    def db_get_all(cls, tenant: str = None, site: str = None, defer_columns: list = None):
         """
         Gets the row with given primary key from the specified table.
         """
@@ -188,6 +196,8 @@ class TapisModel(SQLModel):
 
         # Create statement
         stmt = select(cls)
+        if defer_columns:
+            stmt = stmt.options(*[defer(col) for col in defer_columns])
 
         # Run command
         results = store.run("execute", stmt, scalars=True, all=True)

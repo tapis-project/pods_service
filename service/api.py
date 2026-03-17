@@ -111,7 +111,7 @@ api = FastAPI(
     title="Tapis Pods Service",
     description=description,
     openapi_tags=tags_metadata,
-    version="1.9.0",
+    version="26Q1.1",
     contact={
         "name": "CIC Support",
         "email": "cicsupport@tacc.utexas.edu",

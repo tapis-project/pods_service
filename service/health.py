@@ -301,6 +301,8 @@ def check_k8_pods(k8_pods):
 
             # Getting here means pod is running. Store logs now.
             logs = get_k8_logs(k8_pod['k8_name'])
+            if logs:
+                logs = logs.replace('\x00', '')
             if pod.logs != logs:
                 pod.logs = logs
                 #logger.critical(f"UPDATING:: Before update with logs: {pod}")

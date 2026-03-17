@@ -4,6 +4,7 @@ from models_images import Image, ImageResponse, ImageDeleteResponse, UpdateImage
 from channels import CommandChannel
 from tapisservice.tapisfastapi.utils import g, ok, error
 from tapisservice.config import conf
+from errors import PermissionsException
 from tapisservice.logs import get_logger
 logger = get_logger(__name__)
 
@@ -53,33 +54,40 @@ async def get_image(image_id):
 
     return ok(result=image.display(), msg="Image retrieved successfully.")
 
-### Users MIGHT want to update image description. This code would be a good start.
-#### /pods/images/{image_id}
-# @router.put(
-#     "/pods/images/{image_id}",
-#     tags=["Images"],
-#     summary="update_image",
-#     operation_id="update_image",
-#     response_model=ImageResponse)
-# async def update_image(image_id, update_image: UpdateImage):
-#     """
-#     Update an image.
-#     Note:
-#     - Fields that change image source or sink are not modifiable. Please recreate your image in that case.
-#     Returns updated image object.
-#     """
-#     logger.info(f"UPDATE /pods/images/{image_id} - Top of update_image.")
-#     image = Image.db_get_with_pk(image_id, tenant=g.request_tenant_id, site=g.site_id)
-#     pre_update_image = image.copy()
-#     # Image existence is already checked above. Now we validate update and update with values that are set.
-#     input_data = update_image.dict(exclude_unset=True)
-#     for key, value in input_data.items():
-#         setattr(image, key, value)
-#     # Only update if there's a change
-#     if image != pre_update_image:
-#         image.db_update(tenant=g.request_tenant_id, site=g.site_id)
-#     else:
-#         return error(result=image.display(), msg="Incoming data made no changes to image. Is incoming data equal to current data?")
+@router.put(
+    "/pods/images/{image_id:path}",
+    tags=["Images"],
+    summary="update_image",
+    operation_id="update_image",
+    response_model=ImageResponse)
+async def update_image(image_id, update_image: UpdateImage):
+    """
+    Update an image's metadata (tenants, description).
 
-#     return ok(result=image.display(), msg="Image updated successfully.")
+    Requires admin mode (X-Pods-Admin: true header).
+
+    Returns updated image object.
+    """
+    logger.info(f"PUT /pods/images/{image_id} - Top of update_image.")
+
+    if not getattr(g, 'admin_active', False):
+        raise PermissionsException("Updating images requires admin mode. Send X-Pods-Admin: true header.")
+
+    image = Image.db_get_with_pk(image_id, tenant="siteadmintable", site=g.site_id)
+    if not image:
+        return error(result="", msg=f"Image with id {image_id} not found.")
+
+    pre_update_image = image.dict().copy()
+
+    input_data = update_image.dict(exclude_unset=True)
+    for key, value in input_data.items():
+        setattr(image, key, value)
+
+    post_update_image = image.dict().copy()
+    if post_update_image != pre_update_image:
+        image.db_update(tenant="siteadmintable", site=g.site_id)
+    else:
+        return error(result=image.display(), msg="Incoming data made no changes to image. Is incoming data equal to current data?")
+
+    return ok(result=image.display(), msg="Image updated successfully.")
 

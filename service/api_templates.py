@@ -76,7 +76,7 @@ async def list_templates(
         admin_only_count = sum(1 for t_ in templates_to_show if t_.get('template_id') not in user_tmpl_ids)
         metadata["admin_context"] = {
             "admin_mode": True,
-            "user_owned_ids": list(user_tmpl_ids),
+            "user_accessible_ids": list(user_tmpl_ids),
             "msg": f"You can access {len(templates_to_show) - admin_only_count} templates, admin reveals {admin_only_count}"
         }
 
@@ -100,9 +100,18 @@ async def list_templates_and_tags(
     """
     logger.info("GET /pods/templates/tags - Top of list_templates_and_tags.")
 
+    metadata = {}
     # Fetch all templates
     if getattr(g, 'admin_active', False):
         templates = Template.db_get_all(tenant="siteadmintable", site=g.site_id)
+        read_levels = {'READ', 'USER', 'ADMIN', 'APPROVEDADMIN'}
+        user_tmpl_ids = set()
+        for tmpl in templates:
+            for perm in tmpl.permissions:
+                user, level = perm.split(':', 1)
+                if user == g.username and level in read_levels:
+                    user_tmpl_ids.add(tmpl.template_id)
+                    break
     else:
         templates = Template.db_get_all_with_permission(user=g.username, level='READ', tenant=g.request_tenant_id, site=g.site_id)
 
@@ -153,8 +162,16 @@ async def list_templates_and_tags(
             **template.display(),
             "tags": tags
         }
+    if getattr(g, 'admin_active', False):
+        admin_only_count = sum(1 for tid in templates_and_tags if tid not in user_tmpl_ids)
+        metadata["admin_context"] = {
+            "admin_mode": True,
+            "user_accessible_ids": list(user_tmpl_ids),
+            "msg": f"You can access {len(templates_and_tags) - admin_only_count} templates, admin reveals {admin_only_count}"
+        }
+
     logger.info("Templates and tags retrieved.")
-    return ok(result=templates_and_tags, msg="Templates and tags retrieved successfully.")
+    return ok(result=templates_and_tags, metadata=metadata, msg="Templates and tags retrieved successfully.")
 
 
 @router.post(

@@ -55,7 +55,7 @@ async def list_secrets():
         admin_only_count = len(secrets_to_show) - len(user_secrets_ids)
         metadata["admin_context"] = {
             "admin_mode": True,
-            "user_owned_ids": list(user_secrets_ids),
+            "user_accessible_ids": list(user_secrets_ids),
             "msg": f"You can access {len(user_secrets_ids)} secrets, admin reveals {admin_only_count}"
         }
     else:

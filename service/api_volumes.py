@@ -52,7 +52,7 @@ async def list_volumes():
         admin_only_count = sum(1 for v in volumes_to_show if v.get('volume_id') not in user_vol_ids)
         metadata["admin_context"] = {
             "admin_mode": True,
-            "user_owned_ids": list(user_vol_ids),
+            "user_accessible_ids": list(user_vol_ids),
             "msg": f"You can access {len(volumes_to_show) - admin_only_count} volumes, admin reveals {admin_only_count}"
         }
 

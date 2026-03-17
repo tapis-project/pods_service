@@ -140,5 +140,5 @@ class ImageDeleteResponse(TapisApiModel):
     version: str
 
 class UpdateImage(TapisApiModel):
-    tenants: List[str] = Field([], description = "Tenants that can use this image.", sa_column=Column(ARRAY(String)))
-    description: str = Field("", description = "Description of image.")
+    tenants: List[str] | None = Field(None, description = "Tenants that can use this image.")
+    description: str | None = Field(None, description = "Description of image.")

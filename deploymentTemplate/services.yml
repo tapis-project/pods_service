@@ -39,6 +39,7 @@ spec:
   - name: MAKEFILE_SERVICE_NAME-postgres
     port: 5432
     targetPort: 5432
+    nodePort: 30432
 
 ---
 apiVersion: v1
@@ -81,9 +82,11 @@ spec:
   - name: traefik
     port: 80
     targetPort: 80
+    nodePort: 30080
   - name: traefik-dash
     port: 8080
     targetPort: 8080
+    nodePort: 30880
 
 ---
 apiVersion: v1

@@ -38,7 +38,7 @@ async def list_pods():
     # TODO search
     # Admin mode: single DB call, figure out user's own pods in-memory
     if getattr(g, 'admin_active', False):
-        pods = Pod.db_get_all(tenant=g.request_tenant_id, site=g.site_id)
+        pods = Pod.db_get_all(tenant=g.request_tenant_id, site=g.site_id, defer_columns=[Pod.logs, Pod.action_logs])
         read_levels = {'READ', 'USER', 'ADMIN', 'APPROVEDADMIN'}
         user_pod_ids = set()
         for pod in pods:
@@ -74,7 +74,7 @@ async def list_pods():
         admin_only_count = sum(1 for p in pods_to_show if p.get('pod_id') not in user_pod_ids)
         metadata["admin_context"] = {
             "admin_mode": True,
-            "user_owned_ids": list(user_pod_ids),
+            "user_accessible_ids": list(user_pod_ids),
             "msg": f"You can access {len(pods_to_show) - admin_only_count} pods, admin reveals {admin_only_count}"
         }
     logger.info("Pods retrieved.")

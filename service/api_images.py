@@ -30,30 +30,31 @@ async def get_images():
     images =  Image.db_get_all(tenant="siteadmintable", site=g.site_id)
 #    images =  Image.db_get_all_with_permission(user=g.username, level='READ', tenant=g.request_tenant_id, site=g.site_id)
 
-    # Build allow list from DB images based on tenant rules
+    metadata = {}
+    # Build allow list (needed for admins too for counting)
     main_tenants = ["tacc", "icicleai", "icicle", "dev", "astria", "a2cps", "scoped"]
-    custom_allow_list = []
+    user_allow_list = []
     for allowed_image in images:
         tenants = allowed_image.tenants
         # If "-<tenant>" is present, restrict access for that tenant
         if g.username == allowed_image.added_by:
             # If the image was added by the user, allow it regardless of tenant
-            custom_allow_list.append(allowed_image)
+            user_allow_list.append(allowed_image)
             continue
-        if f"-{g.tenant_id}" in tenants:
+        if f"-{g.request_tenant_id}" in tenants:
             continue
         # "**" allows all tenants
         if "**" in tenants:
-            custom_allow_list.append(allowed_image)
+            user_allow_list.append(allowed_image)
         # "*" allows only main_tenants
-        elif "*" in tenants and g.tenant_id in main_tenants:
-            custom_allow_list.append(allowed_image)
+        elif "*" in tenants and g.request_tenant_id in main_tenants:
+            user_allow_list.append(allowed_image)
         # Explicit tenant allow
-        elif g.tenant_id in tenants:
-            custom_allow_list.append(allowed_image)
+        elif g.request_tenant_id in tenants:
+            user_allow_list.append(allowed_image)
 
     # Only main tenants get config images
-    if g.tenant_id in main_tenants:
+    if g.request_tenant_id in main_tenants:
         conf_images = conf.get('image_allow_list', [])
         for conf_img in conf_images:
             # If conf_img is a string, convert to dict with dummy/default fields
@@ -76,7 +77,13 @@ async def get_images():
                 )
             else:
                 continue
-            custom_allow_list.append(img_obj)
+            user_allow_list.append(img_obj)
+
+    # Admin mode: show all images, with metadata about what user normally sees
+    if getattr(g, 'admin_active', False):
+        custom_allow_list = list(images)
+    else:
+        custom_allow_list = user_allow_list
 
     # Remove duplicates by image name (favor DB images)
     seen = set()
@@ -86,8 +93,17 @@ async def get_images():
             images_to_show.append(image.display())
             seen.add(image.image)
 
+    if getattr(g, 'admin_active', False):
+        user_image_names = {img.image for img in user_allow_list}
+        admin_only_count = sum(1 for img in images_to_show if img.get('image') not in user_image_names)
+        metadata["admin_context"] = {
+            "admin_mode": True,
+            "user_accessible_images": sorted(user_image_names),
+            "msg": f"You can access {len(images_to_show) - admin_only_count} images, admin reveals {admin_only_count}"
+        }
+
     logger.info("Images retrieved.")
-    return ok(result=images_to_show, msg="Images retrieved successfully.")
+    return ok(result=images_to_show, metadata=metadata, msg="Images retrieved successfully.")
 
 
 @router.post(

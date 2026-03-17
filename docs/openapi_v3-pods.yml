@@ -20,7 +20,7 @@ info:
   license:
     name: BSD 3.0
     url: https://github.com/tapis-project/pods_service
-  version: 1.9.0
+  version: 26Q1.1
 paths:
   /traefik-config:
     get:
@@ -787,6 +787,43 @@ paths:
                 - $ref: '#/components/schemas/ImageResponse'
                 - $ref: '#/components/schemas/ImageDeleteResponse'
                 title: Response Get Image
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    put:
+      tags:
+      - Images
+      summary: update_image
+      description: 'Update an image''s metadata (tenants, description).
+
+
+        Requires admin mode (X-Pods-Admin: true header).
+
+
+        Returns updated image object.'
+      operationId: update_image
+      parameters:
+      - name: image_id
+        in: path
+        required: true
+        schema:
+          title: Image Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateImage'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImageResponse'
         '422':
           description: Validation Error
           content:
@@ -2275,10 +2312,15 @@ paths:
       tags:
       - Permissions
       summary: set_pod_permission
-      description: 'Set a permission for a pod.
-
-
-        Returns updated pod permissions.'
+      description: "Set a permission for a pod.\n\nPermission formats:\n- username:LEVEL\
+        \ - Standard user permission (e.g., 'jsmith:READ')\n- tenant.<tenant_id>:READ\
+        \ - Cross-tenant auth permission. Allows users from <tenant_id> to authenticate\n\
+        \  to this pod via tapis_auth. Only settable by admins. Must use READ level.\
+        \ ex. tenant.public, tenant.dev\n\nNotes:\n- 'tenant.*' permissions require\
+        \ admin privileges (like '**' on templates)\n- 'tenant.*' permissions only\
+        \ support READ level (they gate cross-tenant auth access, not authorization)\n\
+        - There are 3 levels of permissions, READ, USER, and ADMIN.\n\nReturns updated\
+        \ pod permissions."
       operationId: set_pod_permission
       parameters:
       - name: pod_id
@@ -2737,16 +2779,22 @@ paths:
         \ stanza, and users gets to fastapi hello world response.\n\nusers can specify:\n\
         \ - tapis_auth=True/False - Turns on auth\n - tapis_auth_response_headers\
         \ - dict[str] - headers to set on response and their values\n - tapis_auth_allowed_users\
-        \ - list[str] - list of tapis users allowed to access pod\n - tapis_auth_return_path\
-        \ - str - uri to return to after auth, default is \"passthrough\", which we\
-        \ save in cookies(?) and return to. x-forwarded-host?\n\n - response headers\
-        \ need to be slightly modifiable to allow for different application requirements\n\
-        \ - for example we have to pass username, but many apps require @email.bit,\
-        \ so user must be able to append to user.\n - tapis_auth_response_headers:\
+        \ - list[str] - list of tapis users or permission-based groups allowed to\
+        \ access pod.\n   Supports literal usernames, \"*\" (all authenticated users),\
+        \ and special group strings:\n     AUTHORIZED_READS  -> users with READ or\
+        \ higher permission on the pod\n     AUTHORIZED_USERS  -> users with USER\
+        \ or higher permission on the pod (default)\n     AUTHORIZED_ADMINS -> users\
+        \ with ADMIN or higher (including APPROVEDADMIN) permission on the pod\n \
+        \  Groups resolve against the pod's permissions list at auth time.\n   Can\
+        \ mix groups with literal usernames, e.g. [\"AUTHORIZED_ADMINS\", \"guest_user\"\
+        ].\n - tapis_auth_return_path - str - uri to return to after auth, default\
+        \ is \"passthrough\", which we save in cookies(?) and return to. x-forwarded-host?\n\
+        \n - response headers need to be slightly modifiable to allow for different\
+        \ application requirements\n - for example we have to pass username, but many\
+        \ apps require @email.bit, so user must be able to append to user.\n - tapis_auth_response_headers:\
         \ {\"X-Tapis-Username\": \"<<tapisusername>>@tapis.io\", \"FROM\": \"pods\
         \ auth endpoint from <<tenant>>.<<site>>\", \"OAUTH2_USERNAME_KEY\": \"username\"\
-        }\n\n - tapis_auth_allowed_users, checks username against .lower() of username\
-        \ list to make sure it's in list. otherwise deny"
+        }"
       operationId: pod_auth
       parameters:
       - name: pod_id_net
@@ -3122,7 +3170,7 @@ components:
           - type: 'null'
           title: Creation Ts
           description: Time (UTC) that this image was created.
-          default: '2026-02-12T01:16:30.260488'
+          default: '2026-03-19T18:18:38.411049'
         added_by:
           type: string
           title: Added By
@@ -3181,6 +3229,163 @@ components:
       additionalProperties: false
       type: object
       title: LogsModel
+    Networking:
+      properties:
+        protocol:
+          type: string
+          title: Protocol
+          description: Which network protocol to use. `http`, `tcp`, `postgres`, or
+            `local_only`. `local_only` is only accessible from within the cluster.
+          default: http
+        port:
+          type: integer
+          title: Port
+          description: Pod port to expose via networking.url in this networking object.
+          default: 5000
+        url:
+          type: string
+          title: Url
+          description: URL used to access the port of the pod defined in this networking
+            object. Generated by service.
+          default: ''
+        ip_allow_list:
+          items:
+            type: string
+          type: array
+          title: Ip Allow List
+          description: List of IPs that are allowed to access this specific pod port.
+            If empty, all IPs are allowed. ex. ['127.0.0.1/32', '192.168.1.7']
+          default: []
+        tapis_auth:
+          type: boolean
+          title: Tapis Auth
+          description: If true, will require Tapis auth to access the pod.
+          default: false
+        tapis_auth_response_headers:
+          additionalProperties:
+            type: string
+          type: object
+          title: Tapis Auth Response Headers
+          description: Specification of headers to forward to the pod when using Tapis
+            auth.
+          default: {}
+        tapis_auth_allowed_users:
+          items:
+            type: string
+          type: array
+          title: Tapis Auth Allowed Users
+          description: 'List of users allowed to access the pod when using Tapis auth.
+            Supports literal usernames, ''*'' (all users), and permission-based groups:
+            ''AUTHORIZED_READS'' (READ+), ''AUTHORIZED_USERS'' (USER+), ''AUTHORIZED_ADMINS''
+            (ADMIN+, includes APPROVEDADMIN). Groups resolve against the pod''s permissions
+            list.'
+          default:
+          - AUTHORIZED_USERS
+        tapis_auth_return_path:
+          type: string
+          title: Tapis Auth Return Path
+          description: Path to redirect to when accessing the pod via Tapis auth.
+          default: /
+        tapis_auth_excluded_paths:
+          items:
+            type: string
+          type: array
+          title: Tapis Auth Excluded Paths
+          description: List of PathPrefix patterns to exclude from Tapis auth (no
+            forwardAuth). Useful for static assets that don't need auth. ex. ['/assets',
+            '/static', '/_app']
+          default: []
+        tapis_auth_excluded_path_regex:
+          items:
+            type: string
+          type: array
+          title: Tapis Auth Excluded Path Regex
+          description: List of PathRegexp patterns to exclude from Tapis auth. ex.
+            ['\\.(js|css|ico|png|jpg|jpeg|webp|gif|svg|woff2?|ttf|map)$']
+          default: []
+        cors_allow_origins:
+          items:
+            type: string
+          type: array
+          title: Cors Allow Origins
+          description: List of CORS allowed origins. ex. ['https://tacc.develop.tapis.io',
+            'https://tacc.tapis.io']
+          default: []
+        cors_allow_methods:
+          items:
+            type: string
+          type: array
+          title: Cors Allow Methods
+          description: List of CORS allowed methods. ex. ['GET', 'POST', 'PUT', 'DELETE']
+          default: []
+        cors_allow_headers:
+          items:
+            type: string
+          type: array
+          title: Cors Allow Headers
+          description: List of CORS allowed headers. ex. ['Content-Type', 'X-Tapis-Token']
+          default: []
+        cors_allow_credentials:
+          type: boolean
+          title: Cors Allow Credentials
+          description: Boolean to allow credentials to be sent with CORS requests.
+          default: false
+        cors_max_age:
+          type: integer
+          title: Cors Max Age
+          description: Max age of CORS preflight requests in seconds.
+          default: 100
+        tapis_ui_uri:
+          type: string
+          title: Tapis Ui Uri
+          description: Path to redirect to when accessing the pod via Tapis UI.
+          default: ''
+        tapis_ui_uri_redirect:
+          type: boolean
+          title: Tapis Ui Uri Redirect
+          description: If true, will redirect to the tapis_ui_uri when accessing the
+            pod via Tapis UI. Otherwise, just read-only uri.
+          default: false
+        tapis_ui_uri_description:
+          type: string
+          title: Tapis Ui Uri Description
+          description: Describing where the tapis_ui_uri will redirect to.
+          default: ''
+        proxy_compression:
+          type: boolean
+          title: Proxy Compression
+          description: Enable Traefik compress middleware for this HTTP endpoint.
+            Enabled by default for all HTTP protocol endpoints.
+          default: true
+        proxy_compression_encodings:
+          items:
+            type: string
+          type: array
+          title: Proxy Compression Encodings
+          description: 'Ordered list of compression encodings by priority. Valid values:
+            ''zstd'', ''br'', ''gzip''.'
+          default:
+          - zstd
+          - br
+          - gzip
+        proxy_compression_excluded_content_types:
+          items:
+            type: string
+          type: array
+          title: Proxy Compression Excluded Content Types
+          description: Content types to exclude from compression. Already-compressed
+            formats (images, video, archives) are excluded automatically. Set explicit
+            types here to add additional exclusions.
+          default: []
+        proxy_compression_min_response_body_bytes:
+          type: integer
+          title: Proxy Compression Min Response Body Bytes
+          description: Minimum response body size in bytes before compression is applied.
+            Responses smaller than this are not compressed.
+          default: 1024
+      additionalProperties: false
+      type: object
+      title: Networking
     NewImage:
       properties:
         image:
@@ -3294,7 +3499,7 @@ components:
             instance is started. -1 for unlimited. None uses default.
         networking:
           additionalProperties:
-            $ref: '#/components/schemas/models_pods__Networking'
+            $ref: '#/components/schemas/Networking'
           type: object
           title: Networking
           description: 'Networking information. `{"url_suffix": {"protocol": "http"  "tcp",
@@ -3753,7 +3958,7 @@ components:
             instance is started. -1 for unlimited. None uses default.
         networking:
           additionalProperties:
-            $ref: '#/components/schemas/models_pods__Networking'
+            $ref: '#/components/schemas/Networking'
           type: object
           title: Networking
           description: 'Networking information. `{"url_suffix": {"protocol": "http"  "tcp",
@@ -4030,7 +4235,8 @@ components:
         user:
           type: string
           title: User
-          description: User to modify permissions for.
+          description: User to modify permissions for. Supports 'username' or 'tenant.<tenant_id>'
+            format.
         level:
           type: string
           title: Level
@@ -4571,7 +4777,7 @@ components:
             instance is started. -1 for unlimited. None uses default.
         networking:
           additionalProperties:
-            $ref: '#/components/schemas/models_templates_tags__Networking'
+            $ref: '#/components/schemas/Networking'
           type: object
           title: Networking
           description: 'Networking information. `{"url_suffix": {"protocol": "http"  "tcp",
@@ -4881,6 +5087,25 @@ components:
       - version
       title: TemplatesWithDependentsResponse
       description: Response type for list of templates with optional dependency information.
+    UpdateImage:
+      properties:
+        tenants:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Tenants
+          description: Tenants that can use this image.
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Description
+          description: Description of image.
+      additionalProperties: false
+      type: object
+      title: UpdateImage
     UpdatePod:
       properties:
         image:
@@ -4977,7 +5202,7 @@ components:
         networking:
           anyOf:
           - additionalProperties:
-              $ref: '#/components/schemas/models_pods__Networking'
+              $ref: '#/components/schemas/Networking'
             type: object
           - type: 'null'
           title: Networking
@@ -5355,111 +5580,6 @@ components:
       - status
       - version
       title: VolumesResponse
-    models_pods__Networking:
-      properties:
-        protocol:
-          type: string
-          title: Protocol
-          description: Which network protocol to use. `http`, `tcp`, `postgres`, or
-            `local_only`. `local_only` is only accessible from within the cluster.
-          default: http
-        port:
-          type: integer
-          title: Port
-          description: Pod port to expose via networking.url in this networking object.
-          default: 5000
-        url:
-          type: string
-          title: Url
-          description: URL used to access the port of the pod defined in this networking
-            object. Generated by service.
-          default: ''
-        ip_allow_list:
-          items:
-            type: string
-          type: array
-          title: Ip Allow List
-          description: List of IPs that are allowed to access this specific pod port.
-            If empty, all IPs are allowed. ex. ['127.0.0.1/32', '192.168.1.7']
-          default: []
-        tapis_auth:
-          type: boolean
-          title: Tapis Auth
-          description: If true, will require Tapis auth to access the pod.
-          default: false
-        tapis_auth_response_headers:
-          additionalProperties:
-            type: string
-          type: object
-          title: Tapis Auth Response Headers
-          description: Specification of headers to forward to the pod when using Tapis
-            auth.
-          default: {}
-        tapis_auth_allowed_users:
-          items:
-            type: string
-          type: array
-          title: Tapis Auth Allowed Users
-          description: List of users allowed to access the pod when using Tapis auth.
-            Also accepts basic regex patterns to match against.
-          default:
-          - '*'
-        tapis_auth_return_path:
-          type: string
-          title: Tapis Auth Return Path
-          description: Path to redirect to when accessing the pod via Tapis auth.
-          default: /
-        cors_allow_origins:
-          items:
-            type: string
-          type: array
-          title: Cors Allow Origins
-          description: List of CORS allowed origins. ex. ['https://tacc.develop.tapis.io',
-            'https://tacc.tapis.io']
-          default: []
-        cors_allow_methods:
-          items:
-            type: string
-          type: array
-          title: Cors Allow Methods
-          description: List of CORS allowed methods. ex. ['GET', 'POST', 'PUT', 'DELETE']
-          default: []
-        cors_allow_headers:
-          items:
-            type: string
-          type: array
-          title: Cors Allow Headers
-          description: List of CORS allowed headers. ex. ['Content-Type', 'X-Tapis-Token']
-          default: []
-        cors_allow_credentials:
-          type: boolean
-          title: Cors Allow Credentials
-          description: Boolean to allow credentials to be sent with CORS requests.
-          default: false
-        cors_max_age:
-          type: integer
-          title: Cors Max Age
-          description: Max age of CORS preflight requests in seconds.
-          default: 100
-        tapis_ui_uri:
-          type: string
-          title: Tapis Ui Uri
-          description: Path to redirect to when accessing the pod via Tapis UI.
-          default: ''
-        tapis_ui_uri_redirect:
-          type: boolean
-          title: Tapis Ui Uri Redirect
-          description: If true, will redirect to the tapis_ui_uri when accessing the
-            pod via Tapis UI. Otherwise, just read-only uri.
-          default: false
-        tapis_ui_uri_description:
-          type: string
-          title: Tapis Ui Uri Description
-          description: Describing where the tapis_ui_uri will redirect to.
-          default: ''
-      additionalProperties: false
-      type: object
-      title: Networking
     models_pods__Resources:
       properties:
         cpu_request:
@@ -5503,110 +5623,6 @@ components:
       additionalProperties: false
       type: object
       title: Resources
-    models_templates_tags__Networking:
-      properties:
-        protocol:
-          type: string
-          title: Protocol
-          description: Which network protocol to use. `http`, `tcp`, `postgres`, or
-            `local_only`. `local_only` is only accessible from within the cluster.
-          default: http
-        port:
-          type: integer
-          title: Port
-          description: Pod port to expose via networking.url in this networking object.
-          default: 5000
-        url:
-          type: string
-          title: Url
-          description: URL used to access the port of the pod defined in this networking
-            object. Generated by service.
-          default: ''
-        ip_allow_list:
-          items:
-            type: string
-          type: array
-          title: Ip Allow List
-          description: List of IPs that are allowed to access this specific pod port.
-            If empty, all IPs are allowed. ex. ['127.0.0.1/32', '192.168.1.7']
-          default: []
-        tapis_auth:
-          type: boolean
-          title: Tapis Auth
-          description: If true, will require Tapis auth to access the pod.
-          default: false
-        tapis_auth_response_headers:
-          additionalProperties:
-            type: string
-          type: object
-          title: Tapis Auth Response Headers
-          description: Specification of headers to forward to the pod when using Tapis
-            auth.
-          default: {}
-        tapis_auth_allowed_users:
-          items:
-            type: string
-          type: array
-          title: Tapis Auth Allowed Users
-          description: List of users allowed to access the pod when using Tapis auth.
-          default:
-          - '*'
-        tapis_auth_return_path:
-          type: string
-          title: Tapis Auth Return Path
-          description: Path to redirect to when accessing the pod via Tapis auth.
-          default: /
-        cors_allow_origins:
-          items:
-            type: string
-          type: array
-          title: Cors Allow Origins
-          description: List of CORS allowed origins. ex. ['https://tacc.develop.tapis.io',
-            'https://tacc.tapis.io']
-          default: []
-        cors_allow_methods:
-          items:
-            type: string
-          type: array
-          title: Cors Allow Methods
-          description: List of CORS allowed methods. ex. ['GET', 'POST', 'PUT', 'DELETE']
-          default: []
-        cors_allow_headers:
-          items:
-            type: string
-          type: array
-          title: Cors Allow Headers
-          description: List of CORS allowed headers. ex. ['Content-Type', 'X-Tapis-Token']
-          default: []
-        cors_allow_credentials:
-          type: boolean
-          title: Cors Allow Credentials
-          description: Boolean to allow credentials to be sent with CORS requests.
-          default: false
-        cors_max_age:
-          type: integer
-          title: Cors Max Age
-          description: Max age of CORS preflight requests in seconds.
-          default: 100
-        tapis_ui_uri:
-          type: string
-          title: Tapis Ui Uri
-          description: Path to redirect to when accessing the pod via Tapis UI.
-          default: ''
-        tapis_ui_uri_redirect:
-          type: boolean
-          title: Tapis Ui Uri Redirect
-          description: If true, will redirect to the tapis_ui_uri when accessing the
-            pod via Tapis UI. Otherwise, just read-only uri.
-          default: false
-        tapis_ui_uri_description:
-          type: string
-          title: Tapis Ui Uri Description
-          description: Describing where the tapis_ui_uri will redirect to.
-          default: ''
-      additionalProperties: false
-      type: object
-      title: Networking
     models_templates_tags__Resources:
       properties:
         cpu_request:

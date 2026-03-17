@@ -1024,7 +1024,7 @@ class Pod(TapisPodBaseFull, table=True, validate=True):
         display.pop('permissions')
         display.pop('site_id')
         display.pop('modified_fields')
-        display.pop('action_logs')
+        display.pop('action_logs', None)
         #display['action_logs'] = display['action_logs'][-10:]
         
         # Redact config_content if not requested
@@ -1057,10 +1057,14 @@ class Pod(TapisPodBaseFull, table=True, validate=True):
         return template_tag_bit, modified_fields
 
     @classmethod
-    def db_get_all_with_permission(cls, user, level, tenant, site, omit_logs=True):
+    def db_get_all_with_permission(cls, user, level, tenant, site, defer_columns: list = None):
         """
         Get all and ensure permission exists.
+        Defers logs and action_logs columns by default to reduce data transfer.
         """
+        if defer_columns is None:
+            defer_columns = [cls.logs, cls.action_logs]
+
         site, tenant, store = cls.get_site_tenant_session(tenant=tenant, site=site)
         table_name = cls.table_name()
         logger.info(f'Top of {table_name}.db_get_all_with_permissions() for tenant.site: {tenant}.{site}')
@@ -1075,10 +1079,9 @@ class Pod(TapisPodBaseFull, table=True, validate=True):
             permission_list.append(f"{user}:{authed_level}")
 
         # Create statement
-        if omit_logs:
-            stmt = select(Pod).options(defer(Pod.logs)).where(Pod.permissions.overlap(permission_list))
-        else:
-            stmt = select(Pod).where(Pod.permissions.overlap(permission_list))
+        stmt = select(Pod).where(Pod.permissions.overlap(permission_list))
+        if defer_columns:
+            stmt = stmt.options(*[defer(col) for col in defer_columns])
 
         # Run command
         results = store.run("execute", stmt, scalars=True, all=True)

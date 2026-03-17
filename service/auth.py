@@ -132,6 +132,7 @@ def check_route_permissions(request):
         ["/error-handler/{status}", "GET", "NOT-API"],
         # IMAGES
         ["/pods/images/{image_id:path}", "GET", codes.NONE],
+        ["/pods/images/{image_id:path}", "PUT", codes.NONE],
         ["/pods/images/{image_id:path}", "DELETE", codes.NONE],#"ONLY-ADMIN"], # this should require admin, but can't use codes.ADMIN as permissions not defined on # just need to edit tests for this to work
         ["/pods/images", "GET", codes.NONE],
         ["/pods/images", "POST", codes.NONE],
@@ -282,7 +283,7 @@ def check_route_permissions(request):
     # Required for all API routes
     get_user_site_id()
     get_user_sk_roles()
-    g.admin = True if "PODS_ADMIN" in g.roles or g.username == "cgarcia" else False
+    g.admin = True if codes.ADMIN_ROLE in g.roles or g.username == "cgarcia" else False
     # Admin mode is opt-in: user must send X-Pods-Admin: true header to activate admin privileges.
     # g.admin = user HAS the admin role (capability check)
     # g.admin_active = user opted in to use admin powers this request (privilege escalation)

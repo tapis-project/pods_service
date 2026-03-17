@@ -51,7 +51,7 @@ async def list_snapshots():
         admin_only_count = sum(1 for s in snapshots_to_show if s.get('snapshot_id') not in user_snap_ids)
         metadata["admin_context"] = {
             "admin_mode": True,
-            "user_owned_ids": list(user_snap_ids),
+            "user_accessible_ids": list(user_snap_ids),
             "msg": f"You can access {len(snapshots_to_show) - admin_only_count} snapshots, admin reveals {admin_only_count}"
         }
 

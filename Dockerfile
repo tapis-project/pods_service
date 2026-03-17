@@ -11,7 +11,7 @@ ENV TAPIS_API=pods
 ENV PYTHONPATH=.:*:pods:pods/*
 
 ## PACKAGE INITIALIZATION
-COPY requirements.txt /home/tapis/
+COPY --chown=tapis:tapis requirements.txt /home/tapis/
 
 RUN apt-get update && apt-get install -y
 RUN apt-get install libffi-dev vim curl -y
@@ -23,24 +23,23 @@ RUN wget https://raw.githubusercontent.com/rabbitmq/rabbitmq-management/v3.8.9/b
 RUN chmod +x rabbitmqadmin
 
 ## FILE INITIALIZATION
+# For jupyter
+RUN mkdir -p /home/tapis/.local && chown tapis:tapis /home/tapis/.local
 # Get tapisservice.log ready for logging
-RUN touch /home/tapis/tapisservice.log
+RUN touch /home/tapis/tapisservice.log && chown tapis:tapis /home/tapis/tapisservice.log
 # Get config.json ready for mount
-RUN touch /home/tapis/config.json
+RUN touch /home/tapis/config.json && chown tapis:tapis /home/tapis/config.json
 # We overwrite sqlmodel package because it's buggy, but we still want the features.
 #COPY SQLMODEL/main.py /usr/local/lib/python3.10/site-packages/sqlmodel/main.py
 # Copy files
-COPY alembic /home/tapis/alembic
-COPY tests /home/tapis/tests
-COPY service /home/tapis/service
-COPY docs /home/tapis/docs
-COPY configschema.json entry.sh alembic.ini /home/tapis/
-RUN chmod +x /home/tapis/entry.sh
+COPY --chown=tapis:tapis alembic /home/tapis/alembic
+COPY --chown=tapis:tapis tests /home/tapis/tests
+COPY --chown=tapis:tapis service /home/tapis/service
+COPY --chown=tapis:tapis docs /home/tapis/docs
+COPY --chown=tapis:tapis configschema.json alembic.ini /home/tapis/
+COPY --chown=tapis:tapis --chmod=777 entry.sh /home/tapis/
 # Add helpful navigation through filenames at root of container
 RUN touch /pods-code-in---home-tapis
-
-# Permission finalization
-RUN chown -R tapis:tapis /home/tapis
 
 # Run everything as tapis user (uid 4872)
 USER tapis
