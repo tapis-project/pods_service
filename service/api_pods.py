@@ -36,7 +36,19 @@ async def list_pods():
     """
     logger.info("GET /pods - Top of list_pods.")
     # TODO search
-    pods =  Pod.db_get_all_with_permission(user=g.username, level='READ', tenant=g.request_tenant_id, site=g.site_id)
+    # Admin mode: single DB call, figure out user's own pods in-memory
+    if getattr(g, 'admin_active', False):
+        pods = Pod.db_get_all(tenant=g.request_tenant_id, site=g.site_id)
+        read_levels = {'READ', 'USER', 'ADMIN', 'APPROVEDADMIN'}
+        user_pod_ids = set()
+        for pod in pods:
+            for perm in pod.permissions:
+                user, level = perm.split(':', 1)
+                if user == g.username and level in read_levels:
+                    user_pod_ids.add(pod.pod_id)
+                    break
+    else:
+        pods = Pod.db_get_all_with_permission(user=g.username, level='READ', tenant=g.request_tenant_id, site=g.site_id)
     pods_to_show = []
     metadata = {}
     final_msg = "Pods retrieved successfully."
@@ -58,6 +70,13 @@ async def list_pods():
                 f"Pod {getattr(pod, 'pod_id', None)} failed validation; omitting; reach out to admin; this debug might help: {error_list}"
             )
             final_msg = "Some pods failed validation. Please check metadata.warnings for details."
+    if getattr(g, 'admin_active', False):
+        admin_only_count = sum(1 for p in pods_to_show if p.get('pod_id') not in user_pod_ids)
+        metadata["admin_context"] = {
+            "admin_mode": True,
+            "user_owned_ids": list(user_pod_ids),
+            "msg": f"You can access {len(pods_to_show) - admin_only_count} pods, admin reveals {admin_only_count}"
+        }
     logger.info("Pods retrieved.")
     return ok(result=pods_to_show, metadata=metadata, msg=final_msg)
 

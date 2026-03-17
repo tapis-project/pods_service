@@ -116,10 +116,12 @@ def check_permissions(user, level, object, object_type, roles=None, tenant=None)
     # Running something like: Checking pod_id: {pod.pod_id} permissions for user {user}
     logger.debug(f"Checking {object_type}_id: {eval(f'object.{object_type}_id')} permissions for user {user}")
 
-    # first, if roles were passed, check for admin role
+    # Admin role bypass only when admin mode is explicitly activated via X-Pods-Admin header
     if roles:
         if codes.ADMIN_ROLE in roles:
-            return True
+            from tapisservice.tapisfastapi.utils import g as _g
+            if getattr(_g, 'admin_active', False):
+                return True
 
     # Get all permissions for this object_type
     # Running something like: volumes.get_permissions()

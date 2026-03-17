@@ -283,7 +283,15 @@ def check_route_permissions(request):
     get_user_site_id()
     get_user_sk_roles()
     g.admin = True if "PODS_ADMIN" in g.roles or g.username == "cgarcia" else False
-    if g.admin:
+    # Admin mode is opt-in: user must send X-Pods-Admin: true header to activate admin privileges.
+    # g.admin = user HAS the admin role (capability check)
+    # g.admin_active = user opted in to use admin powers this request (privilege escalation)
+    g.admin_active = False
+    x_admin_header = request.headers.get("x-pods-admin", "").lower().strip()
+    if x_admin_header == "true":
+        if not g.admin:
+            raise PermissionsException("X-Pods-Admin header requires the PODS_ADMIN role.")
+        g.admin_active = True
         has_pem = True
 
     if "{pod_id_net}" in matched_route[0]:

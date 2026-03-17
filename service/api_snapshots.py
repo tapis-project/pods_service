@@ -29,14 +29,34 @@ async def list_snapshots():
     logger.info("GET /pod/snapshots - Top of list_snapshots.")
 
     # TODO search
-    snapshots =  Snapshot.db_get_all_with_permission(user=g.username, level='READ', tenant=g.request_tenant_id, site=g.site_id)
+    metadata = {}
+    if getattr(g, 'admin_active', False):
+        snapshots = Snapshot.db_get_all(tenant=g.request_tenant_id, site=g.site_id)
+        read_levels = {'READ', 'USER', 'ADMIN', 'APPROVEDADMIN'}
+        user_snap_ids = set()
+        for snapshot in snapshots:
+            for perm in snapshot.permissions:
+                user, level = perm.split(':', 1)
+                if user == g.username and level in read_levels:
+                    user_snap_ids.add(snapshot.snapshot_id)
+                    break
+    else:
+        snapshots = Snapshot.db_get_all_with_permission(user=g.username, level='READ', tenant=g.request_tenant_id, site=g.site_id)
 
     snapshots_to_show = []
     for snapshot in snapshots:
         snapshots_to_show.append(snapshot.display())
 
+    if getattr(g, 'admin_active', False):
+        admin_only_count = sum(1 for s in snapshots_to_show if s.get('snapshot_id') not in user_snap_ids)
+        metadata["admin_context"] = {
+            "admin_mode": True,
+            "user_owned_ids": list(user_snap_ids),
+            "msg": f"You can access {len(snapshots_to_show) - admin_only_count} snapshots, admin reveals {admin_only_count}"
+        }
+
     logger.info("Snapshots retrieved.")
-    return ok(result=snapshots_to_show, msg="Snapshots retrieved successfully.")
+    return ok(result=snapshots_to_show, metadata=metadata, msg="Snapshots retrieved successfully.")
 
 
 @router.post(

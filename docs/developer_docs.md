@@ -154,6 +154,30 @@ This is white boarding when discussing future endpoints.
 View [live-docs](https://tapis-project.github.io/live-docs/?service=Pods) for current endpoints.  
 
 
+---
+## Admin Mode (Opt-In via `X-Pods-Admin` Header)
+
+Users with `PODS_ADMIN` role have elevated privileges, but admin behavior is **opt-in per-request** via the `X-Pods-Admin: true` header. This prevents admins from accidentally seeing/modifying resources they don't own during normal use. Non-admins sending `X-Pods-Admin: true` get a 403.
+
+Two flags on `g`:
+- `g.admin` — user has the admin role (`PODS_ADMIN` in roles or hardcoded username). Used for capability gates ("only admins can set `**` permissions").
+- `g.admin_active` — user opted in this request (`g.admin` + `X-Pods-Admin: true` header). Controls permission bypass and list-all behavior.
+
+| Behavior | Normal | With `X-Pods-Admin: true` |
+|----------|--------|---------------------------|
+| Route/object permission checks | Normal | Bypassed |
+| List endpoints (GET /pods, /volumes, etc.) | User's own resources | All in tenant + `metadata.admin_context` with counts |
+| Site/tenant-wide permissions (`**`, `tenant.*`) | Blocked | Allowed (uses `g.admin`, not `g.admin_active`) |
+
+```bash
+# Normal — only your pods
+curl -H "X-Tapis-Token: $TOKEN" https://tacc.tapis.io/v3/pods
+
+# Admin — all pods in tenant
+curl -H "X-Tapis-Token: $TOKEN" -H "X-Pods-Admin: true" https://tacc.tapis.io/v3/pods
+# metadata.admin_context: {"admin_mode": true, "msg": "Your own: 3, additional from admin: 12"}
+```
+
 
 ---
 ## Secrets Syntax Reference

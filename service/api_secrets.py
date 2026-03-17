@@ -40,16 +40,34 @@ async def list_secrets():
     # Get all secrets for this site
     secrets = Secret.db_get_all(tenant="siteadmintable", site=g.site_id)
     
-    # Filter to only show secrets the user has READ+ permission to
-    user_secrets = []
-    for secret in secrets:
-        if check_permissions(user=g.username, object=secret, object_type="secret", level=codes.READ, roles=g.roles):
-            user_secrets.append(secret)
-    
-    secrets_to_show = [secret.display() for secret in user_secrets]
+    metadata = {}
+    if getattr(g, 'admin_active', False):
+        # Admin mode: show all secrets, check user's own access in-memory
+        read_levels = {'READ', 'USER', 'ADMIN', 'APPROVEDADMIN'}
+        user_secrets_ids = set()
+        for secret in secrets:
+            for perm in secret.permissions:
+                user, level = perm.split(':', 1)
+                if user == g.username and level in read_levels:
+                    user_secrets_ids.add(secret.secret_id)
+                    break
+        secrets_to_show = [secret.display() for secret in secrets]
+        admin_only_count = len(secrets_to_show) - len(user_secrets_ids)
+        metadata["admin_context"] = {
+            "admin_mode": True,
+            "user_owned_ids": list(user_secrets_ids),
+            "msg": f"You can access {len(user_secrets_ids)} secrets, admin reveals {admin_only_count}"
+        }
+    else:
+        # Normal mode: filter to only show secrets the user has READ+ permission to
+        user_secrets = []
+        for secret in secrets:
+            if check_permissions(user=g.username, object=secret, object_type="secret", level=codes.READ, roles=g.roles):
+                user_secrets.append(secret)
+        secrets_to_show = [secret.display() for secret in user_secrets]
 
     logger.info(f"Secrets retrieved. Count: {len(secrets_to_show)}")
-    return ok(result=secrets_to_show, msg="Secrets retrieved successfully.")
+    return ok(result=secrets_to_show, metadata=metadata, msg="Secrets retrieved successfully.")
 
 
 @router.post(

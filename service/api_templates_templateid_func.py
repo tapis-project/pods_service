@@ -62,11 +62,9 @@ async def set_template_permission(template_id, set_permission: SetPermission):
 
     inp_user = set_permission.user
     inp_level = set_permission.level
-    
-    #TODO FOR FUTURE ROLE CHANGE
-    g.admin = True if g.username in ["cgarcia", "_pods_testuser_admin"] else False
 
     # Admin-only check for site-wide '**' and tenant-wide 'tenant.*' permissions
+    # Uses g.admin (role check) not g.admin_active — this is a capability gate, not opt-in behavior
     if inp_user == "**" and not g.admin:
         raise KeyError("Only admins can set site-wide '**' permissions on templates.")
     if inp_user.startswith("tenant.") and not g.admin:

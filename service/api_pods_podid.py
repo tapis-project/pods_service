@@ -354,8 +354,8 @@ async def get_derived_pod(
     resolved_secrets = {}
     resolve_errors = []
     if resolve_secrets:
-        # Admin-only check - g.admin is set in auth.py based on PODS_ADMIN role
-        if getattr(g, 'admin', False) and g.username not in ["cgarcia", "_pods_testuser_admin"]:
+        # resolve_secrets is a privileged operation — requires admin role (g.admin)
+        if not getattr(g, 'admin', False):
             raise Exception("resolve_secrets=true requires admin privileges (pods_admin role)")
         
         # Resolve secret_map values

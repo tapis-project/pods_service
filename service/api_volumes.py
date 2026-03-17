@@ -30,14 +30,34 @@ async def list_volumes():
     logger.info("GET /pod/volumes - Top of list_volumes.")
 
     # TODO search
-    volumes =  Volume.db_get_all_with_permission(user=g.username, level='READ', tenant=g.request_tenant_id, site=g.site_id)
+    metadata = {}
+    if getattr(g, 'admin_active', False):
+        volumes = Volume.db_get_all(tenant=g.request_tenant_id, site=g.site_id)
+        read_levels = {'READ', 'USER', 'ADMIN', 'APPROVEDADMIN'}
+        user_vol_ids = set()
+        for volume in volumes:
+            for perm in volume.permissions:
+                user, level = perm.split(':', 1)
+                if user == g.username and level in read_levels:
+                    user_vol_ids.add(volume.volume_id)
+                    break
+    else:
+        volumes = Volume.db_get_all_with_permission(user=g.username, level='READ', tenant=g.request_tenant_id, site=g.site_id)
 
     volumes_to_show = []
     for volume in volumes:
         volumes_to_show.append(volume.display())
 
+    if getattr(g, 'admin_active', False):
+        admin_only_count = sum(1 for v in volumes_to_show if v.get('volume_id') not in user_vol_ids)
+        metadata["admin_context"] = {
+            "admin_mode": True,
+            "user_owned_ids": list(user_vol_ids),
+            "msg": f"You can access {len(volumes_to_show) - admin_only_count} volumes, admin reveals {admin_only_count}"
+        }
+
     logger.info("Volumes retrieved.")
-    return ok(result=volumes_to_show, msg="Volumes retrieved successfully.")
+    return ok(result=volumes_to_show, metadata=metadata, msg="Volumes retrieved successfully.")
 
 
 @router.post(
