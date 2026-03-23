@@ -8,7 +8,32 @@ https://tapis.readthedocs.io/en/latest/index.html
 You may also reference live-docs based on the OpenAPI v3 specification here:
 https://tapis-project.github.io/live-docs
 
-## 25Q4.0 - 2025-10-20
+
+## 26Q1.0
+### Breaking Changes:
+- Volume Mount nomenclature has changed.
+  
+
+### New features:
+- Added secret implementation to access Tapis secrets and have template/pod placeholders be somewhat easily specified
+- Placeholders are resolved at runtime allowing for some additional flows
+- Beginnings of better direct pod download/upload endpoints, still issues depending on if cli tools are available or not
+- Adding more CORS options into networking
+- Better public templates
+- Migrating to a public tenant templates/images scheme
+- Advanced secret resolution
+- Improvements to dependency checking for templates and tag via materialized view, visible for admins
+- Default compression + static path exclusion for tapis auth to speed things up and allow for apps to route around tapis_auth for backend files which can queue up over time due to tapis_auth (should be sped up)
+- tapis_auth allow AUTHORIZED_USERS permission
+- tapis_auth allow sign-in from other tenants for cases like TapisUI
+- Reworked g.admin with a secondary g.admin_active for all endpoints (TUI work as well)
+- Substantial speedup to Dockerfile
+
+### Bug fixes:
+- Fixes for many volume paths to one pod
+
+
+## 25Q4.0
 ### Breaking Changes:
 - No change.
   
