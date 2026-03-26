@@ -1,4 +1,6 @@
-from fastapi import APIRouter
+import re
+
+from fastapi import APIRouter, Query
 from channels import CommandChannel
 from codes import REQUESTED, ON
 from pydantic import ValidationError
@@ -28,13 +30,22 @@ router = APIRouter()
     summary="list_pods",
     operation_id="list_pods",
     response_model=PodsResponse)
-async def list_pods():
+async def list_pods(
+    derived: bool = Query(False, description="Return pod definitions merged/derived with templates (like GET /pods/{pod_id}/derived)."),
+    derived_lite: bool = Query(False, description="Fast template-only derivation. Skips password lookup and legacy placeholder interpolation.")
+):
     """
     Get all pods in your respective tenant and site that you have READ or higher access to.
 
     Returns a list of pods.
     """
-    logger.info("GET /pods - Top of list_pods.")
+    derive_mode = "none"
+    if derived_lite:
+        derive_mode = "lite"
+    elif derived:
+        derive_mode = "full"
+
+    logger.info(f"GET /pods - Top of list_pods. derived={derived}, derived_lite={derived_lite}, derive_mode={derive_mode}")
     # TODO search
     # Admin mode: single DB call, figure out user's own pods in-memory
     if getattr(g, 'admin_active', False):
@@ -56,6 +67,38 @@ async def list_pods():
         try:
             # Validate using your response model (e.g., PodBase or whatever Pod.display() returns)
             pod_data = pod.display()
+
+            if derive_mode != "none":
+                # Derive through template chain using the same merge utility as the pod-level derived endpoint.
+                pod_for_derive = PodBaseFull(**pod.dict().copy())
+                if pod_for_derive.template:
+                    final_pod = combine_pod_and_template_recursively(
+                        pod_for_derive,
+                        pod_for_derive.template,
+                        tenant=g.request_tenant_id,
+                        site=g.site_id
+                    )
+                else:
+                    final_pod = pod_for_derive
+
+                if derive_mode == "full":
+                    # Full derivation keeps parity with pod-level derived endpoint for legacy placeholder interpolation.
+                    pods_env = Password.db_get_with_pk(pod_for_derive.pod_id, pod_for_derive.tenant_id, pod_for_derive.site_id).dict()
+                    if final_pod.environment_variables:
+                        for key, val in final_pod.environment_variables.items():
+                            if not isinstance(val, str):
+                                continue
+                            new_val = val
+                            tapis_matches = re.findall(r'<<TAPIS_(.*?)>>', val)
+                            tapissecret_matches = re.findall(r'<<tapissecret_(.*?)>>', val)
+                            for match in tapis_matches:
+                                new_val = new_val.replace(f"<<TAPIS_{match}>>", pods_env.get(match, ""))
+                            for match in tapissecret_matches:
+                                new_val = new_val.replace(f"<<tapissecret_{match}>>", pods_env.get(match, ""))
+                            final_pod.environment_variables[key] = new_val
+
+                pod_data = final_pod.display()
+
             PodBaseRead(**pod_data)  # This will raise if invalid
             pods_to_show.append(pod_data)
         except ValidationError as e:
@@ -70,6 +113,17 @@ async def list_pods():
                 f"Pod {getattr(pod, 'pod_id', None)} failed validation; omitting; reach out to admin; this debug might help: {error_list}"
             )
             final_msg = "Some pods failed validation. Please check metadata.warnings for details."
+        except Exception as e:
+            logger.warning(f"Pod {getattr(pod, 'pod_id', 'COULD NOT FIND PODID')} failed derive/list processing: {e}")
+            if "warnings" not in metadata:
+                metadata["warnings"] = []
+            metadata["warnings"].append(
+                f"Pod {getattr(pod, 'pod_id', None)} failed derive/list processing; omitting; debug: {str(e)}"
+            )
+            final_msg = "Some pods failed processing. Please check metadata.warnings for details."
+    if derive_mode != "none":
+        metadata["derived"] = True
+        metadata["derived_mode"] = derive_mode
     if getattr(g, 'admin_active', False):
         admin_only_count = sum(1 for p in pods_to_show if p.get('pod_id') not in user_pod_ids)
         metadata["admin_context"] = {
