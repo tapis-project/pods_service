@@ -45,6 +45,7 @@ from models_pods import Pod, PodBaseFull
 from models_volumes import Volume
 from models_snapshots import Snapshot
 from models_templates_utils import combine_pod_and_template_recursively
+from kubernetes_templates import ensure_pod_configmaps, ephemeral_configmap_name
 from secret_utils import resolve_secret_map
 from models_volume_mounts_utils import validate_volume_mounts_on_start
 from psycopg2 import ProgrammingError
@@ -525,6 +526,126 @@ def check_db_pods(k8_pods):
             continue
 
 
+_last_configmap_reconcile = 0
+CONFIGMAP_RECONCILE_INTERVAL = 60  # seconds
+
+
+def reconcile_configmaps(k8_pods):
+    """
+    Proactively verify that ConfigMaps backing ephemeral volume mounts exist
+    for all running pods. Regenerates any missing ConfigMaps so K8s can
+    remount them if a pod is rescheduled to another node.
+
+    Handles: cluster migration, node failure, accidental CM deletion.
+    Throttled to run at most once per CONFIGMAP_RECONCILE_INTERVAL seconds.
+    """
+    global _last_configmap_reconcile
+    now = time.time()
+    if now - _last_configmap_reconcile < CONFIGMAP_RECONCILE_INTERVAL:
+        return
+    _last_configmap_reconcile = now
+
+    logger.debug("reconcile_configmaps: Starting ConfigMap reconciliation check.")
+
+    # Identify pods that are actually running in K8s
+    running_pods = []
+    for k8_pod in k8_pods:
+        try:
+            c_state = k8_pod['pod_info'].status.container_statuses[0].state
+            if c_state and c_state.running:
+                running_pods.append(k8_pod)
+        except Exception:
+            continue
+
+    if not running_pods:
+        return
+
+    # Batch-list all ConfigMaps once (avoids per-mount API calls)
+    try:
+        all_configmaps = set(
+            cm.metadata.name
+            for cm in k8.list_namespaced_config_map(namespace=NAMESPACE).items
+        )
+    except Exception as e:
+        logger.error(f"reconcile_configmaps: Failed to list ConfigMaps: {e}")
+        return
+
+    for k8_pod in running_pods:
+        try:
+            pod = Pod.db_get_with_pk(k8_pod['pod_id'], k8_pod['tenant_id'], k8_pod['site_id'])
+            if not pod or pod.status != AVAILABLE:
+                continue
+
+            # Derive volume_mounts (merge template if applicable)
+            derived_pod = pod
+            if pod.template:
+                try:
+                    pod_copy = PodBaseFull(**pod.dict().copy())
+                    derived_pod = combine_pod_and_template_recursively(
+                        pod_copy, pod.template, tenant=pod.tenant_id, site=pod.site_id
+                    )
+                except Exception as e:
+                    logger.warning(f"reconcile_configmaps: Failed to derive template for pod {pod.pod_id}: {e}")
+                    continue
+
+            volume_mounts = getattr(derived_pod, 'volume_mounts', {}) or {}
+
+            # Quick check: are any expected ephemeral ConfigMaps missing?
+            any_missing = False
+            for mount_path, vol_mount in volume_mounts.items():
+                if vol_mount is None:
+                    continue
+                vtype = vol_mount.get('type', '') if isinstance(vol_mount, dict) else getattr(vol_mount, 'type', '')
+                if vtype.lower() != 'ephemeral':
+                    continue
+                expected_name = ephemeral_configmap_name(pod.k8_name, mount_path)
+                if expected_name not in all_configmaps:
+                    any_missing = True
+                    break
+
+            if not any_missing:
+                continue
+
+            # At least one ConfigMap is missing — resolve secrets for interpolation
+            logger.warning(f"reconcile_configmaps: Pod {pod.pod_id} has missing ephemeral ConfigMap(s). "
+                           "Resolving secrets for regeneration.")
+
+            resolved_secrets = {}
+            merged_secret_map = getattr(derived_pod, 'secret_map', {}) or {}
+            if merged_secret_map:
+                try:
+                    resolved_secrets, secret_errors = resolve_secret_map(
+                        merged_secret_map,
+                        site_id=pod.site_id,
+                        tenant_id=pod.tenant_id,
+                        pod_id=pod.pod_id,
+                        pod=pod,
+                    )
+                    if secret_errors:
+                        logger.error(f"reconcile_configmaps: Secret resolution errors for pod {pod.pod_id}: "
+                                     f"{'; '.join(secret_errors)}")
+                        continue
+                except Exception as e:
+                    logger.error(f"reconcile_configmaps: Exception resolving secrets for pod {pod.pod_id}: {e}")
+                    continue
+
+            regenerated = ensure_pod_configmaps(
+                pod,
+                resolved_secrets=resolved_secrets,
+                existing_configmaps=all_configmaps,
+            )
+
+            if regenerated:
+                # Update cached set so subsequent pods in this pass don't re-check
+                all_configmaps.update(regenerated)
+                pod.db_update(f"health regenerated {len(regenerated)} missing ConfigMap(s): {', '.join(regenerated)}")
+                logger.info(f"reconcile_configmaps: Regenerated {len(regenerated)} ConfigMap(s) for pod {pod.pod_id}")
+
+        except Exception as e:
+            logger.error(f"reconcile_configmaps: Error processing pod {k8_pod.get('pod_id', '?')}: {e}", exc_info=True)
+            continue
+
+
 def main():
     # Try and run check_db_pods. Will try for 60 seconds until health is declared "broken".
     logger.info("Top of health. Checking if db's are initialized.")
@@ -555,6 +676,7 @@ def main():
         check_k8_pods(k8_pods)
         check_k8_services()
         check_db_pods(k8_pods)
+        reconcile_configmaps(k8_pods)
 
         ### Have a short wait
         time.sleep(3)

@@ -229,8 +229,9 @@ def start_generic_pod(input_pod, revision: int, resolved_secrets: dict = None):
                     cfg_filename = config_filename or os.path.basename(mount_path)
                     config_dir_path = os.path.dirname(mount_path)
                     
-                    # Create ConfigMap-based volume
-                    configmap_name = full_k8_name.lower()[:63]  # K8s name length limit
+                    # Create ConfigMap-based volume — name via the shared helper so the
+                    # health-loop reconciler computes the identical name.
+                    configmap_name = ephemeral_configmap_name(pod.k8_name, mount_path)
                     
                     # Check config_update_mode
                     should_create = True
@@ -348,3 +349,122 @@ def start_generic_pod(input_pod, revision: int, resolved_secrets: dict = None):
     # Create init_container, container, and service.
     create_pod(**container)
     create_service(name = pod.k8_name, ports_dict = ports_dict)
+
+
+def ephemeral_configmap_name(k8_name, mount_path):
+    """Compute the expected ConfigMap name for an ephemeral volume mount.
+    Must stay in sync with the naming convention in start_generic_pod."""
+    mount_hash = hashlib.md5(mount_path.encode()).hexdigest()[:8]
+    full_name = f"{k8_name}--ephemeral--{mount_hash}"
+    if len(full_name) > 62:
+        full_name = full_name[:62]
+    return full_name.lower()[:63]
+
+
+def ensure_pod_configmaps(input_pod, resolved_secrets=None, existing_configmaps=None):
+    """
+    Verify that all ConfigMaps for ephemeral volume mounts exist.
+    Regenerate any that are missing (e.g., after cluster migration, node
+    rescheduling, or accidental deletion).
+
+    Args:
+        input_pod: Pod object from database.
+        resolved_secrets: Dict of resolved secret values for config_content interpolation.
+        existing_configmaps: Optional set of ConfigMap names already known to exist
+                             (avoids per-mount K8s API calls when checking many pods).
+
+    Returns:
+        list: Names of ConfigMaps that were regenerated (empty if all existed).
+    """
+    resolved_secrets = resolved_secrets or {}
+
+    # Derive final pod (with template if applicable) — same as start_generic_pod
+    pod_init = PodBaseFull(**input_pod.dict().copy())
+    if pod_init.template:
+        pod = combine_pod_and_template_recursively(
+            pod_init, pod_init.template, tenant=pod_init.tenant_id, site=pod_init.site_id
+        )
+    else:
+        pod = pod_init
+
+    if not pod.volume_mounts:
+        return []
+
+    # Quick scan: bail early if no ephemeral mounts
+    has_ephemeral = False
+    for vol_mount in pod.volume_mounts.values():
+        if vol_mount is None:
+            continue
+        vtype = vol_mount.get("type", "") if isinstance(vol_mount, dict) else getattr(vol_mount, "type", "")
+        if vtype.lower() == "ephemeral":
+            has_ephemeral = True
+            break
+    if not has_ephemeral:
+        return []
+
+    # Get legacy pods_env for backward-compatible interpolation
+    pods_env_obj = Password.db_get_with_pk(pod.pod_id, pod.tenant_id, pod.site_id)
+    pods_env = pods_env_obj.dict() if pods_env_obj else {}
+
+    regenerated = []
+
+    for mount_path, vol_mount in pod.volume_mounts.items():
+        if vol_mount is None:
+            continue
+
+        # Normalise to dict
+        if hasattr(vol_mount, 'model_dump'):
+            vol_info = vol_mount.model_dump()
+        elif hasattr(vol_mount, 'dict'):
+            vol_info = vol_mount.dict()
+        elif isinstance(vol_mount, dict):
+            vol_info = vol_mount
+        else:
+            vol_info = dict(vol_mount)
+
+        if vol_info.get("type", "").lower() != "ephemeral":
+            continue
+
+        config_content = vol_info.get("config_content", "")
+        if not config_content:
+            continue
+
+        config_filename = vol_info.get("config_filename", "")
+        config_permissions = vol_info.get("config_permissions", "0644")
+
+        configmap_name = ephemeral_configmap_name(pod.k8_name, mount_path)
+
+        # Check existence — prefer the pre-fetched set when available
+        if existing_configmaps is not None:
+            exists = configmap_name in existing_configmaps
+        else:
+            exists = configmap_exists(configmap_name, namespace=NAMESPACE)
+
+        if exists:
+            continue
+
+        # ConfigMap is missing — regenerate it
+        logger.warning(f"ConfigMap '{configmap_name}' missing for pod {pod.pod_id} "
+                       f"at mount '{mount_path}'. Regenerating.")
+
+        cfg_filename = config_filename or os.path.basename(mount_path)
+
+        # Interpolate secrets in config_content (same two-pass approach as start_generic_pod)
+        interpolated_content = interpolate_config_content(
+            config_content, resolved_secrets, fail_on_missing=False
+        )
+        interpolated_content = interpolate_legacy_secrets(interpolated_content, pods_env)
+
+        try:
+            create_configmap(
+                name=configmap_name,
+                data={cfg_filename: interpolated_content},
+                namespace=NAMESPACE,
+            )
+            regenerated.append(configmap_name)
+            logger.info(f"Regenerated ConfigMap '{configmap_name}' for pod {pod.pod_id}")
+        except Exception as e:
+            logger.error(f"Failed to regenerate ConfigMap '{configmap_name}' "
+                         f"for pod {pod.pod_id}: {e}")
+
+    return regenerated
