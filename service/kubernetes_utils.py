@@ -822,7 +822,7 @@ def create_pvc(name):
             # PVC doesn't exist, create it
         
         pvc_resources = client.V1ResourceRequirements(
-            requests={"storage": "10Gi"}
+            requests={"storage": conf.get("pvc_default_storage_size", "70Gi")}
         )
         pvc_spec = client.V1PersistentVolumeClaimSpec(
             access_modes=["ReadWriteOnce"],

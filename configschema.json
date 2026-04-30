@@ -42,6 +42,11 @@
         "type": "string",
         "description": "Which kubernetes storage class to use when creating default persistent volume claims."
       },
+      "pvc_default_storage_size": {
+        "type": "string",
+        "default": "70Gi",
+        "description": "Storage size requested when creating a pod's default PersistentVolumeClaim (Kubernetes quantity string, e.g. '70Gi')."
+      },
       "default_pod_cpu_limit": {
         "type": "integer",
         "description": "Default CPU allocation pod is allowed to use. In millicpus (m). 1000 = 1 cpu.",
