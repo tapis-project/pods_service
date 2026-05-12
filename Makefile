@@ -245,3 +245,28 @@ endif
 	@printf "\n"
 
 	printf "\n"
+
+
+# Directory of tapis-typescript repo relative to this one (override with TAPIS_TS_DIR=...)
+export TAPIS_TS_DIR ?= ../tapis-typescript
+
+#: Sync OpenAPI spec from running service into tapis-typescript spec.yml. Requires service to be up (make up).
+spec:
+	@printf "Makefile: $(GREEN)spec$(NC)\n"
+	@ABS_TS_DIR=$$(cd $(TAPIS_TS_DIR) && pwd) && \
+	DEST="$$ABS_TS_DIR/services/pods/spec.yml" && \
+	PODS_PORT=$$(kubectl get service pods-api 2>/dev/null | grep -o -P '(?<=8000:)\d+(?=/TCP)') && \
+	PODS_IP=$$(minikube ip) && \
+	SPEC_URL="http://$$PODS_IP:$$PODS_PORT/openapi.json" && \
+	printf "  📋 : Fetching $$SPEC_URL\n" && \
+	curl -sf "$$SPEC_URL" -o /tmp/pods-spec.json && \
+	printf "\n  📄 : Destination: $(LCYAN)$$DEST$(NC)\n" && \
+	printf "  ❓ : Copy fetched spec to destination? [Y/n] " && \
+	read -r confirm && confirm=$${confirm:-Y} && \
+	if [ "$$confirm" = "Y" ] || [ "$$confirm" = "y" ]; then \
+		kubectl exec deploy/pods-api -- python3 -c 'import json,sys,yaml; print(yaml.dump(json.load(sys.stdin), sort_keys=False))' < /tmp/pods-spec.json > "$$DEST" && \
+		printf "  ✅ : $$DEST updated\n" && \
+		printf "  ℹ️  : Run scripts/dev-pods.sh --build in tapis-ui to rebuild and link\n"; \
+	else \
+		printf "  ⏭️  : Skipped — spec not updated\n"; \
+	fi

@@ -1976,6 +1976,29 @@ paths:
 
         Returns a list of pods.'
       operationId: list_pods
+      parameters:
+      - name: derived
+        in: query
+        required: false
+        schema:
+          type: boolean
+          description: Return pod definitions merged/derived with templates (like
+            GET /pods/{pod_id}/derived).
+          default: false
+          title: Derived
+        description: Return pod definitions merged/derived with templates (like GET
+          /pods/{pod_id}/derived).
+      - name: derived_lite
+        in: query
+        required: false
+        schema:
+          type: boolean
+          description: Fast template-only derivation. Skips password lookup and legacy
+            placeholder interpolation.
+          default: false
+          title: Derived Lite
+        description: Fast template-only derivation. Skips password lookup and legacy
+          placeholder interpolation.
       responses:
         '200':
           description: Successful Response
@@ -1983,6 +2006,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PodsResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
     post:
       tags:
       - Pods
@@ -2000,11 +2029,11 @@ paths:
         Returns new pod object.'
       operationId: create_pod
       requestBody:
+        required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/NewPod'
-        required: true
       responses:
         '200':
           description: Successful Response

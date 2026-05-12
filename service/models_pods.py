@@ -658,10 +658,10 @@ class Pod(TapisPodBaseFull, table=True, validate=True):
                 if level != 'READ':
                     raise ValueError(f"tenant.* permissions only support READ level (cross-tenant auth gate). Got '{level}' in '{perm}'.")
             else:
-                # Standard username: alphanumeric with underscores/hyphens
-                res = re.fullmatch(r'[a-zA-Z][a-zA-Z0-9_-]*', user)
+                # Standard username: alphanumeric with underscores/hyphens/dots/@(for emails)
+                res = re.fullmatch(r'[a-zA-Z][a-zA-Z0-9_.@-]*', user)
                 if not res:
-                    raise ValueError(f"Permission username must be alphanumeric (with underscores/hyphens), starting with a letter. Got '{user}'.")
+                    raise ValueError(f"Permission username must start with a letter and may contain alphanumeric characters, underscores, hyphens, dots, or @ (for email addresses). Got '{user}'.")
         return v
 
     @validator('environment_variables')

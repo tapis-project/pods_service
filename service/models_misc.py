@@ -51,10 +51,10 @@ class SetPermission(TapisApiModel):
             if len(tenant_id) > 64:
                 raise ValueError(f"'tenant.' permission tenant ID must be less than 64 characters. Got length {len(tenant_id)}.")
         else:
-            # Standard username: alphanumeric with underscores/hyphens
-            res = re.fullmatch(r'[a-zA-Z][a-zA-Z0-9_-]*', v)
+            # Standard username: alphanumeric with underscores/hyphens/dots/@ (for emails)
+            res = re.fullmatch(r'[a-zA-Z][a-zA-Z0-9_.@-]*', v)
             if not res:
-                raise ValueError(f"User must be alphanumeric (with underscores/hyphens), starting with a letter, or use 'tenant.<tenant_id>' format. Got '{v}'.")
+                raise ValueError(f"User must start with a letter and may contain alphanumeric characters, underscores, hyphens, dots, or @ (for email addresses), or use 'tenant.<tenant_id>' format. Got '{v}'.")
         return v
 
     @validator('level')

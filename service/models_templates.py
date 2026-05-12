@@ -115,8 +115,8 @@ class Template(TapisTemplateBaseFull, table=True, validate=True):
                     if level not in ["READ"]:
                         raise ValueError(f"Permission '{arg}' is not allowed. Tenant-wide 'tenant.*' may only have READ level permissions.")
                 # Handle standard username permissions
-                elif not user.isascii() or not re.fullmatch(r"[a-zA-Z0-9_@\-]+", user):
-                    raise ValueError(f"User part of permission '{arg}' must be alphanumeric or use hyphen.")
+                elif not user.isascii() or not re.fullmatch(r"[a-zA-Z0-9_.@\-]+", user):
+                    raise ValueError(f"User part of permission '{arg}' must start with a letter and may contain alphanumeric characters, underscores, hyphens, dots, or @ (for email addresses).")
         return v
     
     @validator('metatags')
