@@ -36,6 +36,16 @@ spec:
         - --api
         - --api.dashboard
         - --accesslog=true
+        - --accesslog.format=json
+        - --accesslog.fields.headers.defaultmode=keep
+        - --accesslog.fields.headers.names.X-Tapis-User=keep
+        - --accesslog.fields.headers.names.X-Tapis-Token=redact
+        # Redact credential-bearing headers at the source so they never enter the
+        # access-log stream (which vector ships). The access gate sets a live
+        # session cookie on anonymous requests. defaultmode stays keep so useful
+        # headers (User-Agent, Referer) are still captured.
+        - --accesslog.fields.headers.names.Cookie=redact
+        - --accesslog.fields.headers.names.Authorization=redact
         - --api.insecure=true
         #- --providers.kubernetesingress=True
         #- --providers.kubernetescrd

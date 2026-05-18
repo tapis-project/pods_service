@@ -214,6 +214,10 @@ def check_route_permissions(request):
         ["/pods/{pod_id}/stop", "GET", codes.ADMIN],
         ["/pods/{pod_id}/start", "GET", codes.ADMIN],
         ["/pods/{pod_id}/restart", "GET", codes.ADMIN],
+        ["/pods/admin/health", "GET", codes.ADMIN],
+        ["/pods/{pod_id}/traffic", "GET", codes.READ],
+        ["/pods/{pod_id}/log-runs", "GET", codes.READ],
+        ["/pods/{pod_id}/log-runs/{run_index}", "GET", codes.READ],
         ["/pods/{pod_id}/derived", "GET", codes.READ],
         ["/pods/{pod_id}/download_from_pod{path:path}", "GET", codes.ADMIN],
         ["/pods/{pod_id}/list_files{path:path}", "GET", codes.ADMIN],
@@ -348,6 +352,9 @@ def check_route_permissions(request):
     elif "jupyter/ensure" in matched_route[0]:
         # jupyter/ensure doesn't have permissions
         has_pem = True
+    elif matched_route[2] == codes.ADMIN:
+        # Flat admin routes with no object ID (e.g. /pods/admin/health)
+        has_pem = g.admin
 
     # check for codes.NONE
     if matched_route[2] == codes.NONE:
