@@ -92,7 +92,7 @@ def spawn_pod(pod_id, tenant_id, site_id, resolved_secrets=None):
     logger.debug(f"Spawner found pod in REQUESTED status as expected. status: {status}. status_requested: {status_requested}")
     # Pod status was REQUESTED and status_requested was ON; moving on to SPAWNER_SETUP ----
     pod.status = SPAWNER_SETUP
-    pod.db_update(tenant=tenant_id, site=site_id) # f"spawner set status to SPAWNER_SETUP", doesn't need to be said with CREATING so soon.
+    pod.db_update(f"spawner confirmed SPAWNER_REQUESTED bit, set status to SPAWNER_SETUP", tenant=tenant_id, site=site_id)
     logger.debug(f"spawner has updated pod status to SPAWNER_SETUP")
 
     try:

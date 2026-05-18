@@ -554,7 +554,8 @@ class PodBaseRead(PodBase):
     status: str = Field("STOPPED", description = "Current status of pod.")
     status_container: Dict = Field({}, description = "Status of container if exists. Gives phase.", sa_column=Column(JSON))
     creation_ts: datetime | None = Field(None, description = "Time (UTC) that this pod was created.")
-    update_ts: datetime | None = Field(None, description = "Time (UTC) that this pod was updated.")
+    update_ts: datetime | None = Field(None, description = "Time (UTC) that this pod was last updated by a user action.")
+    last_status_check_ts: datetime | None = Field(None, description = "Time (UTC) of last automated health/status check.")
     start_instance_ts: datetime | None = Field(None, description = "Time (UTC) that this pod instance was started.")
 
 

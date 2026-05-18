@@ -15,7 +15,7 @@ from tapisservice.tapisfastapi.utils import g, ok, error
 from tapisservice.config import conf
 from __init__ import t, BadRequestError
 from typing import List, Any
-from kubernetes_utils import run_k8_exec, k8s_copy_bytes_to_pod, NAMESPACE
+from kubernetes_utils import run_k8_exec, k8s_copy_bytes_to_pod, NAMESPACE, k8, configmap_exists, get_pod_k8s_metrics
 from utils import check_permissions
 from errors import ResourceError, PermissionsException
 from models_volume_mounts_utils import validate_volume_mounts_on_start
@@ -442,13 +442,14 @@ async def exec_pod_commands(pod_id, command: ExecutePodCommands):
                 cmd = new_cmd
 
             cmd_start_time = time.time()
-            stdout, stderr, duration, status, success = run_k8_exec(pod.k8_name, cmd, timeout=command.command_timeout)
-            
+            stdout, stderr, duration, status, success, exit_code = run_k8_exec(pod.k8_name, cmd, timeout=command.command_timeout)
+
             results.append({
                 "command": cmd,
                 "stdout": stdout,
                 "stderr": stderr,
                 "success": success if success else (status if status else False),
+                "exit_code": exit_code,
                 "duration_sec": round(duration, 3),
                 "timestamp": datetime.utcnow().isoformat()
             })
@@ -1609,3 +1610,169 @@ def callback(pod_id_net, request: Request):
 
     #return JSONResponse(content = f"Callback for pod_id_net: {pod_id_net}, tapis_domain: {tapis_domain}, username: {username}, token: {token}", status_code = 200)
     #return response
+
+@router.get(
+    "/pods/{pod_id}/events",
+    tags=["Pods"],
+    summary="get_pod_events",
+    operation_id="get_pod_events")
+async def get_pod_events(
+    pod_id,
+    limit: int = Query(default=50, ge=1, le=500, description="Max events to return."),
+):
+    """
+    Get Kubernetes events for a pod.
+
+    Returns events from the K8s event stream for this pod's underlying container.
+    Useful for diagnosing mount failures, image pull errors, OOMKilled, and container
+    crash reasons that do not surface in the pods-service action_logs.
+
+    Also returns a quick summary of which ephemeral ConfigMaps exist vs are missing.
+    """
+    logger.info(f"GET /pods/{pod_id}/events - Top of get_pod_events.")
+    pod = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
+
+    # ── k8s events ────────────────────────────────────────────────────────────
+    events = []
+    try:
+        ev_list = k8.list_namespaced_event(
+            namespace=NAMESPACE,
+            field_selector=f"involvedObject.name={pod.k8_name}",
+        )
+        for e in sorted(ev_list.items, key=lambda x: (x.last_timestamp or datetime.min), reverse=True)[:limit]:
+            events.append({
+                "type":           e.type,
+                "reason":         e.reason,
+                "message":        e.message,
+                "count":          e.count,
+                "first_time":     e.first_timestamp.isoformat() if e.first_timestamp else None,
+                "last_time":      e.last_timestamp.isoformat()  if e.last_timestamp  else None,
+                "source":         e.source.component if e.source else None,
+            })
+    except Exception as e:
+        logger.warning(f"get_pod_events: failed to list k8 events for {pod_id}: {e}")
+
+    # ── ephemeral ConfigMap status ─────────────────────────────────────────────
+    import hashlib, os as _os, re as _re
+    cm_status = []
+    vol_mounts = pod.volume_mounts or {}
+    for mount_path, vol in vol_mounts.items():
+        if vol is None:
+            continue
+        vtype = vol.get("type", "") if isinstance(vol, dict) else getattr(vol, "type", "")
+        if str(vtype).lower() != "ephemeral":
+            continue
+        # Replicate the configmap name generation from kubernetes_templates.py
+        mount_hash = hashlib.md5(mount_path.encode()).hexdigest()[:8]
+        raw_src = "ephemeral"
+        src = _re.sub(r'[^a-z0-9-]', '', raw_src.lower())
+        if not src or not src[0].isalnum():
+            src = "vol" + src
+        if src and not src[-1].isalnum():
+            src = src.rstrip('-')
+        if not src:
+            src = "ephemeral"
+        full_name = f"{pod.k8_name}--{src}--{mount_hash}"
+        if len(full_name) > 62:
+            full_name = full_name[:62]
+        cm_name = full_name.lower()[:63]
+        exists = configmap_exists(cm_name, namespace=NAMESPACE)
+        config_content = vol.get("config_content") if isinstance(vol, dict) else getattr(vol, "config_content", None)
+        cm_status.append({
+            "mount_path":       mount_path,
+            "configmap_name":   cm_name,
+            "exists_in_k8s":    exists,
+            "config_content_bytes": len(config_content) if config_content else 0,
+        })
+
+    return ok(result={
+        "pod_id":    pod_id,
+        "k8_name":   pod.k8_name,
+        "status":    pod.status,
+        "events":    events,
+        "ephemeral_configmaps": cm_status,
+    }, msg=f"Pod events retrieved for {pod_id}.")
+
+
+@router.get(
+    "/pods/{pod_id}/metrics",
+    tags=["Pods"],
+    summary="get_pod_metrics",
+    operation_id="get_pod_metrics")
+async def get_pod_metrics(pod_id):
+    """
+    Get live compute and traffic metrics for a pod.
+
+    Returns current CPU/memory usage from the k8s Metrics API plus 24-hour
+    traffic statistics from the traffic_logs table. CPU/memory data requires
+    metrics-server to be installed; traffic data is always available.
+    """
+    logger.info(f"GET /pods/{pod_id}/metrics - Top of get_pod_metrics.")
+    pod = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
+
+    # ── k8s live usage ─────────────────────────────────────────────────────────
+    k8s_data = get_pod_k8s_metrics(pod.k8_name)
+
+    # ── 24-hour traffic summary ────────────────────────────────────────────────
+    traffic_24h: dict = {}
+    try:
+        from sqlmodel import select, func as sqlfunc
+        from models_traffic import TrafficLog
+        from datetime import timedelta
+
+        store = pg_store[g.site_id][g.request_tenant_id]
+        since = datetime.utcnow() - timedelta(hours=24)
+
+        # Total requests and avg latency
+        stmt_all = (
+            select(
+                sqlfunc.count().label("total"),
+                sqlfunc.avg(TrafficLog.duration_ms).label("avg_ms"),
+                sqlfunc.max(TrafficLog.duration_ms).label("max_ms"),
+            )
+            .where(TrafficLog.pod_id == pod_id)
+            .where(TrafficLog.tenant_id == g.request_tenant_id)
+            .where(TrafficLog.ts >= since)
+        )
+        row_all = store.run("execute", stmt_all, first=True)
+
+        # Successful (< 400)
+        stmt_ok = (
+            select(sqlfunc.count().label("cnt"))
+            .where(TrafficLog.pod_id == pod_id)
+            .where(TrafficLog.tenant_id == g.request_tenant_id)
+            .where(TrafficLog.ts >= since)
+            .where(TrafficLog.status_code < 400)
+        )
+        row_ok = store.run("execute", stmt_ok, first=True)
+
+        total = row_all.total if row_all else 0
+        success = row_ok.cnt if row_ok else 0
+        traffic_24h = {
+            "total":          total or 0,
+            "success":        success or 0,
+            "error_rate_pct": round((1 - (success / total)) * 100, 1) if total else 0,
+            "avg_latency_ms": round(row_all.avg_ms or 0, 1) if row_all else 0,
+            "max_latency_ms": round(row_all.max_ms or 0, 1) if row_all else 0,
+        }
+    except Exception as e:
+        logger.warning(f"get_pod_metrics traffic query error: {e}")
+        traffic_24h = {"error": str(e)}
+
+    # ── Resource config ────────────────────────────────────────────────────────
+    res = pod.resources or {}
+
+    return ok(result={
+        "pod_id":   pod_id,
+        "k8_name":  pod.k8_name,
+        "status":   pod.status,
+        "k8s_metrics": k8s_data,    # {} if metrics-server unavailable
+        "resources": {
+            "cpu_request_m":  int(res.get("cpu_request",  0) or 0),
+            "cpu_limit_m":    int(res.get("cpu_limit",    0) or 0),
+            "mem_request_mb": int(res.get("mem_request",  0) or 0),
+            "mem_limit_mb":   int(res.get("mem_limit",    0) or 0),
+            "gpus":           int(res.get("gpus",         0) or 0),
+        },
+        "traffic_24h": traffic_24h,
+    }, msg=f"Pod metrics retrieved for {pod_id}.")

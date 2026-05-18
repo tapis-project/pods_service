@@ -146,6 +146,11 @@ def check_route_permissions(request):
         ["/pods/templates/{template_id}/permissions", "GET", codes.USER],
         ["/pods/templates/{template_id}/permissions/{user}", "DELETE", codes.ADMIN],
         ["/pods/templates/{template_id}/permissions", "POST", codes.ADMIN],
+        ["/pods/templates/{template_id}/gallery/photos/{n}", "GET", codes.READ],
+        ["/pods/templates/{template_id}/gallery/photos/{n}", "PUT", codes.NONE],
+        ["/pods/templates/{template_id}/gallery/photos/{n}", "DELETE", codes.NONE],
+        ["/pods/templates/{template_id}/gallery/note", "PUT", codes.NONE],
+        ["/pods/templates/{template_id}/gallery", "GET", codes.READ],
         ["/pods/templates/{template_id}/list", "GET", codes.READ],
         ["/pods/templates/{template_id}", "GET", codes.READ],
         ["/pods/templates/{template_id}", "PUT", codes.USER],
@@ -164,6 +169,11 @@ def check_route_permissions(request):
         ["/pods/volumes/{volume_id}", "DELETE", codes.ADMIN],
         ["/pods/volumes", "GET", codes.NONE],
         ["/pods/volumes", "POST", codes.NONE],
+        ["/pods/{pod_id}/events", "GET", codes.READ],
+        ["/pods/{pod_id}/metrics", "GET", codes.READ],
+        ["/pods/admin/metrics", "GET", codes.ADMIN],
+        ["/pods/volumes/{volume_id}/usage", "GET", codes.READ],
+        ["/pods/volumes/usage", "GET", codes.READ],
         # SNAPSHOTS
         ["/pods/snapshots/{snapshot_id}/permissions", "GET", codes.USER],
         ["/pods/snapshots/{snapshot_id}/permissions/{user}", "DELETE", codes.ADMIN],
@@ -175,6 +185,8 @@ def check_route_permissions(request):
         ["/pods/snapshots/{snapshot_id}", "DELETE", codes.ADMIN],
         ["/pods/snapshots", "GET", codes.NONE],
         ["/pods/snapshots", "POST", codes.NONE],
+        ["/pods/snapshots/{snapshot_id}/usage", "GET", codes.READ],
+        ["/pods/snapshots/usage", "GET", codes.READ],
         # JUPYTER
         ["/pods/jupyter/{pod_id}/upload", "POST", codes.USER],
         ["/pods/jupyter/ensure", "GET", codes.USER],
@@ -215,6 +227,7 @@ def check_route_permissions(request):
         ["/pods/{pod_id}/start", "GET", codes.ADMIN],
         ["/pods/{pod_id}/restart", "GET", codes.ADMIN],
         ["/pods/admin/health", "GET", codes.ADMIN],
+        ["/pods/admin/debug-traffic", "GET", codes.ADMIN],
         ["/pods/{pod_id}/traffic", "GET", codes.READ],
         ["/pods/{pod_id}/log-runs", "GET", codes.READ],
         ["/pods/{pod_id}/log-runs/{run_index}", "GET", codes.READ],
@@ -303,16 +316,19 @@ def check_route_permissions(request):
     get_user_site_id()
     get_user_sk_roles()
     g.admin = True if codes.ADMIN_ROLE in g.roles or g.username == "cgarcia" else False
-    # Admin mode is opt-in: user must send X-Pods-Admin: true header to activate admin privileges.
-    # g.admin = user HAS the admin role (capability check)
-    # g.admin_active = user opted in to use admin powers this request (privilege escalation)
+    # g.admin = user HAS the admin role — grants implicit access to all routes.
+    # g.admin_active = user also sent X-Pods-Admin: true — activates UI-level admin powers (see all pods, etc.)
     g.admin_active = False
     x_admin_header = request.headers.get("x-pods-admin", "").lower().strip()
     if x_admin_header == "true":
         if not g.admin:
             raise PermissionsException("X-Pods-Admin header requires the PODS_ADMIN role.")
         g.admin_active = True
-        has_pem = True
+
+    if g.admin:
+        # Admins bypass all object-level permission checks.
+        logger.debug(f"Admin user {g.username} granted access to {request.url.path}.")
+        return
 
     if "{pod_id_net}" in matched_route[0]:
         logger.debug(f"Matched {{pod_id_net}} route. request.url.path: {request.url.path}")

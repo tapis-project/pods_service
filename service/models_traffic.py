@@ -8,6 +8,7 @@ from tapisservice.tapisfastapi.utils import g
 from tapisservice.config import conf
 
 from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import or_
 from sqlmodel import Field, SQLModel, select, JSON, Column, String, delete, func, text
 from models_base import TapisModel, TapisApiModel
 
@@ -58,27 +59,32 @@ class TrafficLog(TapisTrafficLogBaseFull, table=True, validate=True):
 
     @validator('tenant_id')
     def set_tenant_id(cls, v):
+        if v:
+            return v
         return g.request_tenant_id
 
     @validator('site_id')
     def set_site_id(cls, v):
+        if v:
+            return v
         return g.site_id
 
     @classmethod
     def purge_old(cls, pod_id: str, tenant: str, site: str, keep: int = 1000):
         """Delete rows beyond the `keep` most-recent for a given pod."""
         site, tenant, store = cls.get_site_tenant_session(tenant=tenant, site=site)
+        pod_id_filter = or_(cls.pod_id == pod_id, cls.pod_id.like(f'{pod_id}@%'))
         subq = (
             select(cls.ts)
-            .where(cls.pod_id == pod_id, cls.tenant_id == tenant, cls.site_id == site)
+            .where(pod_id_filter, cls.tenant_id == tenant, cls.site_id == site)
             .order_by(cls.ts.desc())
             .offset(keep)
             .limit(1)
         )
-        cutoff_ts = store.run("execute", subq, scalars=True, first=True)
+        cutoff_ts = store.run("scalar", subq)
         if cutoff_ts:
             stmt = delete(cls).where(
-                cls.pod_id == pod_id,
+                pod_id_filter,
                 cls.tenant_id == tenant,
                 cls.site_id == site,
                 cls.ts <= cutoff_ts
@@ -95,7 +101,12 @@ class TrafficLog(TapisTrafficLogBaseFull, table=True, validate=True):
                    since: Optional[datetime] = None,
                    until: Optional[datetime] = None) -> List['TrafficLog']:
         site, tenant, store = cls.get_site_tenant_session(tenant=tenant, site=site)
-        q = select(cls).where(cls.pod_id == pod_id, cls.tenant_id == tenant, cls.site_id == site)
+        # Match bare pod_id OR legacy rows stored with @{entrypoint} suffix (e.g. headscale@http)
+        q = select(cls).where(
+            or_(cls.pod_id == pod_id, cls.pod_id.like(f'{pod_id}@%')),
+            cls.tenant_id == tenant,
+            cls.site_id == site,
+        )
         if method:
             q = q.where(cls.method == method.upper())
         if status_code:

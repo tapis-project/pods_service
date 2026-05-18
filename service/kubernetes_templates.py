@@ -221,6 +221,11 @@ def start_generic_pod(input_pod, revision: int, resolved_secrets: dict = None):
                 case "ephemeral":
                     # Ephemeral config volumes - inline config_content mounted as ConfigMap
                     # No external Volume resource needed
+                    logger.info(
+                        f"ephemeral mount at '{mount_path}': config_content present={bool(config_content)}, "
+                        f"length={len(config_content) if config_content else 0}, "
+                        f"resolved_secrets_keys={sorted(resolved_secrets.keys()) if resolved_secrets else []}"
+                    )
                     if not config_content:
                         logger.warning(f"Ephemeral mount at '{mount_path}' has no config_content, skipping")
                         continue
@@ -246,7 +251,18 @@ def start_generic_pod(input_pod, revision: int, resolved_secrets: dict = None):
                         # 2. Then interpolate legacy <<TAPIS_*>> placeholders for backward compatibility
                         interpolated_content = interpolate_config_content(config_content, resolved_secrets, fail_on_missing=False)
                         interpolated_content = interpolate_legacy_secrets(interpolated_content, pods_env)
-                        
+                        # Count unresolved placeholders to surface secret resolution issues
+                        import re as _re
+                        unresolved = _re.findall(r'\$\{pods:secrets:[^}]+\}', interpolated_content)
+                        if unresolved:
+                            logger.warning(
+                                f"ephemeral mount '{mount_path}': {len(unresolved)} unresolved secret placeholder(s) "
+                                f"in config_content after interpolation: {unresolved[:5]}. "
+                                f"Check that secret_map keys match the placeholder names."
+                            )
+                        else:
+                            logger.info(f"ephemeral mount '{mount_path}': all placeholders resolved, interpolated={len(interpolated_content)} bytes")
+
                         # Create a ConfigMap for this ephemeral config
                         try:
                             create_configmap(
@@ -254,10 +270,17 @@ def start_generic_pod(input_pod, revision: int, resolved_secrets: dict = None):
                                 data={cfg_filename: interpolated_content},
                                 namespace=NAMESPACE
                             )
-                            logger.info(f"Created ConfigMap '{configmap_name}' in namespace '{NAMESPACE}'")
+                            logger.info(f"Created/updated ConfigMap '{configmap_name}' in namespace '{NAMESPACE}'")
                         except Exception as e:
-                            logger.error(f"Failed to create ConfigMap {configmap_name} in namespace {NAMESPACE}: {e}")
-                            continue
+                            logger.error(f"Failed to create/update ConfigMap {configmap_name}: {e}")
+                            # If the CM doesn't exist at all we can't mount it — skip.
+                            # If it exists (e.g. created by a prior run but update failed due to
+                            # missing RBAC update permission), mount the existing version rather
+                            # than leaving the pod without the volume entirely.
+                            if not configmap_exists(configmap_name, namespace=NAMESPACE):
+                                logger.error(f"ConfigMap {configmap_name} does not exist; skipping mount for {mount_path}")
+                                continue
+                            logger.warning(f"Mounting existing ConfigMap {configmap_name} at {mount_path} (content may be stale).")
                     
                     # Create volume referencing the ConfigMap
                     # Set file mode from config_permissions (convert octal string to int)

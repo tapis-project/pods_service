@@ -222,6 +222,125 @@ def get_k8_logs(name: str):
         return ""
 
 
+def get_pod_k8_events(k8_name: str, namespace: str = None) -> list:
+    """
+    Fetch k8s events for a pod, newest-Warning first.
+    Returns a list of dicts with type, reason, message, count, last_time.
+    Safe to call from the health loop — returns [] on any error.
+    """
+    if namespace is None:
+        namespace = NAMESPACE
+    try:
+        from datetime import datetime as _dt
+        ev_list = k8.list_namespaced_event(
+            namespace=namespace,
+            field_selector=f"involvedObject.name={k8_name}",
+        )
+        events = []
+        for e in ev_list.items:
+            events.append({
+                "type":      e.type,
+                "reason":    e.reason or "",
+                "message":   (e.message or "").strip(),
+                "count":     e.count or 1,
+                "last_time": e.last_timestamp.isoformat() if e.last_timestamp else None,
+            })
+        # Warnings first, then by recency
+        events.sort(key=lambda x: (x["type"] != "Warning", x["last_time"] or ""), reverse=False)
+        # Secondary sort: newest within each type
+        warnings = [e for e in events if e["type"] == "Warning"]
+        others   = [e for e in events if e["type"] != "Warning"]
+        warnings.sort(key=lambda x: x["last_time"] or "", reverse=True)
+        others.sort(key=lambda x: x["last_time"] or "",   reverse=True)
+        return warnings + others
+    except Exception as ex:
+        logger.warning(f"get_pod_k8_events({k8_name}): {ex}")
+        return []
+
+
+def _parse_cpu_millicores(cpu_str: str) -> float:
+    """Parse k8s CPU string to millicores.  '2m' -> 2.0,  '0.5' -> 500.0"""
+    if not cpu_str:
+        return 0.0
+    if cpu_str.endswith('n'):          # nanocores
+        return float(cpu_str[:-1]) / 1_000_000
+    if cpu_str.endswith('u'):          # microcores
+        return float(cpu_str[:-1]) / 1_000
+    if cpu_str.endswith('m'):          # millicores (most common)
+        return float(cpu_str[:-1])
+    return float(cpu_str) * 1000       # whole cores
+
+
+def _parse_memory_mb(mem_str: str) -> float:
+    """Parse k8s memory string to megabytes.  '256Mi' -> 256.0,  '1Gi' -> 1024.0"""
+    if not mem_str:
+        return 0.0
+    suffixes = [('Ki', 1/1024), ('Mi', 1.0), ('Gi', 1024.0), ('Ti', 1024**2),
+                ('K',  1/1024), ('M',  1.0),  ('G',  1024.0), ('T',  1024**2)]
+    for suffix, factor in suffixes:
+        if mem_str.endswith(suffix):
+            return float(mem_str[:-len(suffix)]) * factor
+    return float(mem_str) / (1024 * 1024)   # raw bytes → MB
+
+
+def get_pod_k8s_metrics(k8_name: str, namespace: str = None) -> dict:
+    """
+    Fetch current CPU/memory usage for one pod from the k8s Metrics API.
+    Returns a dict with cpu_m (millicores) and mem_mb (megabytes), or {} on error.
+    Requires metrics-server installed on the cluster.
+    """
+    if namespace is None:
+        namespace = NAMESPACE
+    try:
+        custom = client.CustomObjectsApi()
+        data = custom.get_namespaced_custom_object(
+            group="metrics.k8s.io", version="v1beta1",
+            namespace=namespace, plural="pods", name=k8_name,
+        )
+        containers = data.get("containers", [])
+        cpu_m = sum(_parse_cpu_millicores(c["usage"].get("cpu", "0"))
+                    for c in containers if c.get("usage"))
+        mem_mb = sum(_parse_memory_mb(c["usage"].get("memory", "0"))
+                     for c in containers if c.get("usage"))
+        return {
+            "cpu_m":   round(cpu_m, 2),
+            "mem_mb":  round(mem_mb, 2),
+            "window":  data.get("window", ""),
+            "ts":      data.get("timestamp", ""),
+        }
+    except Exception as e:
+        logger.debug(f"get_pod_k8s_metrics({k8_name}): {e}")
+        return {}
+
+
+def get_all_pod_k8s_metrics(namespace: str = None) -> dict:
+    """
+    Fetch current CPU/memory for ALL pods in the namespace in one API call.
+    Returns a dict keyed by k8_name → {cpu_m, mem_mb}.
+    """
+    if namespace is None:
+        namespace = NAMESPACE
+    try:
+        custom = client.CustomObjectsApi()
+        data = custom.list_namespaced_custom_object(
+            group="metrics.k8s.io", version="v1beta1",
+            namespace=namespace, plural="pods",
+        )
+        result = {}
+        for item in data.get("items", []):
+            name = item["metadata"]["name"]
+            containers = item.get("containers", [])
+            cpu_m = sum(_parse_cpu_millicores(c["usage"].get("cpu", "0"))
+                        for c in containers if c.get("usage"))
+            mem_mb = sum(_parse_memory_mb(c["usage"].get("memory", "0"))
+                         for c in containers if c.get("usage"))
+            result[name] = {"cpu_m": round(cpu_m, 2), "mem_mb": round(mem_mb, 2)}
+        return result
+    except Exception as e:
+        logger.warning(f"get_all_pod_k8s_metrics: {e}")
+        return {}
+
+
 def get_traefik_pod_name() -> str:
     """Return the name of the running Traefik pod (label app=pods-traefik), or empty string."""
     try:
@@ -344,7 +463,7 @@ def run_k8_exec(k8_name: str, command: list, namespace: str = "", timeout: int =
     if return_code != 0:
         success = False
 
-    return stdout, stderr, duration, status, success
+    return stdout, stderr, duration, status, success, return_code
 
 def container_running(name: str):
     """

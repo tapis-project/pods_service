@@ -39,7 +39,7 @@ from channels import CommandChannel
 from kubernetes import client, config
 from kubernetes_utils import get_current_k8_services, get_current_k8_pods, rm_container, rm_pvc, \
     rm_service, KubernetesError, get_k8_logs, get_traefik_logs, list_all_containers, run_k8_exec, \
-    list_configmaps_by_prefix, delete_configmap, NAMESPACE
+    list_configmaps_by_prefix, delete_configmap, NAMESPACE, get_pod_k8_events
 from codes import AVAILABLE, DELETING, STOPPED, ERROR, REQUESTED, COMPLETE, RESTART, ON, OFF
 from stores import pg_store, SITE_TENANT_DICT
 from models_pods import Pod, PodBaseFull
@@ -63,9 +63,6 @@ logger = get_logger(__name__)
 # Per-pod cursor tracking the latest ts already ingested from Traefik access logs.
 # Keyed by "site:tenant:pod_id". Reset on process restart (safe — we deduplicate by ts).
 _traefik_log_cursor: dict[str, 'datetime'] = {}
-
-# Epoch timestamp of the last completed health tick. 0 = never run.
-_last_health_tick: float = 0
 
 
 # k8 client creation
@@ -139,7 +136,7 @@ def graceful_rm_pod(pod, log=None):
             logger.warning(f"Could not finalize log run for pod {pod.pod_id}: {e}")
         # Change pod status to SHUTTING DOWN
         pod.status = DELETING
-        pod.db_update(log)
+        pod.db_update(log, user_update=False)
         logger.debug(f"spawner has updated pod status to DELETING")
 
         return rm_pod(pod.k8_name)
@@ -233,32 +230,61 @@ def check_k8_pods(k8_pods):
                 pod.status = COMPLETE
                 # We update if there's been a change.
                 if pod != pre_health_pod:
-                    pod.db_update(f"health found pod in succeeded, set status to COMPLETE")
+                    pod.db_update(f"health found pod in succeeded, set status to COMPLETE", user_update=False)
                 continue
             elif k8_pod_phase in ["Running", "Pending", "Failed"]:
                 # Check if container running or in error state
                 # Container can be in waiting state due to ContainerCreating ofc
                 if c_state:
                     if c_state.waiting and c_state.waiting.reason != "ContainerCreating":
-                        logger.critical(f"Kube pod in waiting state. msg:{c_state.waiting.message}; reason: {c_state.waiting.reason}")
-                        status_container['message'] = f"Pod in waiting state for reason: {c_state.waiting.message}."
+                        reason = c_state.waiting.reason or "Unknown"
+                        detail = c_state.waiting.message or ""
+                        logger.error(f"Kube pod in waiting/error state. reason={reason}; detail={detail}")
+                        # Fetch k8s events for richer context (ImagePullBackOff, FailedMount, etc.)
+                        k8_events = get_pod_k8_events(k8_pod['k8_name'])
+                        event_lines = [
+                            f"[{e['reason']}] {e['message']}" for e in k8_events[:5]
+                            if e.get('message')
+                        ]
+                        event_summary = " | ".join(event_lines)
+                        full_msg = f"{reason}: {detail}" if detail else reason
+                        if event_summary:
+                            full_msg = f"{full_msg} — {event_summary}"
+                        status_container['message'] = full_msg
                         pod.status_container = status_container
                         pod.status = ERROR
-                        # We update if there's been a change.
                         if pod != pre_health_pod:
-                            pod.db_update(f"health found pod in waiting state, set status to ERROR")
+                            pod.db_update(f"health: pod waiting error — {full_msg[:300]}", user_update=False)
                         continue
                     elif c_state.terminated:
-                        logger.critical(f"Kube pod in terminated state. msg:{c_state.terminated.message}; reason: {c_state.terminated.reason}")
-                        status_container['message'] = f"Pod in terminated state for reason: {c_state.terminated.message}."
+                        reason = c_state.terminated.reason or ""
+                        detail = c_state.terminated.message or ""
+                        exit_code = getattr(c_state.terminated, 'exit_code', None)
+                        logger.error(f"Kube pod terminated. reason={reason}; exit_code={exit_code}; detail={detail}")
+                        # Fetch k8s events — captures OOMKilled, BackOff, FailedMount details
+                        k8_events = get_pod_k8_events(k8_pod['k8_name'])
+                        event_lines = [
+                            f"[{e['reason']}] {e['message']}" for e in k8_events[:5]
+                            if e.get('message')
+                        ]
+                        event_summary = " | ".join(event_lines)
+                        parts = []
+                        if reason:
+                            parts.append(reason)
+                        if exit_code is not None:
+                            parts.append(f"exit={exit_code}")
+                        if detail:
+                            parts.append(detail)
+                        full_msg = " ".join(parts) if parts else "Container terminated"
+                        if event_summary:
+                            full_msg = f"{full_msg} — {event_summary}"
+                        status_container['message'] = full_msg
                         pod.status_container = status_container
                         pod.status = ERROR
-                        # We update if there's been a change.
                         if pod != pre_health_pod:
-                            # Get logs for pod if it's being updated here as something must have changed.
                             logs = get_k8_logs(k8_pod['k8_name'])
                             pod.logs = logs
-                            pod.db_update(f"health found pod in terminated state, set status to ERROR")
+                            pod.db_update(f"health: pod terminated — {full_msg[:300]}", user_update=False)
                         continue
                     elif c_state.waiting and c_state.waiting.reason == "ContainerCreating":
                         logger.info(f"Kube pod in waiting state, still creating container.")
@@ -266,7 +292,7 @@ def check_k8_pods(k8_pods):
                         pod.status_container = status_container
                         # We update if there's been a change.
                         if pod != pre_health_pod:
-                            pod.db_update() # no logs needed, spawner already states it's being put in creating.
+                            pod.db_update(user_update=False) # no logs needed, spawner already states it's being put in creating.
                         continue
                     elif c_state.running:
                         status_container['message'] = "Pod is running."
@@ -318,7 +344,7 @@ def check_k8_pods(k8_pods):
                                     pod.time_to_stop_ts = pod.start_instance_ts + timedelta(seconds=time_to_stop_default)
                         # We update if there's been a change.
                         if pod != pre_health_pod:
-                            pod.db_update(f"health set status to AVAILABLE")
+                            pod.db_update(f"health set status to AVAILABLE", user_update=False)
                 else:
                     # Not sure if this is possible/what happens here.
                     # There is definitely an Error state. Can't replicate locally yet.
@@ -332,7 +358,7 @@ def check_k8_pods(k8_pods):
             if pod.logs != logs:
                 pod.logs = logs
                 try:
-                    pod.db_update()  # just adding logs, no action_logs needed.
+                    pod.db_update(user_update=False)  # just adding logs, no action_logs needed.
                 except Exception as e:
                     logger.error(f"Error updating pod logs: {e}", exc_info=True)
             # Mirror logs to the active PodLogRun
@@ -410,9 +436,9 @@ def check_db_pods(k8_pods):
                     if pod.status_requested == RESTART:
                         logger.info(f"pod_id: {pod.pod_id} in RESTART. Now in STOPPED, so switching status_requested back to ON.")
                         pod.status_requested = ON
-                        pod.db_update(f"health set status to STOPPED, set to ON")
+                        pod.db_update(f"health set status to STOPPED, set to ON", user_update=False)
                     else:
-                        pod.db_update(f"health set status to STOPPED")
+                        pod.db_update(f"health set status to STOPPED", user_update=False)
 
             ### DB entries without a running pod should be updated to STOPPED.
             if pod.status_requested in ['ON'] and pod.status in [AVAILABLE, DELETING, REQUESTED]:
@@ -448,7 +474,7 @@ def check_db_pods(k8_pods):
                             pod.time_to_stop_ts = None
                             pod.time_to_stop_instance = None
                             pod.status_container = {}
-                            pod.db_update(f"health found no running pod and status = {initial_pod_status} for 3 minutes, stalled. Setting status = STOPPED")
+                            pod.db_update(f"health found no running pod and status = {initial_pod_status} for 3 minutes, stalled. Setting status = STOPPED", user_update=False)
                         else:
                             # Not stalled yet, we just continue
                             continue
@@ -459,13 +485,13 @@ def check_db_pods(k8_pods):
                         pod.time_to_stop_ts = None
                         pod.time_to_stop_instance = None
                         pod.status_container = {}
-                        pod.db_update(f"health found no running pod, set status to STOPPED")
+                        pod.db_update(f"health found no running pod, set status to STOPPED", user_update=False)
 
             ### Sets pods to status_requested = OFF when current time > time_to_stop_ts.
             if pod.status_requested in ['ON'] and pod.time_to_stop_ts and pod.time_to_stop_ts < datetime.utcnow():
                 logger.info(f"pod_id: {pod.pod_id} time_to_stop trigger passed. Current time: {datetime.utcnow()} > time_to_stop_ts: {pod.time_to_stop_ts}")
                 pod.status_requested = OFF
-                pod.db_update(f"health set pod to OFF due to time_to_stop trigger")
+                pod.db_update(f"health set pod to OFF due to time_to_stop trigger", user_update=False)
             
             ### Start pods here by putting command setting status="REQUESTED", if status_requested = ON and status = STOPPED.
             if pod.status_requested in ['ON', RESTART] and pod.status == STOPPED:
@@ -486,7 +512,7 @@ def check_db_pods(k8_pods):
                     except Exception as e:
                         logger.error(f"Failed to derive template for pod {pod.pod_id}: {e}")
                         pod.status = ERROR
-                        pod.db_update(f"health failed to derive template: {str(e)}")
+                        pod.db_update(f"health failed to derive template: {str(e)}", user_update=False)
                         continue
 
                 # Validate volume mounts before starting:
@@ -503,7 +529,7 @@ def check_db_pods(k8_pods):
                     if vm_errors:
                         logger.error(f"Volume mount validation failed for pod {pod.pod_id}: {'; '.join(vm_errors)}")
                         pod.status = ERROR
-                        pod.db_update(f"health volume mount validation failed: {'; '.join(vm_errors)}")
+                        pod.db_update(f"health volume mount validation failed: {'; '.join(vm_errors)}", user_update=False)
                         continue
 
                 # Resolve secrets at central health layer before sending to spawner
@@ -531,16 +557,16 @@ def check_db_pods(k8_pods):
                             logger.error(f"Failed to resolve secrets for pod {pod.pod_id}: {'; '.join(secret_errors)}")
                             # Set to error state rather than failing silently
                             pod.status = ERROR
-                            pod.db_update(f"health failed to resolve secrets: {'; '.join(secret_errors)}")
+                            pod.db_update(f"health failed to resolve secrets: {'; '.join(secret_errors)}", user_update=False)
                             continue
                     except Exception as e:
                         logger.error(f"Exception resolving secrets for pod {pod.pod_id}: {e}")
                         pod.status = ERROR
-                        pod.db_update(f"health exception resolving secrets: {str(e)}")
+                        pod.db_update(f"health exception resolving secrets: {str(e)}", user_update=False)
                         continue
 
                 pod.status = REQUESTED
-                pod.db_update(f"health found {original_pod_status} pod set to STOPPED, set status to REQUESTED")
+                pod.db_update(f"health found {original_pod_status} pod set to STOPPED, set status to REQUESTED", user_update=False)
 
                 # Send command to start new pod
                 ch = CommandChannel(name=pod.site_id)
@@ -671,7 +697,7 @@ def reconcile_configmaps(k8_pods):
             if regenerated:
                 # Update cached set so subsequent pods in this pass don't re-check
                 all_configmaps.update(regenerated)
-                pod.db_update(f"health regenerated {len(regenerated)} missing ConfigMap(s): {', '.join(regenerated)}")
+                pod.db_update(f"health regenerated {len(regenerated)} missing ConfigMap(s): {', '.join(regenerated)}", user_update=False)
                 logger.info(f"reconcile_configmaps: Regenerated {len(regenerated)} ConfigMap(s) for pod {pod.pod_id}")
 
         except Exception as e:
@@ -688,28 +714,48 @@ def sync_traefik_traffic_logs():
     global _traefik_log_cursor
     raw = get_traefik_logs(lines=500)
     if not raw:
+        logger.warning("sync_traefik_traffic_logs: get_traefik_logs returned empty — traefik pod not found or no stdout.")
         return
+
+    raw_lines = raw.splitlines()
+    logger.info(f"sync_traefik_traffic_logs: got {len(raw_lines)} raw lines from traefik pod.")
 
     entries = parse_traefik_access_logs(raw)
     if not entries:
+        logger.warning(f"sync_traefik_traffic_logs: {len(raw_lines)} raw lines but 0 JSON-parseable entries. "
+                       f"First line sample: {raw_lines[0][:200] if raw_lines else '(empty)'}")
         return
 
     # Group new records by (site, tenant) so we can batch-insert per store
+    skipped_no_match = 0
+    skipped_cursor = 0
     by_store: dict[tuple, list] = {}
     for entry in entries:
         record = entry_to_traffic_record(entry)
         if not record:
+            skipped_no_match += 1
             continue
         cursor_key = f"{record['site_id']}:{record['tenant_id']}:{record['pod_id']}"
         cursor_ts = _traefik_log_cursor.get(cursor_key)
         if cursor_ts and record['ts'] <= cursor_ts:
+            skipped_cursor += 1
             continue
         key = (record['site_id'], record['tenant_id'])
         by_store.setdefault(key, []).append(record)
 
+    logger.info(f"sync_traefik_traffic_logs: {len(entries)} JSON entries — "
+                f"{skipped_no_match} no router match, {skipped_cursor} already ingested, "
+                f"{sum(len(v) for v in by_store.values())} new records across {len(by_store)} store(s).")
+
+    if skipped_no_match == len(entries):
+        router_names = list({e.get('RouterName', '') for e in entries if e.get('RouterName')})
+        logger.warning(f"sync_traefik_traffic_logs: ALL entries skipped — no router matched pods-{{site}}-{{tenant}}-{{pod_id}}@file. "
+                       f"Router names seen: {router_names[:10]}")
+
     from stores import pg_store
     for (site, tenant), records in by_store.items():
         if site not in pg_store or tenant not in pg_store.get(site, {}):
+            logger.warning(f"sync_traefik_traffic_logs: no pg_store for site={site} tenant={tenant}, skipping {len(records)} records.")
             continue
         store = pg_store[site][tenant]
         inserted_by_pod: dict[str, 'datetime'] = {}
@@ -784,9 +830,6 @@ def main():
             sync_traefik_traffic_logs()
         except Exception as e:
             logger.warning(f"sync_traefik_traffic_logs error: {e}")
-
-        global _last_health_tick
-        _last_health_tick = time.time()
 
         ### Have a short wait
         time.sleep(3)

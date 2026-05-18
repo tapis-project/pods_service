@@ -21,16 +21,17 @@ router = APIRouter()
     summary="list_snapshot_files",
     operation_id="list_snapshot_files",
     response_model=FilesListResponse)
-async def list_snapshot_files(snapshot_id):
+async def list_snapshot_files(snapshot_id, path: str = Query(default="")):
     """
-    List files in snapshot.
+    List files in snapshot. Optional ?path= to list a subdirectory (relative to snapshot root).
     """
     logger.info(f"GET /pods/snapshots/{snapshot_id}/list - Top of list_snapshot_files.")
 
     snapshot = Snapshot.db_get_with_pk(snapshot_id, tenant=g.request_tenant_id, site=g.site_id)
 
-    list_of_files = files_listfiles(
-        path = f"/snapshots/{snapshot.snapshot_id}/")
+    sub = path.strip("/") if path else ""
+    full_path = f"/snapshots/{snapshot.snapshot_id}/{sub}" if sub else f"/snapshots/{snapshot.snapshot_id}/"
+    list_of_files = files_listfiles(path=full_path)
     
     pruned_list_of_files = []
     for file in list_of_files:
@@ -237,3 +238,41 @@ async def delete_snapshot_permission(snapshot_id, user):
     snapshot.db_update()
 
     return ok(result={"permissions": snapshot.permissions}, msg = "Snapshot permission deleted successfully.")
+
+
+@router.get(
+    "/pods/snapshots/{snapshot_id}/usage",
+    tags=["Snapshots"],
+    summary="get_snapshot_usage",
+    operation_id="get_snapshot_usage")
+async def get_snapshot_usage(
+    snapshot_id,
+    limit: int = Query(default=100, ge=1, le=1000, description="Max measurements to return (newest first)."),
+):
+    """
+    Get disk-usage history for a snapshot. Returns the last `limit` measurements,
+    newest first. The `over_limit` flag is informational — no enforcement applied.
+    """
+    logger.info(f"GET /pods/snapshots/{snapshot_id}/usage - Top of get_snapshot_usage.")
+    Snapshot.db_get_with_pk(snapshot_id, tenant=g.request_tenant_id, site=g.site_id)
+
+    from models_volume_usage import VolumeUsageLog
+    logs = VolumeUsageLog.get_recent(snapshot_id, "snapshot", g.request_tenant_id, g.site_id, limit=limit)
+    return ok(result=[l.to_dict() for l in logs], msg="Snapshot usage history retrieved.")
+
+
+@router.get(
+    "/pods/snapshots/usage",
+    tags=["Snapshots"],
+    summary="list_snapshots_usage",
+    operation_id="list_snapshots_usage")
+async def list_snapshots_usage(
+    limit_per: int = Query(default=50, ge=1, le=500, description="Max measurements per snapshot."),
+):
+    """
+    Get recent disk-usage history for all snapshots in this tenant.
+    """
+    logger.info(f"GET /pods/snapshots/usage - Top of list_snapshots_usage.")
+    from models_volume_usage import VolumeUsageLog
+    logs = VolumeUsageLog.get_all_recent("snapshot", g.request_tenant_id, g.site_id, limit_per_object=limit_per)
+    return ok(result=[l.to_dict() for l in logs], msg="Snapshot usage history retrieved.")

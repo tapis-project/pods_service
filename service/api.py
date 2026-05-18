@@ -45,6 +45,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 
 from auth import authorization, authentication
+from api_admin import router as router_admin
 from api_pods import router as router_pods
 from api_pods_podid import router as router_pods_podsid
 from api_pods_podid_func import router as router_pods_podsid_func
@@ -60,6 +61,7 @@ from api_templates_templateid import router as router_templates_templateid
 from api_templates_templateid_tags import router as router_templates_templateid_tags
 from api_templates_templateid_tags_tagid import router as router_templates_templateid_tags_tagid
 from api_templates_templateid_func import router as router_templates_templateid_func
+from api_templates_templateid_gallery import router as router_templates_templateid_gallery
 from api_images import router as router_images
 from api_images_imageid import router as router_images_imageid
 from api_secrets import router as router_secrets
@@ -150,12 +152,14 @@ api = FastAPI(
 
 # misc - must be first due to pods/auth route
 api.include_router(router_misc)
+api.include_router(router_admin)
 # templates
 api.include_router(router_templates)
 api.include_router(router_templates_templateid)
 api.include_router(router_templates_templateid_tags)
 api.include_router(router_templates_templateid_func)
 api.include_router(router_templates_templateid_tags_tagid)
+api.include_router(router_templates_templateid_gallery)
 # images
 api.include_router(router_images)
 api.include_router(router_images_imageid)
