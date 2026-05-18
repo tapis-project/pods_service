@@ -35,7 +35,10 @@ class ImageBase(TapisApiModel):
 
 class ImageBaseRead(ImageBase):
     # Provided
-    creation_ts: datetime | None = Field(datetime.utcnow(), description = "Time (UTC) that this image was created.")
+    # default_factory (not a called default) — a bare Field(datetime.utcnow()) bakes the
+    # import-time value into the schema (openapi churns every boot) and stamps every image
+    # with the same boot timestamp. Factory evaluates per-instance instead.
+    creation_ts: datetime | None = Field(default_factory=datetime.utcnow, description = "Time (UTC) that this image was created.")
     added_by: str = Field("", description = "User who added image to allow list.")
 
 class ImageBaseFull(ImageBaseRead):

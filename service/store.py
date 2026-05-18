@@ -69,7 +69,9 @@ class PostgresStore():
         if dbname:
             conninfo += f"/{dbname}"
         if dbschema:
-            conninfo += f"?options=-csearch_path%3Ddbo,{dbschema}"
+            # search_path is the tenant schema ONLY — matches what alembic/env.py sets
+            # per-tenant during migrations, so runtime and migrations resolve identically.
+            conninfo += f"?options=-csearch_path%3D{dbschema}"
         logger.info(f"Using conninfo: {conninfo}, with kwargs: {kwargs}")
 
         # We create SQLAlchemy objects using future=True to get ready for SA:2.0 (we follow that style)
@@ -101,12 +103,12 @@ class PostgresStore():
 
                 output = fn_to_run(fn_input, **fn_params)
                 
+                if scalars:
+                    output = output.scalars()
                 if unique:
                     output = output.unique()
                 if first:
                     output = output.first()
-                if scalars:
-                    output = output.scalars()
                 if all:
                     output = output.all()
                 if scalar_one:

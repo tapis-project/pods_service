@@ -50,7 +50,7 @@ class TapisModel(SQLModel):
         logger.info(f"Row successfully created in table {tenant}.{table_name}.")
         return self
 
-    def db_update(self, log = None, tenant: str = None, site: str = None):
+    def db_update(self, log = None, tenant: str = None, site: str = None, user_update: bool = True):
         """
         Updates based on everything in this instance
         """
@@ -73,9 +73,15 @@ class TapisModel(SQLModel):
                 pass
             self.action_logs.append(f"{datetime.utcnow().strftime('%y/%m/%d %H:%M')}: {log}")
 
+        # Stamp the update time just before writing so it reflects this call, not creation.
+        if hasattr(self, 'update_ts') and user_update:
+            self.update_ts = datetime.utcnow()
+        if hasattr(self, 'last_status_check_ts') and not user_update:
+            self.last_status_check_ts = datetime.utcnow()
+
         # Run command
         store.run("merge", self)
-        
+
         logger.info(f"Row successfully updated in table {tenant}.{table_name}.")
         return self
 
