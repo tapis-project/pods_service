@@ -22,8 +22,18 @@ from tapisservice.logs import get_logger
 
 logger = get_logger(__name__)
 
-# Router naming convention: pods-{site}-{tenant}-{pod_id}@file
-_ROUTER_RE = re.compile(r'^pods-(?P<site>[^-]+)-(?P<tenant>[^-]+)-(?P<pod_id>.+?)(?:@file)?$')
+# Router naming convention in Traefik access logs:
+#   pods-{site}-{tenant}-{pod_id}@{entrypoint}@file
+# Traefik appends @{entrypoint} (e.g. @http, @https, @web) before @file.
+# We must strip both suffixes to recover the bare pod_id.
+_ROUTER_RE = re.compile(
+    r'^pods-(?P<site>[^-]+)-(?P<tenant>[^-]+)-(?P<pod_id>.+?)(?:@\w+)?(?:@file)?$'
+)
+
+
+def _clean_pod_id(raw_pod_id: str) -> str:
+    """Strip any trailing @{word} entrypoint suffix Traefik appends to router names."""
+    return raw_pod_id.split('@')[0] if '@' in raw_pod_id else raw_pod_id
 
 # Secret hygiene for persisted traffic. Traefik is configured with
 # accesslog headers defaultmode=keep, so anonymous requests carry live
@@ -90,11 +100,11 @@ def parse_traefik_access_logs(raw: str) -> list[dict]:
 def extract_pod_id_from_router(router_name: str) -> Optional[str]:
     """Extract pod_id from a Traefik router name.
 
-    Router names follow: pods-{site}-{tenant}-{pod_id}@file
-    Returns None if the name doesn't match.
+    Router names in access logs follow: pods-{site}-{tenant}-{pod_id}@{entrypoint}@file
+    Returns the bare pod_id (no @entrypoint suffix), or None if no match.
     """
     m = _ROUTER_RE.match(router_name or '')
-    return m.group('pod_id') if m else None
+    return _clean_pod_id(m.group('pod_id')) if m else None
 
 
 def extract_tenant_site_from_router(router_name: str) -> tuple[Optional[str], Optional[str]]:

@@ -11,6 +11,8 @@ Does the following:
 
 """
 
+import os
+import subprocess
 import time
 import random
 from datetime import datetime, timedelta
@@ -109,9 +111,87 @@ def check_nfs_files():
                 logger.debug(f"snapshot files: {file_tree[tenant]['snapshots']}")
                 files_delete(path=f"/snapshots/{folder}", tenant_id=tenant)
 
-        ### TODO: Check volume size
-        # For existing volumes, check the size of the folder and ensure it's below volume size max
-        ## Don't know what to do with those quite yet though
+
+
+def check_volume_sizes():
+    """Measure NFS disk usage for all volumes and snapshots.
+
+    Runs `du -sm` on each object's directory, updates the `size` field in the DB,
+    writes a VolumeUsageLog entry, and emits a warning when over size_limit.
+    No enforcement action is taken yet — alerts only.
+    """
+    from models_volume_usage import VolumeUsageLog
+
+    def _measure_mb(path: str) -> float | None:
+        if not os.path.exists(path):
+            return None
+        try:
+            result = subprocess.run(
+                ["du", "-sm", path],
+                capture_output=True, text=True, timeout=30
+            )
+            if result.returncode == 0:
+                return float(result.stdout.split("\t")[0])
+        except Exception as e:
+            logger.warning(f"du failed for {path}: {e}")
+        return None
+
+    for tenant in SITE_TENANT_DICT[conf.site_id]:
+        # ── volumes ───────────────────────────────────────────────────────────
+        try:
+            volumes = Volume.db_get_all(tenant=tenant, site=conf.site_id)
+            for vol in volumes:
+                path = os.path.join(conf.nfs_base_path, "volumes", vol.volume_id)
+                size_mb = _measure_mb(path)
+                if size_mb is None:
+                    continue
+                vol.size = int(size_mb)
+                vol.db_update()
+                VolumeUsageLog.log_measurement(
+                    object_id=vol.volume_id,
+                    object_type="volume",
+                    tenant_id=tenant,
+                    site_id=conf.site_id,
+                    size_mb=size_mb,
+                    size_limit_mb=float(vol.size_limit) if vol.size_limit else None,
+                )
+                VolumeUsageLog.purge_old(vol.volume_id, "volume", tenant, conf.site_id)
+                if vol.size_limit and size_mb > float(vol.size_limit):
+                    logger.warning(
+                        f"Volume {vol.volume_id} ({tenant}) is OVER size limit: "
+                        f"{size_mb:.1f} MB > {vol.size_limit} MB (no enforcement yet)"
+                    )
+                else:
+                    logger.debug(f"Volume {vol.volume_id}: {size_mb:.1f} MB")
+        except Exception as e:
+            logger.warning(f"check_volume_sizes volumes error for tenant={tenant}: {e}")
+
+        # ── snapshots ─────────────────────────────────────────────────────────
+        try:
+            snapshots = Snapshot.db_get_all(tenant=tenant, site=conf.site_id)
+            for snap in snapshots:
+                path = os.path.join(conf.nfs_base_path, "snapshots", snap.snapshot_id)
+                size_mb = _measure_mb(path)
+                if size_mb is None:
+                    continue
+                snap.size = int(size_mb)
+                snap.db_update()
+                VolumeUsageLog.log_measurement(
+                    object_id=snap.snapshot_id,
+                    object_type="snapshot",
+                    tenant_id=tenant,
+                    site_id=conf.site_id,
+                    size_mb=size_mb,
+                    size_limit_mb=float(snap.size_limit) if snap.size_limit else None,
+                )
+                VolumeUsageLog.purge_old(snap.snapshot_id, "snapshot", tenant, conf.site_id)
+                if snap.size_limit and size_mb > float(snap.size_limit):
+                    logger.warning(
+                        f"Snapshot {snap.snapshot_id} ({tenant}) is OVER size limit: "
+                        f"{size_mb:.1f} MB > {snap.size_limit} MB (no enforcement yet)"
+                    )
+        except Exception as e:
+            logger.warning(f"check_volume_sizes snapshots error for tenant={tenant}: {e}")
 
 
 def check_nfs_tapis_system():
@@ -318,22 +398,28 @@ def main():
         logger.critical("Health could not run check_nfs_files(). Shutting down!")
         return
 
-    # Main health loop
+    # Main health loop — tick counter drives low-frequency tasks
+    _tick = 0
+    _SIZE_CHECK_INTERVAL = 200  # every ~10 min (200 ticks × 3 s)
     while True:
         logger.info(f"\n\n\nRunning pods health checks. Now: {time.time()}")
         try:
             set_traefik_proxy()
         except Exception as e:
             logger.error(f"Error setting traefik proxy. e: {e}", exc_info=True)
-            # Don't raise - continue the health loop to avoid crashing the pod
 
         try:
             check_nfs_files()
         except Exception as e:
             logger.error(f"Error running check_nfs_files. e: {e}", exc_info=True)
-            #raise # this seems like it's just breaking
 
-        # Have a short wait
+        if _tick % _SIZE_CHECK_INTERVAL == 0:
+            try:
+                check_volume_sizes()
+            except Exception as e:
+                logger.error(f"Error running check_volume_sizes. e: {e}", exc_info=True)
+
+        _tick += 1
         time.sleep(3)
 
 

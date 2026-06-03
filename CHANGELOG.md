@@ -111,10 +111,15 @@ The edge release. Pods learned to leave the cluster.
 - Traffic observability: Traefik JSON access logs ingested per pod. Tokens, cookies, and sensitive query-param values are redacted at the source, before anything is stored.
 - Pod log runs are persisted and downloadable — each start/stop cycle is archived with its own metadata instead of being lost on restart.
 - A bruno API request collection now lives in the repo (Admin/Pods/Volumes/Snapshots/Templates + per-tenant environments), so the API is explorable without hand-writing curl.
+- Admin endpoints: health, metrics, and debug-traffic — the operator view of what the service is actually doing.
+- Template gallery: templates can carry photos and a note (5MB per image, admin-gated writes).
+- Volume and snapshot usage reporting, plus pod events and per-pod metrics routes.
+- Volume/snapshot listing accepts `?path=` to list a subdirectory instead of the whole root.
 
 ### Bug fixes:
 - Timestamps are stamped by write-kind, so `updated` no longer moves on reads and internal writes.
 - Safer schema/query defaults; the runtime search_path is the tenant schema only, matching what migrations set.
+- Traffic router-regex now handles the `@entrypoint` suffix, and legacy `pod_id@…` router names still match.
 
 
 ## 26Q1.0

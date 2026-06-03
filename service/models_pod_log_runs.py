@@ -65,10 +65,14 @@ class PodLogRun(TapisPodLogRunBaseFull, table=True, validate=True):
 
     @validator('tenant_id')
     def set_tenant_id(cls, v):
+        if v:
+            return v
         return g.request_tenant_id
 
     @validator('site_id')
     def set_site_id(cls, v):
+        if v:
+            return v
         return g.site_id
 
     @classmethod

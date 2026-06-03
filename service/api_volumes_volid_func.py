@@ -13,6 +13,8 @@ logger = get_logger(__name__)
 
 router = APIRouter()
 
+#### usage endpoints — appended below the existing permission endpoints
+
 #### /pods/volumes/{volume_id}/functionHere
 
 @router.get(
@@ -21,16 +23,17 @@ router = APIRouter()
     summary="list_volume_files",
     operation_id="list_volume_files",
     response_model=FilesListResponse)
-async def list_volume_files(volume_id):
+async def list_volume_files(volume_id, path: str = Query(default="")):
     """
-    List files in volume.
+    List files in volume. Optional ?path= to list a subdirectory (relative to volume root).
     """
     logger.info(f"GET /pods/volumes/{volume_id}/list - Top of list_volume_files.")
 
     volume = Volume.db_get_with_pk(volume_id, tenant=g.request_tenant_id, site=g.site_id)
 
-    list_of_files = files_listfiles(
-        path = f"/volumes/{volume.volume_id}")
+    sub = path.strip("/") if path else ""
+    full_path = f"/volumes/{volume.volume_id}/{sub}" if sub else f"/volumes/{volume.volume_id}"
+    list_of_files = files_listfiles(path=full_path)
     
     pruned_list_of_files = []
     for file in list_of_files:
@@ -267,3 +270,47 @@ async def delete_volume_permission(volume_id, user):
     volume.db_update()
 
     return ok(result={"permissions": volume.permissions}, msg = "Volume permission deleted successfully.")
+
+
+@router.get(
+    "/pods/volumes/{volume_id}/usage",
+    tags=["Volumes"],
+    summary="get_volume_usage",
+    operation_id="get_volume_usage")
+async def get_volume_usage(
+    volume_id,
+    limit: int = Query(default=100, ge=1, le=1000, description="Max measurements to return (newest first)."),
+):
+    """
+    Get disk-usage history for a volume.
+
+    Returns the last `limit` size measurements recorded by the health loop,
+    newest first. The `over_limit` flag is set when `size_mb > size_limit_mb`
+    at measurement time. No enforcement is applied — informational only.
+    """
+    logger.info(f"GET /pods/volumes/{volume_id}/usage - Top of get_volume_usage.")
+    Volume.db_get_with_pk(volume_id, tenant=g.request_tenant_id, site=g.site_id)
+
+    from models_volume_usage import VolumeUsageLog
+    logs = VolumeUsageLog.get_recent(volume_id, "volume", g.request_tenant_id, g.site_id, limit=limit)
+    return ok(result=[l.to_dict() for l in logs], msg="Volume usage history retrieved.")
+
+
+@router.get(
+    "/pods/volumes/usage",
+    tags=["Volumes"],
+    summary="list_volumes_usage",
+    operation_id="list_volumes_usage")
+async def list_volumes_usage(
+    limit_per: int = Query(default=50, ge=1, le=500, description="Max measurements per volume."),
+):
+    """
+    Get recent disk-usage history for all volumes owned by this tenant.
+
+    Returns measurements grouped by volume_id. Use `limit_per` to control
+    how many time points you get per volume (default 50).
+    """
+    logger.info(f"GET /pods/volumes/usage - Top of list_volumes_usage.")
+    from models_volume_usage import VolumeUsageLog
+    logs = VolumeUsageLog.get_all_recent("volume", g.request_tenant_id, g.site_id, limit_per_object=limit_per)
+    return ok(result=[l.to_dict() for l in logs], msg="Volume usage history retrieved.")
