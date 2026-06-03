@@ -1,0 +1,16 @@
+meta {
+  name: Delete pod
+  type: http
+  seq: 8
+}
+
+delete {
+  url: {{base_url}}/pods/{{pod_id}}
+  body: none
+  auth: none
+}
+
+headers {
+  X-Tapis-Token: {{X-Tapis-Token}}
+  Content-Type: application/json
+}

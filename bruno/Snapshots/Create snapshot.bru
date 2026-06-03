@@ -1,0 +1,25 @@
+meta {
+  name: Create snapshot
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{base_url}}/pods/snapshots
+  body: json
+  auth: none
+}
+
+headers {
+  X-Tapis-Token: {{X-Tapis-Token}}
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "snapshot_id": "{{snapshot_id}}",
+    "source_volume_id": "{{volume_id}}",
+    "source_volume_path": "/",
+    "destination_path": "/"
+  }
+}

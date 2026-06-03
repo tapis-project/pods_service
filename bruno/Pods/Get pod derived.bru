@@ -1,0 +1,16 @@
+meta {
+  name: Get pod derived
+  type: http
+  seq: 11
+}
+
+get {
+  url: {{base_url}}/pods/{{pod_id}}/derived
+  body: none
+  auth: none
+}
+
+headers {
+  X-Tapis-Token: {{X-Tapis-Token}}
+  Content-Type: application/json
+}

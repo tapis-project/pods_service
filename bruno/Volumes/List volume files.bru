@@ -1,0 +1,16 @@
+meta {
+  name: List volume files
+  type: http
+  seq: 10
+}
+
+get {
+  url: {{base_url}}/pods/volumes/{{volume_id}}/list
+  body: none
+  auth: none
+}
+
+headers {
+  X-Tapis-Token: {{X-Tapis-Token}}
+  Content-Type: application/json
+}

@@ -1,0 +1,47 @@
+meta {
+  name: pods: with volume and envs
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{base_url}}/pods
+  body: json
+  auth: none
+}
+
+headers {
+  X-Tapis-Token: {{X-Tapis-Token}}
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "pod_id": "{{pod_id}}",
+    "image": "myimage:latest",
+    "description": "Pod with volume mount and environment variables",
+    "time_to_stop_default": -1,
+    "environment_variables": {
+      "MY_ENV_VAR": "my_value"
+    },
+    "networking": {
+      "default": {
+        "port": 8080,
+        "protocol": "http"
+      }
+    },
+    "volume_mounts": {
+      "{{volume_id}}": {
+        "type": "tapisvolume",
+        "mount_path": "/data",
+        "sub_path": ""
+      }
+    },
+    "resources": {
+      "cpu_request": 500,
+      "cpu_limit": 1000,
+      "mem_request": 512,
+      "mem_limit": 1024
+    }
+  }
+}

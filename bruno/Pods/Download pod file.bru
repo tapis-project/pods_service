@@ -1,0 +1,16 @@
+meta {
+  name: Download pod file
+  type: http
+  seq: 23
+}
+
+get {
+  url: {{base_url}}/pods/{{pod_id}}/download/path/to/file.txt
+  body: none
+  auth: none
+}
+
+headers {
+  X-Tapis-Token: {{X-Tapis-Token}}
+  Content-Type: application/json
+}

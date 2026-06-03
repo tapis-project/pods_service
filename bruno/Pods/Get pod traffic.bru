@@ -1,0 +1,16 @@
+meta {
+  name: Get pod traffic
+  type: http
+  seq: 17
+}
+
+get {
+  url: {{base_url}}/pods/{{pod_id}}/traffic
+  body: none
+  auth: none
+}
+
+headers {
+  X-Tapis-Token: {{X-Tapis-Token}}
+  Content-Type: application/json
+}

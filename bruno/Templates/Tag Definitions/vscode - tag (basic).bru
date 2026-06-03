@@ -1,0 +1,48 @@
+meta {
+  name: tag: vscode (basic)
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{base_url}}/pods/templates/vscode/tags
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+body:json {
+  {
+    "pod_definition": {
+      "description": "VS Code in browser - linuxserver/code-server, full Microsoft marketplace",
+      "image": "lscr.io/linuxserver/code-server",
+      "environment_variables": {
+        "PUID": "1000",
+        "PGID": "1000",
+        "TZ": "${pods:default:Etc/UTC:?Timezone - e.g. America/Chicago}",
+        "DEFAULT_WORKSPACE": "/config/workspace"
+      },
+      "networking": {
+        "default": {
+          "protocol": "http",
+          "port": 8443,
+          "tapis_auth": true,
+          "tapis_auth_allowed_users": ["*"]
+        }
+      },
+      "resources": {
+        "cpu_request": 250,
+        "cpu_limit": 2000,
+        "mem_request": 512,
+        "mem_limit": 4096
+      },
+      "time_to_stop_default": -1
+    },
+    "tag": "latest",
+    "commit_message": "Basic VS Code - linuxserver/code-server, tapis_auth enabled"
+  }
+}

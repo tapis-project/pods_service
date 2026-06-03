@@ -1,0 +1,24 @@
+meta {
+  name: Create image
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{base_url}}/pods/images
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+body:json {
+  {
+    "image": "myregistry/myimage:latest",
+    "tenants": ["tacc"],
+    "description": "My custom image"
+  }
+}

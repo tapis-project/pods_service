@@ -1,0 +1,16 @@
+meta {
+  name: Get volume permissions
+  type: http
+  seq: 7
+}
+
+get {
+  url: {{base_url}}/pods/volumes/{{volume_id}}/permissions
+  body: none
+  auth: none
+}
+
+headers {
+  X-Tapis-Token: {{X-Tapis-Token}}
+  Content-Type: application/json
+}

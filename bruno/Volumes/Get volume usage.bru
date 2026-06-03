@@ -1,0 +1,16 @@
+meta {
+  name: Get volume usage
+  type: http
+  seq: 6
+}
+
+get {
+  url: {{base_url}}/pods/volumes/{{volume_id}}/usage
+  body: none
+  auth: none
+}
+
+headers {
+  X-Tapis-Token: {{X-Tapis-Token}}
+  Content-Type: application/json
+}
