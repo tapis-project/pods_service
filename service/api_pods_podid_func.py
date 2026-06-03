@@ -1,6 +1,9 @@
 from fastapi import APIRouter, Request, UploadFile, File, Form, Body, Path, Query
 from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from models_pods import Pod, Password, PodResponse, PodPermissionsResponse, PodCredentialsResponse, PodLogsResponse, ExecutePodCommands, PodBaseFull
+from models_traffic import TrafficLog, TrafficLogsResponse
+from models_pod_log_runs import PodLogRun, PodLogRunsResponse, PodLogRunResponse
+from log_archive_utils import read_archive
 from models_templates_tags import Template, TemplateTag, TemplateTagResponse, NewTemplateTagFromPod
 from models_templates_utils import combine_pod_and_template_recursively
 from models_misc import SetPermission
@@ -182,6 +185,102 @@ async def get_pod_logs(pod_id):
     pod = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
 
     return ok(result={"logs": pod.logs, "action_logs": pod.action_logs}, msg = "Pod logs retrieved successfully.")
+
+
+@router.get(
+    "/pods/{pod_id}/traffic",
+    tags=["Pods"],
+    summary="get_pod_traffic",
+    operation_id="get_pod_traffic",
+    response_model=TrafficLogsResponse)
+async def get_pod_traffic(
+    pod_id,
+    limit: int = Query(default=100, ge=1, le=1000, description="Max rows to return."),
+    method: str = Query(default=None, description="Filter by HTTP method (GET, POST, ...)."),
+    status_class: str = Query(default=None, description="Filter by status class: 2xx, 3xx, 4xx, 5xx."),
+    status_code: int = Query(default=None, description="Filter by exact HTTP status code."),
+    username: str = Query(default=None, description="Filter by authenticated Tapis username."),
+    since: datetime = Query(default=None, description="Only return entries at or after this UTC ISO8601 timestamp."),
+    until: datetime = Query(default=None, description="Only return entries at or before this UTC ISO8601 timestamp."),
+):
+    """
+    Get recent Traefik network traffic for a pod.
+
+    Traffic entries are collected from Traefik access logs on each health tick.
+    When tapis_auth is active on the pod, the username is extracted from the X-Tapis-User header.
+    Otherwise source IP and raw headers are recorded.
+
+    Returns up to `limit` most-recent matching entries in reverse chronological order.
+    """
+    logger.info(f"GET /pods/{pod_id}/traffic - Top of get_pod_traffic.")
+    Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)  # 404 if not found
+
+    rows = TrafficLog.get_recent(
+        pod_id=pod_id,
+        tenant=g.request_tenant_id,
+        site=g.site_id,
+        limit=limit,
+        method=method,
+        status_class=status_class,
+        status_code=status_code,
+        username=username,
+        since=since,
+        until=until,
+    )
+    return ok(result=[r.dict() for r in rows], msg="Pod traffic retrieved successfully.")
+
+
+@router.get(
+    "/pods/{pod_id}/log-runs",
+    tags=["Pods"],
+    summary="list_pod_log_runs",
+    operation_id="list_pod_log_runs",
+    response_model=PodLogRunsResponse)
+async def list_pod_log_runs(pod_id):
+    """
+    List metadata for all persisted log runs of a pod.
+
+    Returns run index, start/stop times, size, and archive status.
+    Does NOT return log content — use GET /pods/{pod_id}/log-runs/{run_index} for that.
+    """
+    logger.info(f"GET /pods/{pod_id}/log-runs - Top of list_pod_log_runs.")
+    Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
+
+    runs = PodLogRun.list_runs(pod_id, g.request_tenant_id, g.site_id)
+    return ok(result=[r.display_meta() for r in runs], msg="Pod log runs retrieved successfully.")
+
+
+@router.get(
+    "/pods/{pod_id}/log-runs/{run_index}",
+    tags=["Pods"],
+    summary="get_pod_log_run",
+    operation_id="get_pod_log_run",
+    response_model=PodLogRunResponse)
+async def get_pod_log_run(pod_id, run_index: int):
+    """
+    Get the full log content for a specific pod run.
+
+    Active runs return live log content from the database.
+    Archived runs read from the on-disk gzip archive. Returns 404 if the archive
+    file is missing.
+    """
+    logger.info(f"GET /pods/{pod_id}/log-runs/{run_index} - Top of get_pod_log_run.")
+    Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
+
+    run = PodLogRun.get_run_by_index(pod_id, run_index, g.request_tenant_id, g.site_id)
+    if not run:
+        raise BadRequestError(msg=f"Log run #{run_index} not found for pod '{pod_id}'.")
+
+    result = run.display()
+    if run.is_archived and not run.logs:
+        if not run.archive_path:
+            raise BadRequestError(msg=f"Log run #{run_index} is archived but archive_path is not set.")
+        import os
+        if not os.path.exists(run.archive_path):
+            raise BadRequestError(msg=f"Archive file for run #{run_index} not found on disk: {run.archive_path}")
+        result['logs'] = read_archive(run.archive_path)
+
+    return ok(result=result, msg=f"Pod log run #{run_index} retrieved successfully.")
 
 
 @router.get(

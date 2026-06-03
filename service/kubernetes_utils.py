@@ -221,6 +221,33 @@ def get_k8_logs(name: str):
     except Exception as e:
         return ""
 
+
+def get_traefik_pod_name() -> str:
+    """Return the name of the running Traefik pod (label app=pods-traefik), or empty string."""
+    try:
+        pods = k8.list_namespaced_pod(namespace=NAMESPACE, label_selector="app=pods-traefik")
+        for pod in pods.items:
+            if pod.status and pod.status.phase == "Running":
+                return pod.metadata.name
+        # Fallback: return first pod regardless of phase
+        if pods.items:
+            return pods.items[0].metadata.name
+    except Exception as e:
+        logger.warning(f"get_traefik_pod_name failed: {e}")
+    return ""
+
+
+def get_traefik_logs(lines: int = 500) -> str:
+    """Return the last `lines` lines from the Traefik pod's stdout."""
+    pod_name = get_traefik_pod_name()
+    if not pod_name:
+        return ""
+    try:
+        return k8.read_namespaced_pod_log(namespace=NAMESPACE, name=pod_name, tail_lines=lines) or ""
+    except Exception as e:
+        logger.warning(f"get_traefik_logs failed: {e}")
+        return ""
+
 def k8s_copy_bytes_to_pod(
     k8_name: str,
     dest_path: str,

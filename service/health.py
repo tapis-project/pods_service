@@ -38,7 +38,8 @@ from datetime import datetime, timedelta
 from channels import CommandChannel
 from kubernetes import client, config
 from kubernetes_utils import get_current_k8_services, get_current_k8_pods, rm_container, rm_pvc, \
-    rm_service, KubernetesError, get_k8_logs, list_all_containers, run_k8_exec, list_configmaps_by_prefix, delete_configmap, NAMESPACE
+    rm_service, KubernetesError, get_k8_logs, get_traefik_logs, list_all_containers, run_k8_exec, \
+    list_configmaps_by_prefix, delete_configmap, NAMESPACE
 from codes import AVAILABLE, DELETING, STOPPED, ERROR, REQUESTED, COMPLETE, RESTART, ON, OFF
 from stores import pg_store, SITE_TENANT_DICT
 from models_pods import Pod, PodBaseFull
@@ -48,12 +49,23 @@ from models_templates_utils import combine_pod_and_template_recursively
 from kubernetes_templates import ensure_pod_configmaps, ephemeral_configmap_name
 from secret_utils import resolve_secret_map
 from models_volume_mounts_utils import validate_volume_mounts_on_start
+from models_pod_log_runs import PodLogRun
+from models_traffic import TrafficLog
+from traffic_utils import parse_traefik_access_logs, entry_to_traffic_record
+from log_archive_utils import truncate_if_oversized, maybe_archive_old_runs
 from psycopg2 import ProgrammingError
 from sqlmodel import select
 from tapisservice.config import conf
 from tapisservice.logs import get_logger
 
 logger = get_logger(__name__)
+
+# Per-pod cursor tracking the latest ts already ingested from Traefik access logs.
+# Keyed by "site:tenant:pod_id". Reset on process restart (safe — we deduplicate by ts).
+_traefik_log_cursor: dict[str, 'datetime'] = {}
+
+# Epoch timestamp of the last completed health tick. 0 = never run.
+_last_health_tick: float = 0
 
 
 # k8 client creation
@@ -120,6 +132,11 @@ def graceful_rm_pod(pod, log=None):
     """
     try:
         logger.info(f"Top of shutdown pod for pod: {pod.k8_name}")
+        # Finalize the active log run before removing the pod
+        try:
+            PodLogRun.finalize_run(pod.pod_id, pod.tenant_id, pod.site_id)
+        except Exception as e:
+            logger.warning(f"Could not finalize log run for pod {pod.pod_id}: {e}")
         # Change pod status to SHUTTING DOWN
         pod.status = DELETING
         pod.db_update(log)
@@ -258,6 +275,13 @@ def check_k8_pods(k8_pods):
                         if pod.status != AVAILABLE:
                             pod.start_instance_ts = datetime.utcnow()
                             pod.status = AVAILABLE
+                            # Start a new log run for this pod instance
+                            try:
+                                PodLogRun.finalize_run(pod.pod_id, pod.tenant_id, pod.site_id)
+                                PodLogRun.get_or_create_active_run(pod.pod_id, pod.tenant_id, pod.site_id)
+                                maybe_archive_old_runs(pod.pod_id, pod.tenant_id, pod.site_id)
+                            except Exception as _lr_e:
+                                logger.warning(f"Log run init failed for pod {pod.pod_id}: {_lr_e}")
 
                         if pod.start_instance_ts:
                             # This will set time_to_stop_ts the first time pod is available and if
@@ -304,13 +328,22 @@ def check_k8_pods(k8_pods):
             logs = get_k8_logs(k8_pod['k8_name'])
             if logs:
                 logs = logs.replace('\x00', '')
+                logs = truncate_if_oversized(logs)
             if pod.logs != logs:
                 pod.logs = logs
-                #logger.critical(f"UPDATING:: Before update with logs: {pod}")
                 try:
                     pod.db_update()  # just adding logs, no action_logs needed.
                 except Exception as e:
                     logger.error(f"Error updating pod logs: {e}", exc_info=True)
+            # Mirror logs to the active PodLogRun
+            try:
+                run = PodLogRun.get_active_run(pod.pod_id, pod.tenant_id, pod.site_id)
+                if run and run.logs != logs:
+                    run.logs = logs
+                    run.log_size_bytes = len(logs.encode('utf-8', errors='replace')) if logs else 0
+                    run.db_update(tenant=pod.tenant_id, site=pod.site_id)
+            except Exception as e:
+                logger.warning(f"Could not update log run for pod {pod.pod_id}: {e}")
 
         except Exception as e:
             # Catch validation errors that occur during field assignments (e.g., when a pod references
@@ -646,6 +679,74 @@ def reconcile_configmaps(k8_pods):
             continue
 
 
+def sync_traefik_traffic_logs():
+    """Read Traefik access logs and insert new TrafficLog rows for each pod.
+
+    Uses _traefik_log_cursor to skip already-ingested entries (keyed by site:tenant:pod_id).
+    Safe to call every health tick — only rows newer than the cursor are inserted.
+    """
+    global _traefik_log_cursor
+    raw = get_traefik_logs(lines=500)
+    if not raw:
+        return
+
+    entries = parse_traefik_access_logs(raw)
+    if not entries:
+        return
+
+    # Group new records by (site, tenant) so we can batch-insert per store
+    by_store: dict[tuple, list] = {}
+    for entry in entries:
+        record = entry_to_traffic_record(entry)
+        if not record:
+            continue
+        cursor_key = f"{record['site_id']}:{record['tenant_id']}:{record['pod_id']}"
+        cursor_ts = _traefik_log_cursor.get(cursor_key)
+        if cursor_ts and record['ts'] <= cursor_ts:
+            continue
+        key = (record['site_id'], record['tenant_id'])
+        by_store.setdefault(key, []).append(record)
+
+    from stores import pg_store
+    for (site, tenant), records in by_store.items():
+        if site not in pg_store or tenant not in pg_store.get(site, {}):
+            continue
+        store = pg_store[site][tenant]
+        inserted_by_pod: dict[str, 'datetime'] = {}
+        for rec in records:
+            try:
+                log_row = TrafficLog(
+                    pod_id=rec['pod_id'],
+                    ts=rec['ts'],
+                    method=rec['method'],
+                    path=rec['path'],
+                    status_code=rec['status_code'],
+                    duration_ms=rec['duration_ms'],
+                    source_ip=rec['source_ip'],
+                    username=rec['username'],
+                    entry_point=rec['entry_point'],
+                    router_name=rec['router_name'],
+                    raw_headers=rec['raw_headers'],
+                    tenant_id=tenant,
+                    site_id=site,
+                )
+                store.run("add", log_row)
+                prev = inserted_by_pod.get(rec['pod_id'])
+                if prev is None or rec['ts'] > prev:
+                    inserted_by_pod[rec['pod_id']] = rec['ts']
+            except Exception as e:
+                logger.warning(f"Could not insert traffic log row for pod {rec['pod_id']}: {e}")
+
+        # Advance cursors and purge old rows
+        for pod_id, latest_ts in inserted_by_pod.items():
+            cursor_key = f"{site}:{tenant}:{pod_id}"
+            _traefik_log_cursor[cursor_key] = latest_ts
+            try:
+                TrafficLog.purge_old(pod_id, tenant, site, keep=1000)
+            except Exception as e:
+                logger.warning(f"traffic purge_old failed for pod {pod_id}: {e}")
+
+
 def main():
     # Try and run check_db_pods. Will try for 60 seconds until health is declared "broken".
     logger.info("Top of health. Checking if db's are initialized.")
@@ -677,6 +778,15 @@ def main():
         check_k8_services()
         check_db_pods(k8_pods)
         reconcile_configmaps(k8_pods)
+
+        # Ingest new Traefik access log entries into traffic_logs table
+        try:
+            sync_traefik_traffic_logs()
+        except Exception as e:
+            logger.warning(f"sync_traefik_traffic_logs error: {e}")
+
+        global _last_health_tick
+        _last_health_tick = time.time()
 
         ### Have a short wait
         time.sleep(3)

@@ -250,6 +250,16 @@ endif
 # Directory of tapis-typescript repo relative to this one (override with TAPIS_TS_DIR=...)
 export TAPIS_TS_DIR ?= ../tapis-typescript
 
+#: Run Alembic migrations inside the running pods-api container (requires make up first).
+#: alembic/versions is live-mounted when DEV_TOOLS=true; new .py files appear instantly.
+migrate:
+	@printf "Makefile: $(GREEN)migrate$(NC)\n"
+	@printf "  📦 : Running alembic upgrade head in pods-api container.\n"
+	kubectl exec deploy/pods-api -- bash -c "cd /home/tapis && alembic upgrade head 2>&1 | grep -E 'Running upgrade|ERROR|already up to date' || true"
+	@printf "  ✅ : Migrations complete.\n"
+	@printf "\n"
+
+
 #: Sync OpenAPI spec from running service into tapis-typescript spec.yml. Requires service to be up (make up).
 spec:
 	@printf "Makefile: $(GREEN)spec$(NC)\n"
