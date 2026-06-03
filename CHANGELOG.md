@@ -112,6 +112,10 @@ The edge release. Pods learned to leave the cluster.
 - Pod log runs are persisted and downloadable — each start/stop cycle is archived with its own metadata instead of being lost on restart.
 - A bruno API request collection now lives in the repo (Admin/Pods/Volumes/Snapshots/Templates + per-tenant environments), so the API is explorable without hand-writing curl.
 
+### Bug fixes:
+- Timestamps are stamped by write-kind, so `updated` no longer moves on reads and internal writes.
+- Safer schema/query defaults; the runtime search_path is the tenant schema only, matching what migrations set.
+
 
 ## 26Q1.0
 ### Breaking Changes:
