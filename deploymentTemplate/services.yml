@@ -102,3 +102,17 @@ spec:
     port: 2049
     targetPort: 2049
   clusterIP: MAKEFILE_STATIC_NFS_IP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: MAKEFILE_SERVICE_NAME-vector
+spec:
+  type: NodePort # Required for local access
+  selector:
+    app: MAKEFILE_SERVICE_NAME-vector
+  ports:
+  - name: api
+    port: 8686
+    targetPort: 8686

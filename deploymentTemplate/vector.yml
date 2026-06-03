@@ -1,0 +1,168 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: MAKEFILE_SERVICE_NAME-vector
+spec:
+  selector:
+    matchLabels:
+      app: MAKEFILE_SERVICE_NAME-vector
+  template:
+    metadata:
+      labels:
+        app: MAKEFILE_SERVICE_NAME-vector
+    spec:
+      serviceAccountName: MAKEFILE_SERVICE_NAME-serviceaccount
+      containers:
+      - name: MAKEFILE_SERVICE_NAME-vector
+        image: timberio/vector:0.49.X-debian
+        imagePullPolicy: Always
+        command:
+          - /bin/bash
+          - -c
+          - |
+            vector --config /etc/vector/vector.toml
+        resources:
+          requests:
+            cpu: ".4"
+            memory: ".4G"
+          limits:
+            cpu: "3"
+            memory: "3G"
+        env:
+        - name: VECTOR_LOG
+          value: "debug"
+        # - name: PGSSLMODE
+        #   value: "require"
+        - name: POSTGRES_USERNAME
+          value: pods-admin
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: tapis-MAKEFILE_SERVICE_NAME-secrets
+              key: postgres-password
+        - name: VECTOR_SELF_NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        ports:
+        - name: vector
+          containerPort: 8686
+        volumeMounts:
+        - name: vector-config
+          mountPath: /etc/vector
+        - name: kubernetes-logs
+          mountPath: /var/log/containers
+        - name: kubernetes-logs-pods
+          mountPath: /var/log/pods
+        - name: kubernetes-logs-pods-docker
+          mountPath: /var/lib/docker/containers
+      volumes:
+      # must mount config + logs for containers + docker (due to minikube running in docker + symlinks)
+      - name: vector-config
+        configMap:
+          name: vector-config
+      - name: kubernetes-logs
+        hostPath:
+          path: /var/log/containers
+          type: Directory
+      - name: kubernetes-logs-pods
+        hostPath:
+          path: /var/log/pods
+          type: Directory
+      - name: kubernetes-logs-pods-docker
+        hostPath:
+          path: /var/lib/docker/containers
+          type: Directory
+#
+# To ingest logs from Kubernetes via in-cluster API, uncomment and configure the following source in your vector.toml:
+# [sources.kubernetes_logs]
+# type = "kubernetes_logs"
+#
+# To ingest logs from Docker containers, uncomment and configure the following source in your vector.toml:
+# [sources.docker_logs]
+# type = "docker"
+#
+# The sink to TimescaleDB should be configured in your vector.toml, for example:
+# [sinks.timescaledb]
+# type = "postgresql"
+# inputs = ["kubernetes_logs"]
+# endpoint = "postgresql://pods-admin:${POSTGRES_PASSWORD}@MAKEFILE_SERVICE_NAME-postgres:5432/postgres"
+# table = "log_table"
+#
+# Make sure to mount the correct config and secrets for Vector to connect to TimescaleDB.
+---
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vector-config
+  namespace: default
+  labels:
+    app: MAKEFILE_SERVICE_NAME-vector
+data:
+  vector.toml: |
+    [api]
+    enabled = true
+    address = "0.0.0.0:8686"
+
+
+    [sources.kubernetes_logs_api] # incluster API source - https://vector.dev/docs/reference/configuration/sources/kubernetes_logs/
+    type = "kubernetes_logs"
+    ignore_older_secs = 86400
+    # kube_config_file = "/etc/kubernetes/admin.conf" # optional, otherwise uses in-cluster config
+    # extra_namespace_label_selector = "kubernetes.io/metadata.name" ## to filter namespaces
+    # extra_label_selector = "app" # to filter pods by label
+    # extra_field_selector = "status.phase=Running" # to filter pods by field
+    #internal_metrics = true
+
+    [sources.kubernetes_logs_api.internal_metrics]
+    include_file_tag = true
+
+    # [sources.kubernetes_logs_file] # read logs from host /var/log/containers - https://vector.dev/docs/reference/configuration/sources/file/
+    # type = "file"
+    # include = ["/var/log/containers/*.log"]
+    # ignore_older_secs = 86400
+    # fingerprinting.strategy = "device_and_inode"
+    # # multiline.timeout_ms = 1000
+    # # multiline.mode = "halt_before"
+    # # multiline.start_pattern = '^\d{4}-\d{2}-\d{2}'  # or whatever your line start pattern is
+
+    # [sources.docker_logs_api] # Docker source - https://vector.dev/docs/reference/configuration/sources/docker_logs/
+    # type = "docker"
+    # # socket_path = "/var/run/docker.sock"     # Optionally configure the Docker socket path if not using the default
+
+    # [sources.docker_logs_file] # read from host /var/log/containers - https://vector.dev/docs/reference/configuration/sources/file/
+    # type = "file"
+    # include = ["/var/log/containers/*.log"]
+    # ignore_older_secs = 86400
+
+    [transforms.k8s_to_log] ### return as null, null, null...
+    type = "remap"
+    inputs = ["kubernetes_logs_api"]
+    source = '''
+      .resource_type = "pod"
+      .resource_id = .kubernetes.pod_name || "unknown"
+      .log_type = "kubernetes"
+      .username = .kubernetes.annotations."tapis.io/username" || null
+      .message = .message || .log || "no message"
+      .details = {}
+      .time = .timestamp || now()
+      .tenant_id = .kubernetes.annotations."tapis.io/tenant" || ""
+      .site_id = .kubernetes.namespace_name || ""
+      .id = uuid_v4() # default gets triggered by pg constraint trigger in init11 - read warning - https://vector.dev/docs/reference/configuration/sinks/postgres/
+    '''
+
+    [sinks.timescaledb]
+    type = "postgres"
+    inputs = ["k8s_to_log"]
+    #inputs = ["kubernetes_logs_api"]
+    endpoint = "postgresql://${POSTGRES_USERNAME}:${POSTGRES_PASSWORD}@MAKEFILE_SERVICE_NAME-postgres:5432/tacc?sslmode=disable"
+    table = "tacc.log"
+    healthcheck = true
+    batch.max_events = 1000
+    batch.timeout_secs = 1
+
+    # [sinks.console]
+    # type = "console"
+    # inputs = ["k8s_to_log"]
+    # encoding.codec = "json"

@@ -7,7 +7,7 @@ from secrets import choice
 from datetime import datetime
 from typing import List, Dict, Literal, Any, Set
 from wsgiref import validate
-from pydantic import BaseModel, Field, validator, model_validator, conint
+from pydantic import BaseModel, Field, validator, conint
 from codes import PERMISSION_LEVELS
 
 from stores import pg_store
@@ -28,7 +28,7 @@ class SetPermission(TapisApiModel):
     Object with fields that users are allowed to specify for the Volume class.
     """
     # Required
-    user: str = Field(..., description = "User to modify permissions for. Supports 'username' or 'tenant.<tenant_id>' format.")
+    user: str = Field(..., description = "User to modify permissions for.")
     level: str = Field(..., description = "Permission level to give the user.")
 
     @validator('user')
@@ -62,16 +62,6 @@ class SetPermission(TapisApiModel):
         if v not in PERMISSION_LEVELS:
             raise ValueError(f"level must be in {PERMISSION_LEVELS}")
         return v
-
-    @model_validator(mode="after")
-    def check_tenant_level(cls, values):
-        user = getattr(values, 'user', '')
-        level = getattr(values, 'level', '')
-        if user and user.startswith('tenant.') and level != 'READ':
-            raise ValueError(f"tenant.* permissions only support READ level (cross-tenant auth gate). Got '{level}'.")
-        if user == '**' and level != 'READ':
-            raise ValueError(f"Site-wide '**' permissions only support READ level. Got '{level}'.")
-        return values
 
 class DeletePermission(TapisApiModel):
     """

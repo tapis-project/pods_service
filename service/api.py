@@ -64,6 +64,8 @@ from api_images import router as router_images
 from api_images_imageid import router as router_images_imageid
 from api_secrets import router as router_secrets
 from api_secrets_secretid import router as router_secrets_secretid
+from api_secrets_secretid_func import router as router_secrets_secretid_func
+from api_clusters import router as router_clusters
 from api_misc import router as router_misc
 
 
@@ -167,6 +169,8 @@ api.include_router(router_volumes_volumeid)
 api.include_router(router_volumes_volumeid_func)
 # jupyter
 api.include_router(router_pods_podsid_jupyter)
+# clusters
+#api.include_router(router_clusters)
 # secrets
 api.include_router(router_secrets)
 api.include_router(router_secrets_secretid)

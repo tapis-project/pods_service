@@ -31,14 +31,27 @@ from models_volumes import Volume
 class ClusterBase(TapisApiModel):
     # Required
     cluster_id: str = Field(..., description="Unique cluster identifier.", primary_key=True)
-    name: str = Field(..., description="Human-readable name for the cluster.")
+    name: str = Field("", description="Human-readable name for the cluster.")
     type: str = Field(..., description="Cluster type, e.g., 'localK8InCluster', 'tailscaleK8', 'docker'.")
     description: str = Field(..., description="Description of the cluster.")
     # Cluster connection/config fields
     k8config: Optional[Dict[str, Any]] = Field(default_factory=dict, sa_column=Column(JSON), description="Kubernetes config (kubeconfig or API details).")
     k8username: Optional[str] = Field(None, description="Username to use for cluster access.")
     namespace: Optional[str] = Field(None, description="Kubernetes namespace to use by default.")
-    settings: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON), description="Cluster-type-specific settings (e.g., tailscale flags, endpoints, etc.)")
+    # New metadata / secret reference fields (no plaintext secrets)
+    db_username: Optional[str] = Field(None, description="Postgres role name for this cluster.")
+    db_secret_ref: Optional[str] = Field(None, description="Reference to secret storing the Postgres password.")
+    rabbit_username: Optional[str] = Field(None, description="RabbitMQ user for this cluster.")
+    rabbit_vhost: Optional[str] = Field(None, description="RabbitMQ vhost (or logical namespace) for this cluster.")
+    rabbit_secret_ref: Optional[str] = Field(None, description="Reference to secret storing RabbitMQ password.")
+    vector_writer_role: Optional[str] = Field(None, description="Role with INSERT privileges on log hypertables.")
+    ts_preauthkey_id: Optional[str] = Field(None, description="Identifier of issued Tailscale preauth key.")
+    ts_preauthkey_expires: Optional[datetime] = Field(None, description="Expiration time of Tailscale preauth key.")
+    ts_routes: List[str] = Field([], description="List of subnet routes granted (metadata). endpoint,ip/subnet", sa_column=Column(ARRAY(String)))
+    ts_stats: List[str] = Field([], description="Tailscale stats (metadata).", sa_column=Column(ARRAY(String)))
+    last_bootstrap: Optional[str] = Field(None, description="Last bootstrap timestamp from remote agent.")
+    last_bootstrap_ip: Optional[str] = Field(None, description="Last bootstrap IP address from remote agent.")
+    last_connected: Optional[datetime] = Field(None, description="Last time this cluster was connected to the Tapis service.")
 
 
 class ClusterBaseRead(ClusterBase):
@@ -53,8 +66,8 @@ class ClusterBaseFull(ClusterBaseRead):
     tenant_id: str = Field("", description="Tapis tenant used during creation of this cluster.")
     site_id: str = Field("", description="Tapis site used during creation of this cluster.")
     #owner: str = Field(default=g.username, description="Username of the cluster owner.", index=True)
-    permissions: List[str] = Field(default_factory=list, sa_column=Column(ARRAY(String, dimensions=1)), description="Cluster permissions for each user.")
-    action_logs: List[str] = Field(default_factory=list, sa_column=Column(ARRAY(String, dimensions=1)), description="Log of past 10 actions taken on this cluster.")
+    permissions: List[str] = Field([], description = "Cluster permissions for each user.", sa_column=Column(ARRAY(String, dimensions=1)))
+    action_logs: List[str] = Field([], description = "Log of past 10 actions taken on this cluster.", sa_column=Column(ARRAY(String, dimensions=1)))
 
     def display(self):
         display = self.dict()
@@ -79,6 +92,25 @@ class Cluster(TapisClusterBaseFull, table=True, validate=True):
             raise ValueError(f"cluster_id must be lowercase alphanumeric or hyphen, starting with alpha.")
         if len(v) > 64 or len(v) < 3:
             raise ValueError(f"cluster_id length must be between 3-64 characters. Inputted length: {len(v)}")
+        return v
+
+    @model_validator(mode="after")
+    def check_name(cls, values):
+        # set name to cluster_id if not user set
+        final_name = getattr(values, 'name', '') or getattr(values, 'cluster_id', '')
+        object.__setattr__(values, 'name', final_name)
+        res = re.fullmatch(r'[a-z][a-z0-9\-]+', final_name)
+        if not res:
+            raise ValueError(f"name must be lowercase alphanumeric or hyphen, starting with alpha.")
+        if len(final_name) > 64 or len(final_name) < 3:
+            raise ValueError(f"name length must be between 3-64 characters. Inputted length: {len(final_name)}")
+        return values
+
+    @validator('type')
+    def check_type(cls, v):
+        allowed_types = ['localK8InCluster', 'tailscaleK8', 'docker']
+        if v not in allowed_types:
+            raise ValueError(f"type must be one of: {allowed_types}. Inputted type: {v}")
         return v
 
     @validator('tenant_id')

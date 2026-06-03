@@ -1,0 +1,13 @@
+FROM traefik:3.3
+
+# Install Tailscale
+RUN apk add --no-cache curl tailscale vim curl
+
+# Needed for tun 
+RUN mkdir -p /dev/net/tun
+
+# For tailscale to allow subnet router via ipv4 (not needed?)
+#RUN sysctl -w net.ipv4.ip_forward=1
+
+# @ and -- required to pass args to entrypoint via k8
+ENTRYPOINT ["sh", "-c", "tailscaled & exec /entrypoint.sh traefik \"$@\"", "--"]
