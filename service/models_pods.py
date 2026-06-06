@@ -969,9 +969,9 @@ class Pod(TapisPodBaseFull, table=True, validate=True):
         # ensure description is all ascii
         if not v.isascii():
             raise ValueError(f"description field may only contain ASCII characters.")            
-        # make sure description < 255 characters
-        if len(v) > 255:
-            raise ValueError(f"description field must be less than 255 characters. Inputted length: {len(v)}")
+        # make sure description < 404 characters
+        if len(v) > 404:
+            raise ValueError(f"description field must be less than 404 characters. Inputted length: {len(v)}")
         return v
 
     @validator('networking')

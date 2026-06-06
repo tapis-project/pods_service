@@ -183,7 +183,7 @@ def test_description_length_400(headers):
     data = response_format(rsp)
     # Test error response.
     assert rsp.status_code == 400
-    assert any('description field must be less than 255 characters.' in msg for msg in data['message'])
+    assert any('description field must be less than 404 characters.' in msg for msg in data['message'])
 
 
 def test_description_is_ascii_400(headers):

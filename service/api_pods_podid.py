@@ -18,6 +18,41 @@ logger = get_logger(__name__)
 router = APIRouter()
 
 
+# ── audit log helpers ─────────────────────────────────────────────────────────
+
+def _leaf_diffs(old, new, path=""):
+    """Recursively yield (path, old_val, new_val) for every changed leaf."""
+    diffs = []
+    if isinstance(old, dict) and isinstance(new, dict):
+        for k in sorted(set(old) | set(new)):
+            child = f"{path}.{k}" if path else k
+            if k not in old:
+                diffs.append((child, None, new[k]))
+            elif k not in new:
+                diffs.append((child, old[k], None))
+            else:
+                diffs.extend(_leaf_diffs(old[k], new[k], child))
+    elif isinstance(old, list) and isinstance(new, list):
+        if old != new:
+            diffs.append((path, old, new))
+    elif old != new:
+        diffs.append((path, old, new))
+    return diffs
+
+
+def _fmt_val(v):
+    """Human-readable representation of a value for action log."""
+    if v is None:
+        return "null"
+    if isinstance(v, bool):
+        return str(v).lower()
+    if isinstance(v, (int, float)):
+        return str(v)
+    if isinstance(v, str):
+        return f'"{v}"'
+    return json.dumps(v, separators=(",", ":"))
+
+
 #### /pods/{pod_id}
 
 @router.put(
@@ -165,7 +200,30 @@ async def update_pod(pod_id, update_pod: UpdatePod):
         current_modified_fields = set(pod.modified_fields or [])
         new_modified_fields = set(updated_fields.keys())
         pod.modified_fields = list(current_modified_fields.union(new_modified_fields))
-        pod.db_update(f"'{g.username}' updated pod, updated_fields: {json.dumps(updated_fields)}")
+
+        # Build a leaf-level diff so the action log shows exactly what changed
+        # and what it changed FROM — no need to hunt through prior log entries.
+        all_diffs = []
+        for key in updated_fields:
+            all_diffs.extend(_leaf_diffs(pre_update_pod.get(key), post_update_pod.get(key), key))
+        MAX_SHOWN = 8
+        parts = []
+        for p, o, n in all_diffs[:MAX_SHOWN]:
+            # environment_variables/secret_map values can hold pasted tokens/secrets, and
+            # action_logs are READ-visible — record that the key changed, never the value.
+            if p.split(".", 1)[0] in ("environment_variables", "secret_map"):
+                if o is None:
+                    parts.append(f"{p}: added (hidden)")
+                elif n is None:
+                    parts.append(f"{p}: removed")
+                else:
+                    parts.append(f"{p}: changed (hidden)")
+            else:
+                parts.append(f"{p}: {_fmt_val(o)}→{_fmt_val(n)}")
+        if len(all_diffs) > MAX_SHOWN:
+            parts.append(f"+{len(all_diffs) - MAX_SHOWN} more")
+        change_str = ", ".join(parts) if parts else "no leaf changes detected"
+        pod.db_update(f"'{g.username}' updated pod: {change_str}")
     else:
         return error(result=pod.display(), msg="Incoming data made no changes to pod. Is incoming data equal to current data?")
         

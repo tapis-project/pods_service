@@ -201,9 +201,12 @@ curl -H "X-Tapis-Token: $TOKEN" -H "X-Pods-Admin: true" https://tacc.tapis.io/v3
 |--------|-------------|---------|
 | `${:?description}` | Required - pod must override | `${:?Database password}` |
 | `${pods:default:value:?description}` | Optional - uses default if not overridden | `${pods:default:localhost:?DB hostname}` |
+| `${pods:default::?description}` | **Required** (empty default) - same as `${:?desc}` but with `pods:default:` prefix. `is_required=(default_value == '')` in `parse_secret_reference`. Avoid; use `${:?desc}` instead for clarity. | `${pods:default::?GitHub token}` |
 | `literal_value` | Plain text for non-secret config | `production` |
 
 **Note:** Templates cannot use `${secret:name}` - they define placeholders that pod creators override.
+
+**Important:** `${pods:default:...}` is **secret_map-only syntax**. Using it directly in `environment_variables` generates warnings and the literal placeholder string is passed to the container — it is NOT resolved. Always define dynamic values in `secret_map` and reference them in `environment_variables` via `${pods:secrets:KEY}`.
 
 ### Environment Variables & Config File References
 
