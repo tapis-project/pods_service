@@ -150,7 +150,7 @@ class TestHealthcheckStorage:
         body = {
             "pod_id": POD_GATE_HC,
             "image": MINIMAL_IMAGE,
-            "description": "no healthchecks — networking_live should still default false",
+            "description": "no healthchecks - networking_live should still default false",
         }
         rsp = client.post("/pods", data=json.dumps(body), headers=headers)
         result = basic_response_checks(rsp)

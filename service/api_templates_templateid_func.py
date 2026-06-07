@@ -1,4 +1,5 @@
 from fastapi import APIRouter
+from errors import PermissionsException
 from models_misc import SetPermission
 from models_templates import Template, TemplatePermissionsResponse
 from models_templates_tags import TemplateTagsResponse, TemplateTagResponse, NewTemplateTag, TemplateTag
@@ -66,9 +67,9 @@ async def set_template_permission(template_id, set_permission: SetPermission):
     # Admin-only check for site-wide '**' and tenant-wide 'tenant.*' permissions
     # Uses g.admin (role check) not g.admin_active — this is a capability gate, not opt-in behavior
     if inp_user == "**" and not g.admin:
-        raise KeyError("Only admins can set site-wide '**' permissions on templates.")
+        raise PermissionsException("Only admins can set site-wide '**' permissions on templates.")
     if inp_user.startswith("tenant.") and not g.admin:
-        raise KeyError("Only admins can set tenant-wide 'tenant.*' permissions on templates.")
+        raise PermissionsException("Only admins can set tenant-wide 'tenant.*' permissions on templates.")
 
     template = Template.db_get_with_pk(template_id, tenant="siteadmintable", site=g.site_id)
 

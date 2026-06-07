@@ -6,7 +6,7 @@ from channels import CommandChannel
 from tapisservice.tapisfastapi.utils import g, ok, error
 from models_templates_utils import combine_pod_and_template_recursively, get_template_merged_secret_map, validate_pod_secret_map_against_template
 from kubernetes_utils import rm_pvc, KubernetesError, delete_configmap, NAMESPACE
-from secret_utils import resolve_secret_map, inject_secrets_into_env_vars, check_pod_unresolved_patterns
+from secret_utils import resolve_secret_map, inject_secrets_into_env_vars, check_pod_unresolved_patterns, expand_short_secret_references
 from models_volume_mounts_utils import interpolate_config_content, validate_volume_mounts_permissions
 from utils import check_permissions
 from errors import PermissionsException
@@ -84,6 +84,11 @@ async def update_pod(pod_id, update_pod: UpdatePod):
     
     for key, value in input_data.items():
         setattr(pod, key, value)
+
+    # Expand short secret references ${secret:name} → ${secret:username:name} so the
+    # health loop can resolve them without actor context (same as create_pod does).
+    if 'secret_map' in input_data and pod.secret_map:
+        pod.secret_map = expand_short_secret_references(pod.secret_map, g.username)
 
     # If volume_mounts changed, validate permissions and update mounted_by on each entry
     if volume_mounts_changed:
@@ -414,7 +419,7 @@ async def get_derived_pod(
     if resolve_secrets:
         # resolve_secrets is a privileged operation — requires admin role (g.admin)
         if not getattr(g, 'admin', False):
-            raise Exception("resolve_secrets=true requires admin privileges (pods_admin role)")
+            raise PermissionsException("resolve_secrets=true requires admin privileges (pods_admin role)")
         
         # Resolve secret_map values
         if final_pod.secret_map:

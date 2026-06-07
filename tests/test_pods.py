@@ -400,8 +400,8 @@ def test_k8s_verify_all_ephemeral_storage_configs(headers):
     """Verify actual K8s pod specs for all ephemeral storage configurations."""
     from service.kubernetes_utils import k8, NAMESPACE
     
-    # Wait for all pods to start
-    time.sleep(7)
+    # Wait for all pods to start — spawner may take up to 20s under load
+    time.sleep(20)
     
     # Test 1: Both request and limit are -1 (unlimited)
     k8_pod_unlimited = k8.read_namespaced_pod(name="pods-tacc-dev-testspodsephunlimited", namespace=NAMESPACE)
