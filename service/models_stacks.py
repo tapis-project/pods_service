@@ -188,6 +188,7 @@ class StackResponseModel(StackBaseRead):
     """
     created_by: str = Field("", description = "Username that created this stack.")
     action_logs: List[str] = Field([], description = "Timestamped log of stack actions and per-pod transitions.")
+    pods: Optional[List[Dict]] = Field(None, description = "Member pod displays. Present on GET /pods/stacks/{stack_id}; absent on list.")
 
 
 class StackFromTemplateRequest(TapisApiModel):
@@ -209,6 +210,19 @@ class SaveStackAsTemplateRequest(TapisApiModel):
     template_id: str = Field(..., description = "Template to add the snapshot tag to (must already exist).")
     tag: str = Field("latest", description = "Tag name for the snapshot.")
     commit_message: Optional[str] = Field("", description = "Commit message for the snapshot tag.")
+
+
+class StackUpdateRequest(TapisApiModel):
+    """
+    Body for POST /pods/stacks/{stack_id}/update — re-derive a stack from a newer stack-template tag.
+
+    Reviewed/explicit (never automatic): use ?dry_run=true to get the per-member plan
+    (add/remove/recreate/patch) without side effects, then POST again to apply.
+    """
+    template: Optional[str] = Field(None, description = "Target stack-template ref to update to, e.g. 'immich:prod@2026-...'. Omit to use the newest tag matching the stack's pinned moving tag.")
+    pod_ids: Optional[Dict[str, str]] = Field(None, description = "Per-member pod_id override for newly-added members, {member_name: pod_id}.")
+    secrets: Optional[Dict[str, str]] = Field(None, description = "Values for any new required secret placeholders introduced by the target tag.")
+    confirm: Optional[str] = Field(None, description = "Typed stack_id; required when the plan deletes or rebuilds members (destructive).")
 
 
 class StackResponse(TapisApiModel):

@@ -67,6 +67,34 @@ finally:
         else:
             sys.modules[name] = prev
 
+# In a full `pytest tests/` run another module (api_pods) imports stack_utils first, so the
+# sys.modules mock above is a no-op for it and stack_utils.Pod stays bound to the real Pod —
+# validate_stack_fields then hits the real DB (pg_store['s']['t'] -> KeyError). Rebind the
+# already-imported module's Pod to the fake so db_get_with_pk reads the in-test registry.
+# IMPORTANT: stack_utils is a *shared* module in the pytest process. If we leave it bound to the
+# fake, every later test file whose pod-create path calls stack_utils.validate_stack_fields gets
+# the fake (real pods read as "not found" -> bogus "dependency does not exist" -> from-template
+# rolls back). So restore the *real* Pod on module teardown, keeping the suite order-independent.
+# (We resolve the real Pod lazily at teardown, not now: under a stacks-first import order
+# stack_utils is itself imported under the mock, so its current .Pod is already the fake.)
+stack_utils.Pod = _FakePod
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _restore_stack_utils_pod():
+    """Undo the module-global Pod rebind once this file's tests finish, so other test files
+    (which sort after this one in `pytest tests/*.py`) see the real Pod again. By teardown any
+    multi-file run has imported the real `api` (hence real models_pods.Pod) at collection time."""
+    yield
+    try:
+        import importlib
+        real = importlib.import_module("models_pods")
+        if getattr(real, "Pod", None) is not None and real.Pod is not _FakePod:
+            stack_utils.Pod = real.Pod
+    except Exception:
+        pass
+
+
 from codes import AVAILABLE, ON, OFF, RESTART, STOPPED
 
 

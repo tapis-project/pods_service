@@ -1,14 +1,18 @@
 from datetime import datetime
 from fastapi import APIRouter
+from fastapi.responses import JSONResponse
 from models_stacks import (
     Stack, NewStack, UpdateStack, StackActionRequest, JoinStackRequest,
     StacksResponse, StackResponse, StackPermissionsResponse, DeleteStackResponse,
-    StackFromTemplateRequest, SaveStackAsTemplateRequest,
+    StackFromTemplateRequest, SaveStackAsTemplateRequest, StackUpdateRequest,
     VALID_RESTART_POLICIES,
 )
 from models_pods import Pod, Password, NewPod
 from models_misc import SetPermission
-from models_templates_tags import derive_template_info, NewTemplateTag
+from models_templates_tags import (
+    derive_template_info, NewTemplateTag,
+    Networking as NewTemplateTagNetworking, Resources as NewTemplateTagResources,
+)
 from utils import check_permissions
 from secret_utils import expand_short_secret_references, validate_secret_map_ownership
 from models_templates import Template
@@ -16,6 +20,8 @@ from errors import PermissionsException, ResourceError
 from stack_runner import compute_stack_status
 from stack_template_utils import (
     resolve_member_pod_ids, validate_stack_definition, topo_order, compile_member_stack_refs, k8_name,
+    sanitize_member_networking, placeholderize_secret_value, unbake_host_refs, compute_stack_member_plan,
+    minimize_member_networking, minimize_resources, match_live_member_pod_ids,
 )
 from api_pods_podid import delete_pod_resources
 from codes import ON, OFF, RESTART, READ, USER, ADMIN, PERMISSION_LEVELS
@@ -441,8 +447,10 @@ async def pod_leave_stack(pod_id):
     "/pods/stacks/from-template",
     tags=["Stacks"],
     summary="create_stack_from_template",
-    operation_id="create_stack_from_template",
-    response_model=StackResponse)
+    operation_id="create_stack_from_template")
+# NOTE: no response_model — this endpoint returns error() (result=None) on precheck/rollback
+# failures, and a strict StackResponse response_model would reject that with a ResponseValidationError
+# (masking the real message as a generic 500).
 async def create_stack_from_template(body: StackFromTemplateRequest):
     """
     Instantiate a whole stack from a kind='stack' template tag in one call.
@@ -530,7 +538,19 @@ async def create_stack_from_template(body: StackFromTemplateRequest):
             )
             dep_ids = [pod_id_by_name[d] for d in (merged.get("depends_on") or [])]
 
-            pod_kwargs = {k: v for k, v in merged.items() if k not in HANDLED and v is not None}
+            pod_kwargs = {}
+            for k, v in merged.items():
+                if k in HANDLED or v is None:
+                    continue
+                # A nested model left unset in the template serializes to all-None (e.g. an unset
+                # `resources` -> {cpu_request: None, ...}), and NewPod rejects explicit None for those
+                # int fields. Strip None sub-values and drop a now-empty dict so NewPod uses its own
+                # default. (Inner models like networking/healthchecks accept their own None sub-fields.)
+                if isinstance(v, dict):
+                    v = {sk: sv for sk, sv in v.items() if sv is not None}
+                    if not v:
+                        continue
+                pod_kwargs[k] = v
             pod_kwargs.update({
                 "pod_id": pid,
                 "stack_id": body.stack_id,
@@ -580,15 +600,13 @@ _MEMBER_POD_FIELDS = [
     "time_to_stop_default", "time_to_stop_instance",
 ]
 
-
-def _placeholderize_secret_value(val: str) -> str:
-    """For snapshots: keep shared-stack references and existing placeholders; replace any concrete
-    secret reference/value with a required placeholder so the template never embeds a real secret."""
-    if not isinstance(val, str):
-        return val
-    if val.startswith("${stack:secrets:") or val.startswith("${:?") or val.startswith("${pods:default:"):
-        return val
-    return "${:?provide this secret value}"
+# Template-authoring networking keys. A live pod's networking dict carries runtime-only keys the
+# template Networking model forbids (custom_domain, custom_domain_verified, ...), so a verbatim copy
+# would fail tag validation. sanitize_member_networking (pure, in stack_template_utils) keeps only
+# these template-valid keys when snapshotting.
+_TEMPLATE_NET_FIELDS = set(
+    getattr(NewTemplateTagNetworking, "model_fields", None) or NewTemplateTagNetworking.__fields__
+)
 
 
 @router.post(
@@ -636,12 +654,9 @@ async def save_stack_as_template(stack_id, body: SaveStackAsTemplateRequest):
     k8_to_ref = {k8_name(g.site_id, g.request_tenant_id, pid): "${stack:" + nm + ":host}"
                  for pid, nm in pod_id_to_name.items()}
 
-    def _unbake_hosts(s):
-        if not isinstance(s, str):
-            return s
-        for k8, ref in k8_to_ref.items():
-            s = s.replace(k8, ref)
-        return s
+    # Service defaults to prune snapshots against (so a captured member reads like an authored one,
+    # not the fully-resolved live pod). ${...} references and non-default values are always kept.
+    net_entry_defaults = NewTemplateTagNetworking().dict()
 
     member_defs = []
     for pod in members:
@@ -649,16 +664,29 @@ async def save_stack_as_template(stack_id, body: SaveStackAsTemplateRequest):
         member = {"name": pod_id_to_name[pod.pod_id]}
         for f in _MEMBER_POD_FIELDS:
             v = d.get(f)
-            if v in (None, {}, []):
+            if v in (None, {}, [], "", "default"):
                 continue
             member[f] = v
+        if member.get("networking"):
+            member["networking"] = sanitize_member_networking(member["networking"], _TEMPLATE_NET_FIELDS)
+            # reset baked tapis_auth_allowed_users → AUTHORIZED_USERS sentinel, drop default fields
+            member["networking"] = minimize_member_networking(member["networking"], net_entry_defaults)
+        if member.get("resources"):
+            member["resources"] = minimize_resources(member["resources"])
+            if not member["resources"]:
+                member.pop("resources", None)
         # rewrite cross-references + scrub secrets
         if member.get("environment_variables"):
-            member["environment_variables"] = {k: _unbake_hosts(v) for k, v in member["environment_variables"].items()}
+            member["environment_variables"] = {k: unbake_host_refs(v, k8_to_ref) for k, v in member["environment_variables"].items()}
         if member.get("secret_map"):
-            member["secret_map"] = {k: _placeholderize_secret_value(_unbake_hosts(v)) for k, v in member["secret_map"].items()}
-        member["ready_condition"] = pod.ready_condition or "available"
-        member["depends_on"] = [pod_id_to_name.get(dep, dep) for dep in (pod.depends_on or [])]
+            member["secret_map"] = {k: placeholderize_secret_value(unbake_host_refs(v, k8_to_ref)) for k, v in member["secret_map"].items()}
+        # keep ready_condition / depends_on only when non-default / non-empty
+        rc = pod.ready_condition or "available"
+        if rc != "available":
+            member["ready_condition"] = rc
+        deps = [pod_id_to_name.get(dep, dep) for dep in (pod.depends_on or [])]
+        if deps:
+            member["depends_on"] = deps
         member_defs.append(member)
 
     # Stack-level shared secrets become required placeholders (keys preserved, values scrubbed).
@@ -676,3 +704,247 @@ async def save_stack_as_template(stack_id, body: SaveStackAsTemplateRequest):
         tag=body.tag,
     )
     return await add_template_tag(body.template_id, new_tag)
+
+
+#### /pods/stacks/{stack_id}/update — reviewed update from a newer stack-template tag
+
+
+def _members_from_tag(template_ref):
+    """Resolve a stack-template ref -> (template_str, members, secret_map, restart_policy).
+
+    Raises ValueError if the ref does not resolve to a kind='stack' tag.
+    """
+    template_str, _t, tag = derive_template_info(template_ref, tenant=g.request_tenant_id, site=g.site_id)
+    if not tag or getattr(tag, "kind", "pod") != "stack" or not getattr(tag, "stack_definition", None):
+        raise ValueError(f"'{template_ref}' is not a stack template (kind='stack').")
+    sd_obj = tag.stack_definition
+    sd = sd_obj.dict() if hasattr(sd_obj, "dict") else dict(sd_obj or {})
+    return template_str, (sd.get("members") or []), dict(sd.get("secret_map") or {}), sd.get("restart_policy", "ordered")
+
+
+def _build_member_new_pod(merged, pid, stack_id, pod_id_by_name, net_by_name):
+    """Compile one member's ${stack:...} refs and build a NewPod — mirrors the from-template block."""
+    HANDLED = {"name", "depends_on", "environment_variables", "secret_map"}
+    env, secret_map = compile_member_stack_refs(
+        merged.get("environment_variables") or {},
+        merged.get("secret_map") or {},
+        pod_id_by_name, net_by_name, g.site_id, g.request_tenant_id,
+    )
+    dep_ids = [pod_id_by_name[d] for d in (merged.get("depends_on") or []) if d in pod_id_by_name]
+    pod_kwargs = {}
+    for k, v in merged.items():
+        if k in HANDLED or v is None:
+            continue
+        if isinstance(v, dict):
+            v = {sk: sv for sk, sv in v.items() if sv is not None}
+            if not v:
+                continue
+        pod_kwargs[k] = v
+    pod_kwargs.update({
+        "pod_id": pid,
+        "stack_id": stack_id,
+        "depends_on": dep_ids or None,
+        "ready_condition": merged.get("ready_condition") or "available",
+        "environment_variables": env,
+        "secret_map": secret_map,
+    })
+    return NewPod(**{k: v for k, v in pod_kwargs.items() if k in NewPod.__fields__})
+
+
+@router.post(
+    "/pods/stacks/{stack_id}/update",
+    tags=["Stacks"],
+    summary="update_stack_from_template",
+    operation_id="update_stack_from_template")
+# NOTE: no response_model — dry_run returns a plan dict and failures return error() (result=None),
+# which a strict StackResponse response_model would reject (masking the real message as a 500).
+async def update_stack_from_template(stack_id, body: StackUpdateRequest, dry_run: bool = False):
+    """
+    Re-derive a stack from a newer stack-template tag — the L2 *reviewed* update.
+
+    With `?dry_run=true`: returns the per-member plan (add/remove/recreate/patch) + whether a typed
+    confirm is required, with **no side effects**. Without dry_run: applies it — create new members,
+    patch or recreate changed ones, delete removed ones (gated by `confirm` == stack_id when the plan
+    is destructive), then re-pin `from_template` to the target tag.
+
+    User overrides on UNCHANGED fields are preserved (patch only touches changed fields). `recreate`
+    rebuilds a member from the template; full per-field 3-way merge on recreate is a documented
+    follow-up (see tapis-ui STACK_UPDATE_MODEL.md). Apply order is create -> patch -> remove so a
+    mid-apply failure never destroys data before additions succeed; re-run to converge.
+    """
+    logger.info(f"POST /pods/stacks/{stack_id}/update - Top (template={body.template}, dry_run={dry_run}).")
+    from api_pods import create_pod  # lazy import to avoid an import cycle
+
+    stack = Stack.db_get_with_pk(stack_id, tenant=g.request_tenant_id, site=g.site_id)
+    if not stack:
+        return error(msg=f"Stack '{stack_id}' not found.")
+    if not stack.from_template:
+        return error(msg=f"Stack '{stack_id}' was not created from a template; nothing to update from.")
+
+    prev_ref = stack.from_template
+    try:
+        _old_str, old_members, _old_secrets, _old_rp = _members_from_tag(prev_ref)
+    except Exception as e:
+        return error(msg=f"Could not resolve the stack's pinned template '{prev_ref}': {e}")
+
+    target_ref = body.template or prev_ref
+    try:
+        target_str, new_members, new_secret_map, new_restart_policy = _members_from_tag(target_ref)
+    except Exception as e:
+        return error(msg=f"Could not resolve target template '{target_ref}': {e}")
+
+    plan = compute_stack_member_plan(old_members, new_members)
+    requires_confirm = any(p["destructive"] for p in plan)
+    has_changes = any(p["kind"] != "unchanged" for p in plan)
+
+    # name -> pod_id: existing members keep their live id (matched robustly, tolerating
+    # legacy pod-id drift so a member whose pod_id doesn't follow '{stack_id}{name}' is
+    # reused rather than duplicated+orphaned); new members derive '{stack_id}{name}' or override.
+    live = _get_stack_members(stack_id)
+    member_images = {}
+    for m in (old_members + new_members):
+        nm = m.get("name")
+        if nm and nm not in member_images:
+            member_images[nm] = m.get("image") or ""
+    kind_by_name = {p["name"]: p["kind"] for p in plan}
+    name_to_pid = match_live_member_pod_ids(stack_id, member_images, kind_by_name, live)
+    new_by_name = {m["name"]: m for m in new_members if m.get("name")}
+    pod_ids_override = body.pod_ids or {}
+    pod_id_by_name = dict(name_to_pid)
+    for nm in new_by_name:
+        pod_id_by_name.setdefault(nm, pod_ids_override.get(nm) or f"{stack_id}{nm}")
+    net_by_name = {m["name"]: (m.get("networking") or {}) for m in new_members}
+
+    for p in plan:
+        p["pod_id"] = pod_id_by_name.get(p["name"])
+
+    if dry_run:
+        # Required secret placeholders the target tag introduces that the stack doesn't have
+        # yet — the caller must supply these in `secrets` or the apply can't resolve members.
+        existing_secret_keys = set((stack.secret_map or {}).keys())
+        new_secrets = []
+        for k, v in (new_secret_map or {}).items():
+            sv = str(v or "").strip()
+            if k not in existing_secret_keys and sv.startswith("${:?"):
+                desc = sv[4:-1] if sv.endswith("}") else sv[4:]
+                new_secrets.append({"key": k, "description": desc})
+        return ok(
+            result={
+                "from": prev_ref,
+                "to": target_str,
+                "members": plan,
+                "has_destructive": requires_confirm,
+                "requires_confirm": requires_confirm,
+                "new_secrets": new_secrets,
+            },
+            msg=f"Update plan for '{stack_id}': {prev_ref} -> {target_str}.",
+        )
+
+    # These are apply-blockers the client can act on — return a real 4xx (not a 200 with an
+    # error envelope) so callers don't mistake them for success. Body keeps the Tapis envelope.
+    if not has_changes:
+        return JSONResponse(status_code=400, content=error(
+            msg="Target template is identical to the current one; nothing to apply."))
+    if requires_confirm and (body.confirm or "") != stack_id:
+        return JSONResponse(status_code=409, content=error(
+            msg=f"This update is destructive; pass confirm='{stack_id}' to apply."))
+    # A destructive plan deletes/recreates member pods — require stack ADMIN, consistent with
+    # delete_stack and DELETE /pods/{id} (route-level USER is enough for additive/patch updates).
+    if requires_confirm and not getattr(g, 'admin', False) and not check_permissions(g.username, ADMIN, stack, "stack", roles=g.roles):
+        return JSONResponse(status_code=403, content=error(
+            msg=f"This update deletes/recreates member pods, which requires ADMIN permission on stack '{stack_id}'."))
+
+    # Merge new + supplied shared secrets into the stack BEFORE building members, so member
+    # refs like ${stack:secrets:TAPIS_USERNAME} that the target tag introduces can resolve
+    # during create/recreate. (Persisting early is safe + idempotent: on a mid-apply failure
+    # the secrets are simply already present when you re-run to converge.)
+    merged_secret_map = dict(stack.secret_map or {})
+    for k, v in new_secret_map.items():
+        merged_secret_map.setdefault(k, v)
+    # Same write-time ownership gate as create (pin short refs, reject cross-user explicit refs)
+    # on the caller-supplied secrets before they enter the shared, actor=None-resolved map.
+    user_secrets = expand_short_secret_references(body.secrets or {}, g.username)
+    own_errors = validate_secret_map_ownership(user_secrets, g.username)
+    if own_errors:
+        return JSONResponse(status_code=400, content=error(msg="; ".join(own_errors)))
+    merged_secret_map.update(user_secrets)
+    if merged_secret_map != (stack.secret_map or {}):
+        stack.secret_map = merged_secret_map
+        stack.db_update()
+
+    by_kind = {}
+    for p in plan:
+        by_kind.setdefault(p["kind"], []).append(p)
+    applied = {"add": [], "patch": [], "recreate": [], "remove": []}
+
+    try:
+        # create + recreate first (recreate = delete old, then create fresh), in dependency order.
+        for kind in ("add", "recreate"):
+            affected = {p["name"] for p in by_kind.get(kind, [])}
+            for m in topo_order([new_by_name[n] for n in affected if n in new_by_name]):
+                name = m["name"]
+                pid = pod_id_by_name[name]
+                if kind == "recreate":
+                    old_pod = Pod.db_get_with_pk(pid, tenant=g.request_tenant_id, site=g.site_id)
+                    old_pw = Password.db_get_with_pk(pid, tenant=g.request_tenant_id, site=g.site_id)
+                    if old_pod:
+                        delete_pod_resources(old_pod, old_pw)
+                await create_pod(_build_member_new_pod(dict(m), pid, stack_id, pod_id_by_name, net_by_name))
+                applied[kind].append(pid)
+
+        # patch: apply only the changed PATCH fields to the live pod, then restart it.
+        for p in by_kind.get("patch", []):
+            name = p["name"]
+            pid = pod_id_by_name[name]
+            pod = Pod.db_get_with_pk(pid, tenant=g.request_tenant_id, site=g.site_id)
+            if not pod:
+                continue
+            m = new_by_name[name]
+            env, secret_map = compile_member_stack_refs(
+                m.get("environment_variables") or {}, m.get("secret_map") or {},
+                pod_id_by_name, net_by_name, g.site_id, g.request_tenant_id,
+            )
+            for f in p["changed_fields"]:
+                if f == "environment_variables":
+                    pod.environment_variables = env
+                elif f == "secret_map":
+                    pod.secret_map = secret_map
+                elif f == "depends_on":
+                    pod.depends_on = [pod_id_by_name[d] for d in (m.get("depends_on") or [])
+                                      if d in pod_id_by_name] or None
+                elif f == "ready_condition":
+                    pod.ready_condition = m.get("ready_condition") or "available"
+                elif hasattr(pod, f) and m.get(f) is not None:
+                    setattr(pod, f, m.get(f))
+            pod.status_requested = RESTART
+            pod.db_update(f"'{g.username}' updated member '{name}' from {target_str} (patch: {p['changed_fields']})")
+            applied["patch"].append(pid)
+
+        # remove last (destructive — confirmed above).
+        for p in by_kind.get("remove", []):
+            pid = pod_id_by_name.get(p["name"]) or name_to_pid.get(p["name"])
+            if not pid:
+                continue
+            rp = Pod.db_get_with_pk(pid, tenant=g.request_tenant_id, site=g.site_id)
+            rpw = Password.db_get_with_pk(pid, tenant=g.request_tenant_id, site=g.site_id)
+            if rp:
+                delete_pod_resources(rp, rpw)
+            applied["remove"].append(pid)
+    except Exception as e:
+        logger.error(f"stack '{stack_id}' update partially applied then failed: {e}. Applied: {applied}")
+        return error(msg=f"Update failed mid-apply ({e}). Applied so far: {applied}. Re-run to converge.")
+
+    # Re-pin provenance (shared secrets were already merged + persisted before the apply loop).
+    stack.from_template = target_str
+    if new_restart_policy in VALID_RESTART_POLICIES:
+        stack.restart_policy = new_restart_policy
+    _stack_log(stack, f"'{g.username}' updated stack {prev_ref} -> {target_str} "
+                      f"(+{len(applied['add'])} ~{len(applied['patch'])} "
+                      f"recreate{len(applied['recreate'])} -{len(applied['remove'])})")
+    stack.db_update()
+
+    members_out = _get_stack_members(stack_id)
+    result = stack.display()
+    result["pods"] = [pp.display() for pp in members_out]
+    return ok(result=result, metadata={"applied": applied, "to": target_str},
+              msg=f"Stack '{stack_id}' updated to '{target_str}'.")

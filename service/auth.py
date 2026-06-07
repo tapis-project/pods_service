@@ -131,6 +131,8 @@ def check_route_permissions(request):
         ["/openapi.json", "GET", "NOT-API"],
         ["/traefik-config", "GET", "NOT-API"],
         ["/error-handler/{status}", "GET", "NOT-API"],
+        ["/pod-splash", "GET", "NOT-API"],      # startup splash — Traefik routes here during readiness gate
+        ["/healthcheck", "GET", "NOT-API"],
         # IMAGES
         ["/pods/images/{image_id:path}", "GET", codes.NONE],
         ["/pods/images/{image_id:path}", "PUT", codes.NONE],
@@ -223,6 +225,7 @@ def check_route_permissions(request):
         ["/pods/stacks/{stack_id}/permissions", "POST", codes.ADMIN],
         ["/pods/stacks/{stack_id}/action", "POST", codes.ADMIN],  # parity: direct pod stop/start/restart require pod ADMIN
         ["/pods/stacks/{stack_id}/save_as_template", "POST", codes.USER],
+        ["/pods/stacks/{stack_id}/update", "POST", codes.USER],
         ["/pods/stacks/from-template", "POST", codes.NONE],
         ["/pods/stacks/{stack_id}", "GET", codes.READ],
         ["/pods/stacks/{stack_id}", "PUT", codes.USER],
@@ -281,7 +284,10 @@ def check_route_permissions(request):
             break
     
     if not matched_route:
-        raise PermissionsException(f"Could not match request to an API route.")
+        raise PermissionsException(
+            f"Request path '{request.url.path}' ({request.method}) does not match any Pods API route. "
+            f"If you are accessing a pod URL, the pod may still be starting — check its status in TapisUI."
+        )
 
     ## check for options
     if request.method == "OPTIONS":
@@ -419,5 +425,7 @@ def authentication(request):
         request.url.path == '/docs' or
         request.url.path == '/openapi.json' or
         request.url.path == '/traefik-config' or
+        request.url.path == '/pod-splash' or
+        request.url.path == '/healthcheck' or
         request.url.path.startswith('/error-handler/')):
         pass

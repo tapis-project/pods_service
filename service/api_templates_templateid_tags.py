@@ -171,11 +171,29 @@ async def add_template_tag(template_id: str, new_template_tag: NewTemplateTag):
         if result.metadata:
             metadata.update(result.metadata)
     
-    # Stack template validation (kind='stack'): structure + shared/member secret_map rules.
+    # Stack template validation (kind='stack'): mutual exclusion + structure + secret_map rules.
+    # Done here on new_template_tag (NOT via a TemplateTag model validator) because a table-model
+    # model_validator can't reliably read JSON sa_column fields (pod_definition/stack_definition) at
+    # construction time — they read empty, which would falsely reject every valid stack tag.
+    kind = getattr(new_template_tag, 'kind', 'pod') or 'pod'
     stack_def = getattr(new_template_tag, 'stack_definition', None)
-    if getattr(new_template_tag, 'kind', 'pod') == "stack" or stack_def:
-        if not stack_def or not getattr(stack_def, 'members', None):
+    stack_has_members = bool(stack_def and getattr(stack_def, 'members', None))
+
+    def _pod_def_is_set(pd):
+        if not pd:
+            return False
+        d = pd.dict() if hasattr(pd, 'dict') else (pd if isinstance(pd, dict) else {})
+        return any(v not in (None, {}, [], "") for v in d.values())
+
+    if kind == "stack":
+        if not stack_has_members:
             raise ValueError("kind='stack' requires stack_definition.members (at least one member).")
+        if _pod_def_is_set(pod_def):
+            raise ValueError("kind='stack' must not also set pod_definition (use stack_definition only).")
+    elif stack_has_members:
+        raise ValueError("stack_definition is only valid with kind='stack'. Set kind='stack'.")
+
+    if kind == "stack":
         member_dicts = [m.dict() for m in stack_def.members]
         stack_secret_keys = list((stack_def.secret_map or {}).keys())
         struct_errors = validate_stack_definition(member_dicts, stack_secret_keys)
@@ -199,4 +217,10 @@ async def add_template_tag(template_id: str, new_template_tag: NewTemplateTag):
     template_tag.db_create(tenant="siteadmintable", site=g.site_id)
     logger.debug(f"New template_tag saved in db. template_id: {template_tag.template_id}; tenant: {g.request_tenant_id}.")
 
-    return ok(result=template_tag.display(), msg="Template tag added successfully.", metadata=metadata)
+    msg = "Template tag added successfully."
+    if kind == "stack":
+        n_members = len(getattr(stack_def, 'members', None) or [])
+        member_names = [getattr(m, 'name', '?') for m in (getattr(stack_def, 'members', None) or [])]
+        msg = (f"Stack template tag added successfully ({n_members} member(s): "
+               f"{', '.join(member_names)}). Instantiate it with POST /pods/stacks/from-template.")
+    return ok(result=template_tag.display(), msg=msg, metadata=metadata)

@@ -795,31 +795,10 @@ class TemplateTag(TapisTemplateTagBaseFull, table=True, validate=True):
             raise ValueError(f"kind must be 'pod' or 'stack'. Got '{v}'.")
         return v
 
-    @model_validator(mode="after")
-    def check_kind_consistency(cls, values):
-        """Exactly one of pod_definition / stack_definition may be populated, matching `kind`."""
-        kind = getattr(values, 'kind', 'pod') or 'pod'
-
-        def _nonempty(x):
-            if x is None:
-                return False
-            if isinstance(x, dict):
-                return bool(x)
-            d = x.dict() if hasattr(x, 'dict') else {}
-            return any(val not in (None, {}, [], "") for val in d.values())
-
-        has_pod = _nonempty(getattr(values, 'pod_definition', None))
-        has_stack = _nonempty(getattr(values, 'stack_definition', None))
-
-        if kind == "stack":
-            if not has_stack:
-                raise ValueError("kind='stack' requires a non-empty stack_definition.")
-            if has_pod:
-                raise ValueError("kind='stack' must not set pod_definition (use stack_definition only).")
-        else:  # pod
-            if has_stack:
-                raise ValueError("stack_definition is only valid with kind='stack'. Set kind='stack'.")
-        return values
+    # NOTE: kind/pod_definition/stack_definition mutual-exclusion is validated in the
+    # add_template_tag endpoint on the (non-table) NewTemplateTag, NOT here. A table-model
+    # model_validator(mode="after") cannot reliably read JSON sa_column fields at construction time
+    # (they read empty), which would falsely reject every valid kind='stack' tag.
 
     @validator('template_id')
     def check_template_id(cls, v):
