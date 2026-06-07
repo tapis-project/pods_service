@@ -118,6 +118,7 @@ The edge release. Pods learned to leave the cluster.
 - Bring your own domain: pods can be served at a custom domain with DNS verification and an extended Traefik route.
 - Exec audit log records the executable, the result, and the duration of every command run in a pod.
 - Pod updates write a leaf-diff action log — the audit trail shows which individual fields changed, not just that an update happened.
+- Kubernetes healthchecks on pods (`HealthcheckProbe`/`PodHealthchecks`): probes translate to k8s liveness/readiness, and networking can wait for readiness before routing traffic.
 
 ### Bug fixes:
 - Timestamps are stamped by write-kind, so `updated` no longer moves on reads and internal writes.

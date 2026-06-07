@@ -22,7 +22,7 @@ from sqlalchemy import UniqueConstraint
 from sqlalchemy.inspection import inspect
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlmodel import Field, Session, SQLModel, select, JSON, Column, String
-from models_base import TapisApiModel, TapisModel
+from models_base import TapisApiModel, TapisModel, HealthcheckProbe, PodHealthchecks
 from models_templates import Template
 from models_misc import PermissionsModel, CredentialsModel, LogsModel
 from models_images import Image
@@ -478,6 +478,7 @@ class TemplateTagPodDefinition(TapisModel):
     networking: Dict[str, Networking] = Field({}, description = 'Networking information. `{"url_suffix": {"protocol": "http"  "tcp", "port": int}}`', sa_column=Column(JSON))
     resources: Resources = Field({}, description = 'Pod resource management `{"cpu_limit": 3000, "mem_limit": 3000, "cpu_request": 500, "mem_limit": 500, "gpus": 0}`', sa_column=Column(JSON))
     compute_queue: str = Field("default", description = "Queue to run pod in. `default` is the default queue.")
+    healthchecks: PodHealthchecks | None = Field(None, description = 'Kubernetes health probe configuration inherited by pods using this template. Supports liveness, readiness, and startup probes.')
 
     @validator('template')
     def check_template(cls, v):

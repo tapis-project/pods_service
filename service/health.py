@@ -296,6 +296,13 @@ def check_k8_pods(k8_pods):
                         continue
                     elif c_state.running:
                         status_container['message'] = "Pod is running."
+                        # Enrich with readiness and restart count (zero-cost: same object already read above)
+                        try:
+                            cs = k8_pod['pod_info'].status.container_statuses[0]
+                            status_container['ready'] = bool(cs.ready)
+                            status_container['restart_count'] = int(cs.restart_count or 0)
+                        except Exception:
+                            pass
                         pod.status_container = status_container
                         # This is the first time pod is in AVAILABLE. Update start_instance_ts.
                         if pod.status != AVAILABLE:

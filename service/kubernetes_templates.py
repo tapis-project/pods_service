@@ -366,7 +366,8 @@ def start_generic_pod(input_pod, revision: int, resolved_secrets: dict = None):
         "ephemeral_storage_request": pod.resources.ephemeral_storage_request,
         "ephemeral_storage_limit": pod.resources.ephemeral_storage_limit,
         "gpus": pod.resources.gpus,
-        "user": None
+        "user": None,
+        "healthchecks": pod.healthchecks,
     }
 
     # Create init_container, container, and service.

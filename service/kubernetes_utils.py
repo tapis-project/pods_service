@@ -6,7 +6,8 @@ import timeit
 import datetime
 import random
 import re
-from typing import Literal, Dict, List
+from typing import Literal, Dict, List, Optional
+from models_base import HealthcheckProbe, PodHealthchecks
 
 from jinja2 import Environment, FileSystemLoader
 from kubernetes import client, config, stream
@@ -676,6 +677,41 @@ def deduct_queue_settings(
 
     return node_selector, tolerations, resources
 
+
+def _build_k8_probe(probe: HealthcheckProbe, is_readiness: bool = False) -> client.V1Probe:
+    """Convert a HealthcheckProbe model into a kubernetes V1Probe object."""
+    common = dict(
+        initial_delay_seconds=probe.initial_delay_seconds,
+        period_seconds=probe.period_seconds,
+        timeout_seconds=probe.timeout_seconds,
+        failure_threshold=probe.failure_threshold,
+        # k8s REQUIRES success_threshold=1 for liveness/startup probes and rejects the whole
+        # pod spec otherwise — only readiness may exceed 1. Force 1 unless this is readiness.
+        success_threshold=(probe.success_threshold if is_readiness else 1),
+    )
+    if probe.http_get_path is not None:
+        return client.V1Probe(
+            http_get=client.V1HTTPGetAction(
+                path=probe.http_get_path,
+                port=probe.http_get_port or 5000,
+                scheme=probe.http_get_scheme,
+            ),
+            **common,
+        )
+    elif probe.exec_command is not None:
+        return client.V1Probe(
+            _exec=client.V1ExecAction(command=probe.exec_command),
+            **common,
+        )
+    elif probe.tcp_socket_port is not None:
+        return client.V1Probe(
+            tcp_socket=client.V1TCPSocketAction(port=probe.tcp_socket_port),
+            **common,
+        )
+    else:
+        raise ValueError("HealthcheckProbe must have one of: http_get_path, exec_command, tcp_socket_port")
+
+
 def create_pod(name: str,
                image: str,
                revision: int,
@@ -685,7 +721,7 @@ def create_pod(name: str,
                ports_dict: Dict = {},
                environment: Dict = {},
                mounts: List = [],
-               #probes: List = {},
+               healthchecks: Optional[PodHealthchecks] = None,
                tapis_permissions: List[str] = [],
                mem_request: str | None = None,
                cpu_request: str | None = None,
@@ -855,6 +891,23 @@ def create_pod(name: str,
     else:
         image_pull_secrets = None
 
+    ### Build K8s probe objects from healthchecks config
+    liveness_probe = None
+    readiness_probe = None
+    startup_probe = None
+    if healthchecks:
+        # Stack-derived pods can arrive with healthchecks as a plain dict; coerce to the
+        # model so attribute access (and nested probe parsing) works instead of throwing
+        # AttributeError and killing pod creation.
+        if isinstance(healthchecks, dict):
+            healthchecks = PodHealthchecks(**healthchecks)
+        if healthchecks.liveness:
+            liveness_probe = _build_k8_probe(healthchecks.liveness)
+        if healthchecks.readiness:
+            readiness_probe = _build_k8_probe(healthchecks.readiness, is_readiness=True)
+        if healthchecks.startup:
+            startup_probe = _build_k8_probe(healthchecks.startup)
+
     ### Define and start the pod
     try:
         container = client.V1Container(
@@ -866,7 +919,10 @@ def create_pod(name: str,
             env=env,
             resources=resources,
             ports=ports,
-            image_pull_policy=image_pull_policy
+            image_pull_policy=image_pull_policy,
+            liveness_probe=liveness_probe,
+            readiness_probe=readiness_probe,
+            startup_probe=startup_probe,
         )
         pod_spec = client.V1PodSpec(
             init_containers=init_containers,

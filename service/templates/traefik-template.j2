@@ -75,6 +75,15 @@ http:
     {% endfor %}
 
     {% for pname, pdata in http_proxy_info.items() -%}
+    {% if pdata.splash_mode is defined and pdata.splash_mode -%}
+    tapis-splash-{{ pname }}:
+      replacePathRegex:
+        regex: ".*"
+        replacement: "/pod-splash"
+    {% endif -%}
+    {% endfor %}
+
+    {% for pname, pdata in http_proxy_info.items() -%}
     {% if pdata.proxy_compression is defined and pdata.proxy_compression -%}
     tapis-compress-{{ pname }}:
       compress:
@@ -111,18 +120,21 @@ http:
       entryPoints:
        - web
       rule: "Host(`{{ pdata.url }}`){% if pdata.custom_domain and pdata.custom_domain_verified %} || Host(`{{ pdata.custom_domain }}`){% endif %}"
-      {% if pdata.tapis_auth or pdata.cors_allow_origins or pdata.ip_allow_list or (pdata.proxy_compression is defined and pdata.proxy_compression) -%}
+      {% if pdata.splash_mode or pdata.tapis_auth or pdata.cors_allow_origins or pdata.ip_allow_list or (pdata.proxy_compression is defined and pdata.proxy_compression) -%}
       middlewares:
+        {% if pdata.splash_mode is defined and pdata.splash_mode -%}
+        - "tapis-splash-{{ pname }}"
+        {% endif -%}
         {% if pdata.ip_allow_list -%}
         - "tapis-ipallowlist-{{ pname }}"
         {% endif -%}
         {% if pdata.cors_allow_origins -%}
         - "tapis-cors-{{ pname }}"
         {% endif -%}
-        {% if pdata.tapis_auth -%}
+        {% if pdata.tapis_auth and not (pdata.splash_mode is defined and pdata.splash_mode) -%}
         - "tapis-auth-{{ pname }}"
         {% endif -%}
-        {% if pdata.proxy_compression is defined and pdata.proxy_compression -%}
+        {% if pdata.proxy_compression is defined and pdata.proxy_compression and not (pdata.splash_mode is defined and pdata.splash_mode) -%}
         - "tapis-compress-{{ pname }}"
         {% endif -%}
       {% endif %}
