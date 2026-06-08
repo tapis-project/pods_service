@@ -557,6 +557,9 @@ class PodBase(TapisApiModel):
     resources: Resources = Field({}, description = 'Pod resource management `{"cpu_limit": 3000, "mem_limit": 3000, "cpu_request": 500, "mem_limit": 500, "gpus": 0}`', sa_column=Column(JSON))
     compute_queue: str = Field("default", description = "Queue to run pod in. `default` is the default queue.")
     template_overrides: Dict[str, Any] | None = Field(None, description = 'Partial overrides for template values. Override volume_mounts or secret_map values without rewriting full template field. Ex: {"volume_mounts": {"/data": {"source_id": "my-vol"}}, "secret_map": {"DB_PASS": "${secret:mypass}"}}', sa_column=Column(JSON))
+    stack_id: str = Field("", description = "Stack this pod belongs to (references Stack.stack_id). Set via the join/leave endpoints, not by direct field edit.")
+    depends_on: List[str] | None = Field(None, description = "Same-stack pod IDs that must reach their ready_condition before the Stack Action Runner starts this pod. Only honored when the stack's restart_policy is 'ordered'.", sa_column=Column(ARRAY(String)))
+    ready_condition: str = Field("available", description = "When this pod counts as 'up' for dependents: 'available' (status==AVAILABLE) or 'ready' (readiness probe passing; requires healthchecks.readiness, surfaced via status_container['ready']).")
 
 class PodBaseRead(PodBase):
     # Provided
@@ -579,7 +582,8 @@ class PodBaseFull(PodBaseRead):
     permissions: List[str] = Field([], description = "Pod permissions for each user.", sa_column=Column(ARRAY(String, dimensions=1)))
     modified_fields: List[str] = Field([], description = "Fields that have been modified by the user since creation.", sa_column=Column(ARRAY(String, dimensions=1)))
     action_logs: List[str] = Field([], description = "Log of past 10 actions taken on this pod.", sa_column=Column(ARRAY(String, dimensions=1)))
-    
+    force_stop: bool = Field(False, description = "Transient flag: when True the health loop tears this pod down immediately, bypassing stack reverse-order teardown. Set by stop ?force=true; cleared once STOPPED.")
+
     def display(self, include_configs: bool = False):
         """Return displayable dict, optionally including config content.
         
@@ -613,7 +617,7 @@ class Pod(TapisPodBaseFull, table=True, validate=True):
     @validator('pod_id')
     def check_pod_id(cls, v):
         # In case we want to add reserved keywords.
-        reserved_pod_ids = ["catalog", "snapshots", "volumes", "admin", "catalogs", "snapshot", "volume", "image", "images", "template", "templates"]
+        reserved_pod_ids = ["catalog", "snapshots", "volumes", "admin", "catalogs", "snapshot", "volume", "image", "images", "template", "templates", "stack", "stacks"]
         if v in reserved_pod_ids:
             raise ValueError(f"pod_id overlaps with reserved pod ids: {reserved_pod_ids}")
         # Regex match full pod_id to ensure a-z0-9.
@@ -674,6 +678,12 @@ class Pod(TapisPodBaseFull, table=True, validate=True):
                 res = re.fullmatch(r'[a-zA-Z_][a-zA-Z0-9_.@-]*', user)
                 if not res:
                     raise ValueError(f"Permission username must start with a letter or underscore and may contain alphanumeric characters, underscores, hyphens, dots, or @ (for email addresses). Got '{user}'.")
+        return v
+
+    @validator('ready_condition')
+    def check_ready_condition(cls, v):
+        if v not in ("available", "ready"):
+            raise ValueError(f"ready_condition must be 'available' or 'ready'. Got '{v}'.")
         return v
 
     @validator('environment_variables')
@@ -1134,8 +1144,10 @@ class UpdatePod(TapisApiModel):
     compute_queue: str = Field("default", description = "Queue to run pod in. `default` is the default queue.")
     template_overrides: Optional[Dict[str, Any]] = Field(None, description = 'Partial overrides for template values. Override volume_mounts or secret_map values without rewriting full template field. Ex: {"volume_mounts": {"/data": {"source_id": "my-vol"}}, "secret_map": {"DB_PASS": "${secret:mypass}"}}', sa_column=Column(JSON))
     healthchecks: Optional[PodHealthchecks] = Field(None, description = 'Kubernetes health probe configuration. Supports liveness, readiness, and startup probes with HTTP GET, exec command, or TCP socket actions. Set to null to clear.', sa_column=Column(JSON))
+    depends_on: Optional[List[str]] = Field(None, description = "Same-stack pod IDs that must reach their ready_condition before this pod is started (honored when the stack's restart_policy is 'ordered').", sa_column=Column(ARRAY(String)))
+    ready_condition: Optional[str] = Field(None, description = "When this pod counts as 'up' for dependents: 'available' or 'ready' (readiness probe passing).")
 
-    
+
 class ExecutePodCommands(BaseModel):
     commands: Union[List[str], List[List[str]]] = Field(..., description = "List of commands to run in pod. ex. `['sleep 5000', 'ls -l']` or `[['sleep', '5000'], ['ls', '-l']]")
     total_timeout: Optional[int] = Field(300, description = "Total time (sec) to wait for all commands to finish. Default 300 seconds.")

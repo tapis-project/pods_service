@@ -9,6 +9,7 @@ from kubernetes_utils import rm_pvc, KubernetesError, delete_configmap, NAMESPAC
 from secret_utils import resolve_secret_map, inject_secrets_into_env_vars, check_pod_unresolved_patterns, expand_short_secret_references
 from models_volume_mounts_utils import interpolate_config_content, validate_volume_mounts_permissions
 from utils import check_permissions
+from stack_utils import find_dependents, validate_stack_fields
 from errors import PermissionsException
 import codes
 
@@ -196,6 +197,10 @@ async def update_pod(pod_id, update_pod: UpdatePod):
                             elif hasattr(mount_config, 'mounted_by'):
                                 mount_config.mounted_by = old_mounted_by_user
 
+    # Validate stack dependency fields when topology changed (setattr above bypasses model validators).
+    if 'depends_on' in input_data or 'ready_condition' in input_data:
+        validate_stack_fields(pod, tenant=g.request_tenant_id, site=g.site_id)
+
     post_update_pod = pod.dict().copy()
 
     # Only update if there's a change
@@ -239,15 +244,77 @@ async def update_pod(pod_id, update_pod: UpdatePod):
                           "status_requested, volume_mounts, networking, or resources.")})
 
 
+def delete_pod_resources(pod, password):
+    """Tear down a pod's Kubernetes-side resources (PVCs and ConfigMaps created for pvc/ephemeral
+    volume mounts) and delete its DB rows. Shared by delete_pod and the stack cascade-delete so the
+    cleanup logic lives in exactly one place."""
+    if pod.volume_mounts:
+        deleted_pvc_sources = set()
+        deleted_configmaps = set()
+
+        for mount_path, vol_mount in pod.volume_mounts.items():
+            if vol_mount is None:
+                continue
+            if hasattr(vol_mount, 'dict'):
+                vol_info = vol_mount.dict()
+            elif hasattr(vol_mount, 'model_dump'):
+                vol_info = vol_mount.model_dump()
+            elif isinstance(vol_mount, dict):
+                vol_info = vol_mount
+            else:
+                vol_info = dict(vol_mount)
+
+            vol_type = vol_info.get("type", "").lower()
+
+            if vol_type == "pvc":
+                source_id = vol_info.get("source_id", "")
+                if source_id in deleted_pvc_sources:
+                    continue
+                deleted_pvc_sources.add(source_id)
+                source_name_truncated = source_id[:20] if source_id else "pvc"
+                pvc_name = f"{pod.k8_name}--pvc--{source_name_truncated}"
+                if len(pvc_name) > 62:
+                    pvc_name = pvc_name[:62]
+                try:
+                    rm_pvc(pvc_name)
+                    logger.info(f"Deleted PVC {pvc_name} for pod {pod.pod_id}")
+                except KubernetesError as e:
+                    logger.warning(f"Failed to delete PVC {pvc_name}: {e}")
+
+            elif vol_type == "ephemeral":
+                import hashlib
+                mount_hash = hashlib.md5(mount_path.encode()).hexdigest()[:8]
+                source_name = "ephemeral"[:9]
+                configmap_name = f"{pod.k8_name}--{source_name}--{mount_hash}".lower()
+                if len(configmap_name) > 62:
+                    configmap_name = configmap_name[:62]
+                if configmap_name in deleted_configmaps:
+                    continue
+                deleted_configmaps.add(configmap_name)
+                try:
+                    delete_configmap(configmap_name, namespace=NAMESPACE)
+                    logger.info(f"Deleted ConfigMap {configmap_name} for pod {pod.pod_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to delete ConfigMap {configmap_name}: {e}")
+
+    pod.db_delete()
+    if password:
+        password.db_delete()
+
+
 @router.delete(
     "/pods/{pod_id}",
     tags=["Pods"],
     summary="delete_pod",
     operation_id="delete_pod",
     response_model=PodDeleteResponse)
-async def delete_pod(pod_id):
+async def delete_pod(pod_id, force: bool = False):
     """
     Delete a pod.
+
+    Notes:
+    - If other pods depend_on this pod, the delete is blocked (409-style) unless `?force=true`,
+      which first removes this pod from those pods' depends_on lists.
 
     Returns "".
     """
@@ -257,68 +324,20 @@ async def delete_pod(pod_id):
     pod = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
     password = Password.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
 
-    # Clean up any PVCs associated with this pod (created for 'pvc' type volume mounts)
-    # PVC name format: {k8_name}--pvc--{source_id[:20]}
-    # One PVC per unique source_id, so track which we've already deleted
-    if pod.volume_mounts:
-        deleted_pvc_sources = set()
-        deleted_configmaps = set()
-        
-        for mount_path, vol_mount in pod.volume_mounts.items():
-            if vol_mount is None:
-                continue
-            # Handle both dict and VolumeMount objects
-            if hasattr(vol_mount, 'dict'):
-                vol_info = vol_mount.dict()
-            elif hasattr(vol_mount, 'model_dump'):
-                vol_info = vol_mount.model_dump()
-            elif isinstance(vol_mount, dict):
-                vol_info = vol_mount
-            else:
-                vol_info = dict(vol_mount)
-            
-            vol_type = vol_info.get("type", "").lower()
-            
-            if vol_type == "pvc":
-                # Clean up PVCs (one per unique source_id)
-                source_id = vol_info.get("source_id", "")
-                if source_id in deleted_pvc_sources:
-                    continue
-                deleted_pvc_sources.add(source_id)
-                
-                # Reconstruct the PVC name using the same logic as kubernetes_templates.py
-                source_name_truncated = source_id[:20] if source_id else "pvc"
-                pvc_name = f"{pod.k8_name}--pvc--{source_name_truncated}"
-                if len(pvc_name) > 62:
-                    pvc_name = pvc_name[:62]
-                
-                try:
-                    rm_pvc(pvc_name)
-                    logger.info(f"Deleted PVC {pvc_name} for pod {pod_id}")
-                except KubernetesError as e:
-                    logger.warning(f"Failed to delete PVC {pvc_name}: {e}")
-                    
-            elif vol_type == "ephemeral":
-                # Clean up ConfigMaps for ephemeral mounts
-                import hashlib
-                mount_hash = hashlib.md5(mount_path.encode()).hexdigest()[:8]
-                source_name = "ephemeral"[:9]
-                configmap_name = f"{pod.k8_name}--{source_name}--{mount_hash}".lower()
-                if len(configmap_name) > 62:
-                    configmap_name = configmap_name[:62]
-                
-                if configmap_name in deleted_configmaps:
-                    continue
-                deleted_configmaps.add(configmap_name)
-                
-                try:
-                    delete_configmap(configmap_name, namespace=NAMESPACE)
-                    logger.info(f"Deleted ConfigMap {configmap_name} for pod {pod_id}")
-                except Exception as e:
-                    logger.warning(f"Failed to delete ConfigMap {configmap_name}: {e}")
+    # Dependency protection: refuse to delete a pod others depend_on unless forced.
+    dependents = find_dependents(pod_id, tenant=g.request_tenant_id, site=g.site_id)
+    if dependents and not force:
+        return error(
+            result=[d.pod_id for d in dependents],
+            msg=f"Pod '{pod_id}' is a dependency of {len(dependents)} other pod(s): "
+                f"{[d.pod_id for d in dependents]}. Use ?force=true to remove the dependency and delete.",
+        )
+    if dependents and force:
+        for d in dependents:
+            d.depends_on = [x for x in (d.depends_on or []) if x != pod_id]
+            d.db_update(f"'{g.username}' removed depends_on '{pod_id}' (dependency pod deleted)")
 
-    pod.db_delete()
-    password.db_delete()
+    delete_pod_resources(pod, password)
 
     return ok(result="", msg="Pod successfully deleted.")
 

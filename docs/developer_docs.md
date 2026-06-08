@@ -1019,3 +1019,129 @@ Served by `api_misc.py`. Features:
 ### Template Support
 
 `TemplateTagPodDefinition` has `healthchecks: PodHealthchecks | None`. Pods using a template inherit its healthchecks via `combine_pod_and_template_recursively`. A pod can override by setting its own `healthchecks` (pod-level takes precedence).
+
+## Pod Stacks (compose-like multi-pod management)
+
+A **stack** groups related pods (db + cache + app) so they can be managed together: shared access, combined start/stop/restart, and startup ordering. `Stack` is a first-class resource (like `Volume`/`Secret`) with its own permission list — see `models_stacks.py`, `api_stacks.py`, `stack_runner.py`, `stack_utils.py`. Migration: `19b287a40aa6_init22`.
+
+### Model
+
+- **`stack` table** (`Stack`): `stack_id` (flat PK, **unique per tenant+site** like `pod_id`/`volume_id` — `web`, not `cgarcia.web`), `description`, `restart_policy` (`ordered`|`parallel`), `status` (cached aggregate e.g. `2/3 AVAILABLE`), `permissions` (own `user:LEVEL` list), `action_logs`, `created_by`, timestamps.
+- **`pod` columns added**: `stack_id` (membership), `depends_on` (same-stack pod IDs to wait for), `ready_condition` (`available`|`ready`), `force_stop` (transient; bypasses ordered teardown).
+
+### Permission inheritance (the core idea)
+
+A pod's effective permission = `max(pod.permissions[user], stack.permissions[user])`, resolved in `utils.check_permissions` (`_pod_stack_grants` fallback). Consequences:
+
+- Granting on a stack is **one atomic write** that covers every member — *including pods added later*. No per-pod batch loop that can half-succeed.
+- A stack action route requires stack `USER+`; because that inherits to all members, no per-pod permission checks are needed in the action handler.
+
+```bash
+# Share a whole stack with alice in one call (covers all current + future member pods)
+curl -XPOST .../v3/pods/stacks/web/permissions -d '{"user":"alice","level":"USER"}'
+```
+
+### Membership
+
+`stack_id` is **not** settable via `PUT /pods/{id}` (structural protection). Join/leave are explicit, pod-ADMIN-gated:
+
+```bash
+curl -XPOST   .../v3/pods/myapp/stack -d '{"stack_id":"web"}'   # join (needs USER+ on the stack)
+curl -XDELETE .../v3/pods/myapp/stack                           # leave (clears stack_id + depends_on)
+```
+A pod may also be created directly into a stack (`"stack_id":"web"` in the create body); the stack must exist and you need `USER+` on it.
+
+### Dependency ordering — the Stack Action Runner
+
+Kubernetes has **no native `depends_on`**, and pods here are bare `V1Pod`s (`restartPolicy: Never`) managed by the health loop. Ordering is therefore done in the controller: pure, level-triggered gate functions in `stack_runner.py` that the health loop calls each tick (the same model as `kubectl wait --for=condition`, centralized). It is **non-blocking** (the action endpoint records intent and returns; ordering emerges over ticks) and **crash-safe** (desired state is in the DB).
+
+- **`gate_start(stack, deps_by_id)`** — a pod may start only when every dependency is `status_requested == ON` **and** ready. Blocking on `!= ON` (not just `OFF`) is what makes restart ordering correct: a dep mid-RESTART is still `AVAILABLE` in the window before teardown, and a dependent must not start against it.
+- **`is_ready(dep)`** — `ready_condition='available'` → `status == AVAILABLE`; `ready_condition='ready'` → also requires the readiness probe passing (`status_container['ready']`, needs `healthchecks.readiness`). This is the "what to wait for" knob.
+- **`gate_stop(stack, dependents)`** — reverse-order teardown: a pod holds until everything that depends on it is `STOPPED` (app before db).
+- **`restart_policy='parallel'`** disables both gates (act on all at once).
+
+Validation (`stack_utils.validate_stack_fields`, run on pod create/update): `depends_on` targets must exist, be in the **same stack**, and form **no cycle** (DFS); `ready_condition='ready'` requires a readiness probe.
+
+```bash
+curl -XPOST .../v3/pods/stacks -d '{"stack_id":"web","description":"demo"}'
+curl -XPOST .../v3/pods -d '{"pod_id":"mydb","image":"...","stack_id":"web"}'
+curl -XPOST .../v3/pods -d '{"pod_id":"myapp","image":"...","stack_id":"web","depends_on":["mydb"]}'
+curl -XPOST .../v3/pods/stacks/web/action -d '{"action":"restart"}'   # returns now; runner orders it
+curl .../v3/pods/stacks/web    # watch action_logs / status as it converges
+```
+
+To change ordering, update the stack (there is **no `mode` on the action** — that was removed to avoid a one-off argument silently changing the stack's policy):
+
+```bash
+curl -XPUT .../v3/pods/stacks/web -d '{"restart_policy":"parallel"}'
+```
+
+### Force-stop (bypassing reverse-order teardown)
+
+Reverse-order teardown applies to **any** stop of a pod in an `ordered` stack — including an individual `stop_pod` — so stopping `db` waits until `app` (which depends on it) is `STOPPED`. When the order doesn't matter, bypass it with `?force=true`. This sets the transient `pod.force_stop` flag; the health loop skips the teardown gate and clears the flag once the pod is `STOPPED`.
+
+```bash
+curl ".../v3/pods/mydb/stop?force=true"                        # stop this pod now, ignore stack order
+curl -XPOST .../v3/pods/stacks/web/action -d '{"action":"stop","force":true}'   # whole stack, parallel teardown
+```
+Startup ordering is still honored on the next start; `force` only affects shutdown.
+
+### Deleting a stack (three modes)
+
+```bash
+# 1. default — refuses if the stack still has members (nothing deleted)
+curl -XDELETE .../v3/pods/stacks/web
+
+# 2. ?force=true — detaches members (clears stack_id + depends_on), deletes the stack. PODS ARE KEPT.
+curl -XDELETE ".../v3/pods/stacks/web?force=true"
+
+# 3. ?delete_pods=true&confirm=<stack_id> — DESTRUCTIVE: deletes the stack AND every member pod.
+#    confirm must exactly equal the stack_id, so it cannot happen by accident.
+curl -XDELETE ".../v3/pods/stacks/web?delete_pods=true&confirm=web"
+```
+Member-pod deletion reuses `api_pods_podid.delete_pod_resources` (same PVC/ConfigMap cleanup + DB row deletion as `delete_pod`). Deleting a pod that others `depend_on` is itself blocked unless `?force=true` (which strips the dependency from dependents first).
+
+### Audit / metrics
+
+Every state-changing stack operation writes a who+when line to `stack.action_logs` (creation, update, action, permission grant/revoke, membership join/leave) and per-pod transitions go to `pod.action_logs` — giving one scannable timeline per stack. `stack.status` is refreshed to a `N/total AVAILABLE` aggregate on `GET /pods/stacks/{id}`.
+
+### Endpoint summary
+
+| Method & path | Level | Purpose |
+|---|---|---|
+| `GET /pods/stacks` | — | List stacks you can read (permission-filtered) |
+| `POST /pods/stacks` | — | Create (creator → ADMIN; tenant-unique → 409 if exists) |
+| `GET /pods/stacks/{id}` | READ | Stack + member pods + refreshed status |
+| `PUT /pods/stacks/{id}` | USER | Update description / restart_policy |
+| `DELETE /pods/stacks/{id}` | ADMIN | Delete (default / `?force` detach / `?delete_pods&confirm` cascade) |
+| `POST /pods/stacks/{id}/action` | USER | start / stop / restart all members (+ `force`) |
+| `GET/POST/DELETE /pods/stacks/{id}/permissions[/{user}]` | USER/ADMIN | Manage stack permissions (the atomic grant) |
+| `POST/DELETE /pods/{pod_id}/stack` | ADMIN | Join / leave a stack |
+
+Route ordering note: in both `auth.py` (route table) and `api.py` (router registration), the `/pods/stacks…` routes are registered **before** `/pods/{pod_id}`, otherwise the `{pod_id}` matcher (`[^/]+`) would swallow `stacks`. `stack`/`stacks` are also in `reserved_pod_ids`.
+
+### Stack Templates (one template tag → a whole stack)
+
+A template tag can describe an entire stack (e.g. postgres + redis + n8n main + worker), instantiated in one call. This is the multi-pod evolution of single-pod templates; it **compiles down** to the runtime Stack + Pods above — nothing about stacks is special-cased at runtime.
+
+**Data model** (`models_templates_tags.py`):
+- `TemplateTag.kind`: `"pod"` (default; every existing tag) or `"stack"`. Cheap discriminator — list/branch without deserializing the JSON blob.
+- `TemplateTag.stack_definition: StackTagDefinition | None`. A `check_kind_consistency` model-validator enforces **exactly one** of `pod_definition` / `stack_definition`, matching `kind`.
+- `StackTagDefinition` = `{ restart_policy, secret_map (shared), members: [StackMemberDefinition] }`.
+- `StackMemberDefinition` subclasses `TemplateTagPodDefinition` (so it carries every pod field) and adds `name` (internal handle, 1–32 chars), `depends_on` (member **names**), `ready_condition`. **Templates are name-only** — a member has no `pod_id`, so a template is always reusable.
+
+**Name resolution** (`stack_template_utils.resolve_member_pod_ids`): the external `pod_id` for each member is `pod_ids[name]` override **else** `{stack_id}{name}` (e.g. `myn8n`+`db` → `myn8ndb`). Validated up front: charset, length 3–64, batch-uniqueness. `depends_on` and `${stack:…}` always use the stable internal `name`, so renaming a pod_id doesn't ripple. Public URLs stay governed by `pod_id`; rename the public member (e.g. `main` → `myn8n`) via `pod_ids`.
+
+**Shared secrets — reference model (values never materialized into pods).** `stack_definition.secret_map` holds the shared secrets (template rule: placeholders / `${pods:random:N}` only, no embedded `${secret:user:…}`). A member references one with `${stack:secrets:KEY}` — kept as a **reference** in the member's own `secret_map`; the pod row never stores the value. At pod start, `secret_utils.resolve_secret_map` → `resolve_stack_secrets` walks `pod.stack_id → stack.secret_map[KEY]`, resolves it once (randoms generate-and-cache on the **stack row**, one place; `${secret:…}` fetch from SK with nothing stored), and injects into env. Stack secret values are redacted from `GET /pods/stacks`. *Phase-2 hardening: promote stack randoms into SK so even the random path caches nothing; the pod-level reference is unchanged.*
+
+**Cross-member host** — `${stack:<member>:host|url|port|protocol|pod_id}` is non-secret and stable, so `stack_template_utils.compile_member_stack_refs` resolves it to a literal at instantiation: `host` → the target's `k8_name` (`pods-<site>-<tenant>-<pod_id>`, the in-cluster DNS) for internal deps; `url` → public address. The same compile step normalizes any `${stack:secrets:KEY}` written directly in `environment_variables` into `secret_map[KEY]` + env `${pods:secrets:KEY}`.
+
+**Endpoints** (`api_stacks.py`):
+- `POST /pods/stacks/from-template` `{template, stack_id, pod_ids?, secrets?, overrides?, description?}` — resolves ids, validates (`validate_stack_definition`: cycles via DFS, self-dep, `ready`⇒readiness probe, `${stack:…}` ref existence), prechecks collisions, creates the Stack (with shared `secret_map`), then creates members in **topological order** (`topo_order`, so a dependency exists + is same-stack before its dependent is validated) by reusing `create_pod` per member. **Transactional**: any member failure rolls back every pod created so far + the stack.
+- `POST /pods/stacks/{stack_id}/save_as_template` `{template_id, tag, commit_message?}` — snapshots a live stack into a `kind='stack'` tag: pod_ids → names (strip `{stack_id}` prefix), depends_on ids → names, member k8 hostnames reversed back to `${stack:<name>:host}`, and **all concrete secret values replaced with `${:?…}` placeholders** (never embeds a real secret).
+
+**Validation reuse**: `add_template_tag` runs `validate_stack_definition` + per-secret_map template rules for `kind='stack'` tags at creation, so a bad stack template is rejected before it's stored. Pure helpers are unit-tested in `tests/test_stack_templates.py` (24 tests: derivation, precedence, cycles, topo order, structural validation, compile).
+
+**Phase-1 limits** (noted for follow-up): member-level `template` refs and `save_as_template` host-reversal assume same-stack re-instantiation; shared-secret rotation updates the stack's one source (pods unchanged) but isn't yet a dedicated endpoint; stack randoms cache on the stack row (not yet SK).
+
+Migration: `d7c3e9a14f08_init23` adds `templatetag.kind`/`stack_definition` and `stack.secret_map`/`from_template`.

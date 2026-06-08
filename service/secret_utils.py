@@ -68,6 +68,11 @@ SECRET_SHORT_PATTERN = re.compile(r'^\$\{secret:([a-zA-Z0-9_-]+)\}$')
 # Secret name: alphanumeric, underscores, hyphens
 SECRET_EXPLICIT_PATTERN = re.compile(r'^\$\{secret:([a-zA-Z0-9_@]+):([a-zA-Z0-9_-]+)\}$')
 
+# Same as SECRET_EXPLICIT_PATTERN but UNANCHORED — finds explicit refs inline anywhere in a
+# value. Used by the write-time ownership gate to catch cross-user refs the anchored parser
+# would miss when a ref is embedded in surrounding text.
+SECRET_EXPLICIT_INLINE_PATTERN = re.compile(r'\$\{secret:([a-zA-Z0-9_@]+):[a-zA-Z0-9_-]+\}')
+
 # Pattern for placeholder with default: ${pods:default:value} or ${pods:default:value:?description}
 # Description is optional and MUST start with ? if provided
 # Group 1: default value (can be empty), Group 2: optional ?description (may be None)
@@ -104,6 +109,11 @@ RANDOM_PASSWORD_PATTERN = re.compile(r'\$\{pods:random:(\d+)\}')
 # Inline pattern for short secret reference (for use in strings, not just full match)
 SECRET_SHORT_INLINE_PATTERN = re.compile(r'\$\{secret:([a-zA-Z0-9_-]+)\}')
 
+# Pattern for shared stack secret reference: ${stack:secrets:KEY}
+# A member pod carries this reference; it is resolved at pod start by walking pod.stack_id -> the
+# stack's secret_map. The resolved value is injected into env but never written back to the pod.
+STACK_SECRET_INLINE_PATTERN = re.compile(r'\$\{stack:secrets:([a-zA-Z0-9_-]+)\}')
+
 
 def expand_short_secret_references(secret_map: Dict[str, str], actor: str) -> Dict[str, str]:
     """
@@ -139,8 +149,36 @@ def expand_short_secret_references(secret_map: Dict[str, str], actor: str) -> Di
             return f"${{secret:{actor}:{secret_name}}}"
         
         expanded[key] = SECRET_SHORT_INLINE_PATTERN.sub(replace_short, value)
-    
+
     return expanded
+
+
+def validate_secret_map_ownership(secret_map: Dict[str, str], actor: str) -> List[str]:
+    """Reject explicit ${secret:owner:id} references whose owner is not `actor`.
+
+    This is the WRITE-TIME ownership gate. Pod secret_maps get it implicitly via
+    resolve_secret_map(actor=...), which errors when the notation owner != actor. Any
+    write path that persists a secret_map WITHOUT an actor-checked resolve (e.g. a stack's
+    shared secret_map, later resolved with actor=None where the notation owner is trusted
+    blindly) MUST call this on the user-supplied portion — otherwise a caller can inject
+    ${secret:victim:id} and read another user's secret at pod start.
+
+    Call AFTER expand_short_secret_references (which pins short ${secret:name} refs to the
+    actor). Returns a list of human-readable errors; empty list means OK.
+    """
+    errors: List[str] = []
+    if not secret_map:
+        return errors
+    for key, value in secret_map.items():
+        if not isinstance(value, str):
+            continue
+        for owner in SECRET_EXPLICIT_INLINE_PATTERN.findall(value):
+            if owner != actor:
+                errors.append(
+                    f"secret_map key '{key}' references user '{owner}'s secret; "
+                    f"you may only reference your own secrets."
+                )
+    return errors
 
 
 @dataclass
@@ -666,7 +704,8 @@ def resolve_secret_map(
     tenant_id: str,
     actor: str = None,
     pod_id: str = None,
-    pod: Any = None
+    pod: Any = None,
+    _resolve_stack_refs: bool = True,
 ) -> Tuple[Dict[str, str], List[str]]:
     """
     Resolve all secret references in secret_map to their actual values.
@@ -708,7 +747,15 @@ def resolve_secret_map(
     if pod:
         working_map, networking_errors = resolve_pod_networking(working_map, pod)
         errors.extend(networking_errors)
-    
+
+    # Step 2.5: Resolve shared stack secrets (${stack:secrets:KEY}) by walking pod.stack_id -> stack.
+    # Only for member pods (have pod_id + stack_id); the stack's own resolution passes
+    # _resolve_stack_refs=False to avoid re-entry. The value is pulled from the stack at resolution
+    # time and never written back to the pod row.
+    if _resolve_stack_refs and pod is not None and getattr(pod, "pod_id", None) and getattr(pod, "stack_id", None):
+        working_map, stack_errors = resolve_stack_secrets(working_map, pod, site_id, tenant_id, actor=actor)
+        errors.extend(stack_errors)
+
     # Step 3: Resolve SK secrets and other patterns
     for env_var, value in working_map.items():
         ref, parse_error = parse_secret_reference(value, actor=actor)
@@ -859,6 +906,79 @@ def resolve_secret_map(
     return (resolved, errors)
 
 
+def resolve_stack_secrets(
+    secret_map: Dict[str, str],
+    pod: Any,
+    site_id: str,
+    tenant_id: str,
+    actor: str = None,
+) -> Tuple[Dict[str, str], List[str]]:
+    """
+    Resolve ${stack:secrets:KEY} references in a member pod's secret_map by pulling the value from
+    the pod's stack.
+
+    The shared value's single source is `stack.secret_map`, which is resolved once here (randoms
+    generate-and-cache on the stack row; ${secret:...} fetch from SK; placeholders use their default
+    or the value supplied at instantiation). The resolved value is substituted into a working copy
+    only — the member pod row keeps the `${stack:secrets:KEY}` reference, so no shared secret value
+    is ever persisted onto the pod.
+
+    Args:
+        secret_map: The pod's secret_map (may contain ${stack:secrets:KEY} references)
+        pod: Pod object (must have stack_id)
+        site_id / tenant_id: for stack + SK lookup
+        actor: requesting user in API mode; None in health mode (trusts owner in notation)
+
+    Returns:
+        Tuple of (resolved working map, errors)
+    """
+    resolved = dict(secret_map)
+    errors = []
+
+    stack_id = getattr(pod, "stack_id", None)
+    if not stack_id:
+        return (resolved, errors)
+
+    needs = any(isinstance(v, str) and STACK_SECRET_INLINE_PATTERN.search(v) for v in secret_map.values())
+    if not needs:
+        return (resolved, errors)
+
+    from models_stacks import Stack
+    stack = Stack.db_get_with_pk(stack_id, tenant=tenant_id, site=site_id)
+    if not stack:
+        errors.append(f"Pod references stack '{stack_id}' for shared secrets, but the stack was not found.")
+        return (resolved, errors)
+
+    stack_secret_map = dict(getattr(stack, "secret_map", None) or {})
+    # Resolve the stack's shared secret_map once. _resolve_stack_refs=False prevents re-entry; the
+    # stack is the holder so randoms persist to the stack row (one place, not each pod).
+    stack_resolved, stack_errors = resolve_secret_map(
+        stack_secret_map,
+        site_id=site_id,
+        tenant_id=tenant_id,
+        actor=actor,
+        pod_id=stack_id,
+        pod=stack,
+        _resolve_stack_refs=False,
+    )
+    errors.extend(stack_errors)
+
+    for k, v in list(resolved.items()):
+        if not isinstance(v, str):
+            continue
+
+        def _sub(match):
+            key = match.group(1)
+            if key in stack_resolved:
+                return stack_resolved[key]
+            errors.append(f"secret_map['{k}'] references unknown stack secret '{key}' on stack '{stack_id}'.")
+            return match.group(0)
+
+        resolved[k] = STACK_SECRET_INLINE_PATTERN.sub(_sub, v)
+
+    return (resolved, errors)
+
+
 def resolve_random_passwords(
     secret_map: Dict[str, str],
     pod: Any,
@@ -899,7 +1019,10 @@ def resolve_random_passwords(
     existing_resolved = {}
     if pod and pod.secret_map:
         existing_resolved = dict(pod.secret_map)
-    
+
+    # Holder may be a Pod (pod_id) or a Stack (stack_id) — both carry secret_map + db_update.
+    holder_id = (getattr(pod, 'pod_id', None) or getattr(pod, 'stack_id', None) or 'unknown') if pod else 'unknown'
+
     for key, value in secret_map.items():
         if not isinstance(value, str):
             continue
@@ -915,7 +1038,7 @@ def resolve_random_passwords(
                 if not RANDOM_PASSWORD_PATTERN.fullmatch(str(existing_value)):
                     # Already resolved - use the existing value
                     resolved[key] = existing_value
-                    logger.debug(f"Using existing resolved random password for key '{key}' in pod '{pod.pod_id}'")
+                    logger.debug(f"Using existing resolved random password for key '{key}' in pod '{holder_id}'")
                     continue
             
             # Validate length
@@ -934,8 +1057,7 @@ def resolve_random_passwords(
             generated_keys.append((key, length))
             db_updates_needed = True
             
-            pod_id = pod.pod_id if pod else 'unknown'
-            logger.info(f"Generated random password for key '{key}' (length={length}) in pod '{pod_id}'")
+            logger.info(f"Generated random password for key '{key}' (length={length}) in pod '{holder_id}'")
     
     # Bulk update pod.secret_map in DB if randomized password(s) generated
     if db_updates_needed and pod:
@@ -948,10 +1070,10 @@ def resolve_random_passwords(
             # Create detailed action log with key names and lengths
             log_entries = [f"{key} (length: {length})" for key, length in generated_keys]
             pod.db_update(log=f"Generated random password(s): {', '.join(log_entries)}")
-            logger.debug(f"Persisted random passwords to pod '{pod.pod_id}' secret_map")
+            logger.debug(f"Persisted random passwords to pod '{holder_id}' secret_map")
         except Exception as e:
             errors.append(f"Failed to persist random passwords to database: {str(e)}")
-            logger.error(f"Failed to persist random passwords for pod '{pod.pod_id}': {e}")
+            logger.error(f"Failed to persist random passwords for pod '{holder_id}': {e}")
     
     return (resolved, errors, db_updates_needed)
 

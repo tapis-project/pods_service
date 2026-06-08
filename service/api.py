@@ -50,6 +50,7 @@ from api_pods import router as router_pods
 from api_pods_podid import router as router_pods_podsid
 from api_pods_podid_func import router as router_pods_podsid_func
 from api_pods_podid_jupyter import router as router_pods_podsid_jupyter
+from api_stacks import router as router_stacks
 from api_volumes import router as router_volumes
 from api_volumes_volid import router as router_volumes_volumeid
 from api_volumes_volid_func import router as router_volumes_volumeid_func
@@ -180,5 +181,7 @@ api.include_router(router_secrets)
 api.include_router(router_secrets_secretid)
 # pods
 api.include_router(router_pods)
+# stacks MUST be registered before router_pods_podsid — /pods/stacks would otherwise match /pods/{pod_id}
+api.include_router(router_stacks)
 api.include_router(router_pods_podsid)
 api.include_router(router_pods_podsid_func)

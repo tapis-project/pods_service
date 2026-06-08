@@ -4,6 +4,7 @@ from models_misc import SetPermission
 from models_templates import Template, TemplatePermissionsResponse
 from models_templates_tags import TemplateTagsResponse, TemplateTagResponse, NewTemplateTag, TemplateTag, TemplateTagsSmallResponse, TemplateTagsWithDependentsResponse
 from models_templates_utils import validate_template_tag_secret_map, validate_template_tag_env_vars
+from stack_template_utils import validate_stack_definition
 from models_volume_mounts_utils import (
     validate_template_volume_mounts,
     validate_template_volume_mounts_placeholders,
@@ -170,6 +171,28 @@ async def add_template_tag(template_id: str, new_template_tag: NewTemplateTag):
         if result.metadata:
             metadata.update(result.metadata)
     
+    # Stack template validation (kind='stack'): structure + shared/member secret_map rules.
+    stack_def = getattr(new_template_tag, 'stack_definition', None)
+    if getattr(new_template_tag, 'kind', 'pod') == "stack" or stack_def:
+        if not stack_def or not getattr(stack_def, 'members', None):
+            raise ValueError("kind='stack' requires stack_definition.members (at least one member).")
+        member_dicts = [m.dict() for m in stack_def.members]
+        stack_secret_keys = list((stack_def.secret_map or {}).keys())
+        struct_errors = validate_stack_definition(member_dicts, stack_secret_keys)
+        if struct_errors:
+            raise ValueError("stack_definition invalid: " + "; ".join(struct_errors))
+        # Shared stack secret_map and each member's secret_map must use placeholders/randoms, not
+        # embedded user secrets (a shared template must not carry a specific user's secret).
+        if stack_def.secret_map:
+            r = validate_template_tag_secret_map(stack_def.secret_map, actor=getattr(g, 'username', None))
+            if not r.is_valid:
+                raise ValueError(f"stack_definition.secret_map: {r.error_message}")
+        for m in stack_def.members:
+            if getattr(m, 'secret_map', None):
+                r = validate_template_tag_secret_map(m.secret_map, actor=getattr(g, 'username', None))
+                if not r.is_valid:
+                    raise ValueError(f"stack member '{m.name}' secret_map: {r.error_message}")
+
     template_tag = TemplateTag(template_id=template_id, **new_template_tag.dict())
 
     # Create template database entry
