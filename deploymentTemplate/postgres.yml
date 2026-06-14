@@ -37,7 +37,8 @@ spec:
           "-c", "ssl=on",
           "-c", "ssl_cert_file=/tmp/ssl/certs/ssl-cert-snakeoil.pem",
           "-c", "ssl_key_file=/tmp/ssl/private/ssl-cert-snakeoil.key",
-          "-c", "max_connections=500"
+          "-c", "max_connections=500",
+          "-c", "shared_preload_libraries=timescaledb"
         ]
         resources:
           requests:

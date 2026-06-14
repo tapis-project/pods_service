@@ -2,7 +2,7 @@ import re
 from string import ascii_letters, digits
 from secrets import choice
 from datetime import datetime
-from typing import List, Dict, Literal, Any, Set
+from typing import List, Dict, Literal, Any, Set, Optional
 from pydantic import BaseModel, Field, validator
 
 from stores import pg_store
@@ -13,6 +13,38 @@ from sqlalchemy import UniqueConstraint
 from sqlalchemy.inspection import inspect
 from sqlalchemy.orm import defer
 from sqlmodel import Field, Session, SQLModel, select, JSON, Column
+
+
+class HealthcheckProbe(BaseModel):
+    """Kubernetes health probe configuration for a single probe type."""
+    # Action — exactly one should be set
+    http_get_path: Optional[str] = Field(None, description="HTTP GET path for probe. e.g. /health")
+    http_get_port: Optional[int] = Field(None, description="HTTP GET port for probe. e.g. 5000")
+    http_get_scheme: str = Field("HTTP", description="HTTP GET scheme. HTTP or HTTPS.")
+    exec_command: Optional[List[str]] = Field(None, description="Exec command for probe. e.g. ['curl', '-f', 'http://localhost/health']")
+    tcp_socket_port: Optional[int] = Field(None, description="TCP socket port for probe. e.g. 5432")
+    # Timing
+    initial_delay_seconds: int = Field(10, description="Seconds after container start before probe begins. K8s default: 0.")
+    period_seconds: int = Field(10, description="How often (seconds) to run the probe. K8s default: 10.")
+    timeout_seconds: int = Field(5, description="Seconds probe must complete within. K8s default: 1.")
+    failure_threshold: int = Field(3, description="Consecutive failures before pod is unhealthy. K8s default: 3.")
+    success_threshold: int = Field(1, description="Consecutive successes to mark pod healthy. K8s default: 1.")
+
+    class Config:
+        validate_assignment = True
+        extra = "forbid"
+
+
+class PodHealthchecks(BaseModel):
+    """Kubernetes health probes configuration for a pod."""
+    liveness: Optional[HealthcheckProbe] = Field(None, description="Liveness probe — restarts container when it fails.")
+    readiness: Optional[HealthcheckProbe] = Field(None, description="Readiness probe — gates traffic routing when it fails.")
+    startup: Optional[HealthcheckProbe] = Field(None, description="Startup probe — disables liveness/readiness until it passes (good for slow-starting apps).")
+    networking_requires_ready: bool = Field(True, description="When True, pod URL only routes to the real service after the readiness probe passes. While the pod is AVAILABLE but not yet ready, requests receive a generic 'service starting' splash page.")
+
+    class Config:
+        validate_assignment = True
+        extra = "forbid"
 
 
 class TapisApiModel(BaseModel):

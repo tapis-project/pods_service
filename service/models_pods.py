@@ -35,7 +35,7 @@ from models_volume_mounts_utils import (
 )
 from models_templates import Template
 from models_templates_tags import TemplateTag, derive_template_info
-from models_base import TapisModel, TapisApiModel
+from models_base import TapisModel, TapisApiModel, HealthcheckProbe, PodHealthchecks
 from models_misc import PermissionsModel, CredentialsModel, LogsModel
 from models_volumes import Volume
 from models_snapshots import Snapshot
@@ -532,28 +532,6 @@ def validate_volume_mounts_dict(volume_mounts: Dict[str, Any], context: str = "v
     return result
 
 
-class Probes(TapisModel):
-    type: str =  Field("", description = "Type of volume to attach.")
-    mount_path: str = Field("/tapis_volume_mount", description = "Path to mount volume to.")
-    sub_path: str = Field("", description = "Path to mount volume to.")
-
-    @validator('type')
-    def check_type(cls, v):
-        v = v.lower()
-        valid_types = ['tapisvolume', 'tapissnapshot', 'pvc']
-        if v not in valid_types:
-            raise ValueError(f"volumemount.type must be one of the following: {valid_types}.")
-        return v
-
-    @validator('mount_path')
-    def check_mount_path(cls, v):
-        return v
-
-    @validator('sub_path')
-    def check_sub_path(cls, v):
-        return v
-
-
 class PodBase(TapisApiModel):
     # Required
     pod_id: str = Field(..., description = "Name of this pod.", primary_key=True)
@@ -566,7 +544,7 @@ class PodBase(TapisApiModel):
     arguments: List[str] | None = Field(None, description = "Arguments for the Pod's command.", sa_column=Column(ARRAY(String)))
     environment_variables: Dict[str, Any] = Field({}, description = "Environment variables to inject into k8 pod. Use `${pods:secrets:KEY}` to reference secret_map entries.", sa_column=Column(JSON))
     secret_map: Dict[str, str] = Field({}, description = "Map of keys to secret values. Syntax: ${secret:name} (user secret), ${secret:user:name} (explicit owner). Reference in environment_variables via ${pods:secrets:KEY}. Resolved at pod start.", sa_column=Column(JSON))
-    #probes: Dict[str, Any] = Field({}, description = "Probes to run on pod. ex. `{\"livenessProbe\": {\"httpGet\": {\"path\": \"/\", \"port\": 5000}}}`", sa_column=Column(JSON))
+    healthchecks: PodHealthchecks | None = Field(None, description = 'Kubernetes health probe configuration. Supports liveness, readiness, and startup probes with HTTP GET, exec command, or TCP socket actions. Example: `{"readiness": {"http_get_path": "/health", "http_get_port": 5000}, "networking_requires_ready": true}`', sa_column=Column(JSON))
     status_requested: str = Field("ON", description = "Status requested by user, `ON`, `OFF`, or `RESTART`.")
     volume_mounts: Dict[str, Optional[VolumeMount]] = Field(
         {}, 
@@ -584,7 +562,8 @@ class PodBaseRead(PodBase):
     # Provided
     time_to_stop_ts: datetime | None = Field(None, description = "Time (UTC) that this pod is scheduled to be stopped. Change with time_to_stop_instance.")
     status: str = Field("STOPPED", description = "Current status of pod.")
-    status_container: Dict = Field({}, description = "Status of container if exists. Gives phase.", sa_column=Column(JSON))
+    status_container: Dict = Field({}, description = "Status of container if exists. Gives phase. When healthchecks are configured, also includes 'ready' (bool) and 'restart_count' (int) fields.", sa_column=Column(JSON))
+    networking_live: bool = Field(False, description = "True when Traefik is actively routing traffic to this pod's real service. False when pod is starting, stopped, or held behind the readiness gate (networking_requires_ready=True and readiness probe not yet passing).")
     creation_ts: datetime | None = Field(None, description = "Time (UTC) that this pod was created.")
     update_ts: datetime | None = Field(None, description = "Time (UTC) that this pod was last updated by a user action.")
     last_status_check_ts: datetime | None = Field(None, description = "Time (UTC) of last automated health/status check.")

@@ -279,6 +279,33 @@ def _check_custom_domain_dns(custom_domain: str, pods_ingress: str) -> bool:
         return False
 
 
+def _is_pod_networking_live(pod, input_pod) -> bool:
+    """Return True when traffic should route to the real pod service.
+    Uses status_container['ready'] (written by health.py each cycle) so this
+    function never makes an extra K8s API call.
+    """
+    if input_pod.status != AVAILABLE:
+        return False
+    hc = pod.healthchecks
+    # hc may be a Pydantic model (templated pods) or a plain dict (stack members
+    # combined from a dict definition) — read both the same way, or this throws and
+    # aborts the whole set_traefik_proxy() reconcile, freezing routing for every pod.
+    if isinstance(hc, dict):
+        networking_requires_ready = hc.get('networking_requires_ready')
+        readiness = hc.get('readiness')
+    else:
+        networking_requires_ready = getattr(hc, 'networking_requires_ready', None)
+        readiness = getattr(hc, 'readiness', None)
+    if not hc or not networking_requires_ready or not readiness:
+        # No readiness gate configured — route live once AVAILABLE
+        return True
+    # Readiness gate active: trust the ready flag written by health.py
+    status_container = input_pod.status_container or {}
+    if not isinstance(status_container, dict):
+        status_container = getattr(status_container, '__dict__', {}) or {}
+    return bool(status_container.get('ready', False))
+
+
 def set_traefik_proxy():
     all_pods = []
     stmt = select(Pod)
@@ -297,6 +324,16 @@ def set_traefik_proxy():
         except Exception as e:
             logger.critical(f"Error combining pod and template. Skipping pod {input_pod.pod_id}. e: {e}")
             continue
+        # Determine networking_live for this pod and persist if changed
+        pod_networking_live = _is_pod_networking_live(pod, input_pod)
+        if input_pod.networking_live != pod_networking_live:
+            try:
+                input_pod.networking_live = pod_networking_live
+                input_pod.db_update(tenant=input_pod.tenant_id, site=input_pod.site_id, user_update=False)
+            except Exception as e:
+                logger.warning(f"Failed to update networking_live for pod {input_pod.pod_id}: {e}")
+        splash_mode = not pod_networking_live
+
         # Each pod can have up to 3 networking objects with custom filled port/protocol/name
         for net_name, net_info in pod.networking.items():
             if not isinstance(net_info, dict):
@@ -309,9 +346,21 @@ def set_traefik_proxy():
             else:
                 traefik_service_name = pod.k8_name
 
-            template_info = {"routing_port": net_info['port'],
-                             "url": net_info['url'],
-                             "k8_service": pod.k8_name}
+            # Splash mode: route to pods-api splash endpoint instead of real service
+            if splash_mode and net_info.get('protocol') == 'http':
+                template_info = {
+                    "routing_port": 8000,
+                    "url": net_info['url'],
+                    "k8_service": "pods-api",
+                    "splash_mode": True,
+                }
+            else:
+                template_info = {
+                    "routing_port": net_info['port'],
+                    "url": net_info['url'],
+                    "k8_service": pod.k8_name,
+                    "splash_mode": False,
+                }
             ## cors headers
             cors_info = {
                 "cors_allow_origins": net_info.get('cors_allow_origins', []),
@@ -379,8 +428,8 @@ def set_traefik_proxy():
                     template_info.update(ip_allow_list_info)
                     tcp_proxy_info[traefik_service_name] = template_info
                 case "http":
-                    # tapis auth
-                    if forward_auth_info['tapis_auth']:
+                    # tapis auth — skip in splash mode (splash page is publicly accessible)
+                    if forward_auth_info['tapis_auth'] and not splash_mode:
                         template_info.update(forward_auth_info)
                     # cors settings
                     if cors_info['cors_allow_origins']:

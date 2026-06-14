@@ -943,3 +943,79 @@ Start and restart from API will be central. But restarts will be completely on t
 3. Central health can monitor the edge and when in state to restart it does things rather than edge health. **
 
 I like 3. Edge stays simple and doesn't need more access.
+
+---
+
+## Kubernetes Healthchecks
+
+Pods support three Kubernetes-native probe types: **liveness**, **readiness**, and **startup**. These are configured via the `healthchecks` field on a `Pod` (or `TemplateTagPodDefinition` for templates).
+
+### Data Model
+
+```
+HealthcheckProbe (models_base.py)
+  Action (exactly one):
+    http_get_path / http_get_port / http_get_scheme  → V1HTTPGetAction
+    exec_command                                      → V1ExecAction
+    tcp_socket_port                                   → V1TCPSocketAction
+  Timing (per-probe):
+    initial_delay_seconds  (default 10)
+    period_seconds         (default 10)
+    timeout_seconds        (default 5)
+    failure_threshold      (default 3)
+    success_threshold      (default 1)
+
+PodHealthchecks (models_base.py)
+  liveness:                 HealthcheckProbe | None
+  readiness:                HealthcheckProbe | None
+  startup:                  HealthcheckProbe | None
+  networking_requires_ready: bool (default True)
+```
+
+`HealthcheckProbe` and `PodHealthchecks` are defined in `models_base.py` (not `models_pods.py`) to avoid circular imports — both `models_pods.py` and `models_templates_tags.py` import from `models_base`.
+
+### K8s Mapping
+
+`kubernetes_utils._build_k8_probe(probe)` converts a `HealthcheckProbe` → `client.V1Probe`. The probes are passed to `client.V1Container(liveness_probe=..., readiness_probe=..., startup_probe=...)` in `create_pod()`. `kubernetes_templates.start_generic_pod()` passes `healthchecks=pod.healthchecks` to `create_pod()`.
+
+### What Each Probe Does (K8s Semantics)
+
+| Probe | Effect when failing |
+|-------|---------------------|
+| **liveness** | Container is restarted (note: pod `restart_policy="Never"` so pod goes to ERROR instead) |
+| **readiness** | Pod is marked not-ready; removed from K8s endpoint traffic (and our Traefik gate) |
+| **startup** | Disables liveness + readiness until it passes; protects slow-starting apps from premature kills |
+
+### networking_requires_ready — Traffic Gate
+
+When `networking_requires_ready=True` (default) and a `readiness` probe is configured:
+
+1. Pod becomes AVAILABLE (K8s phase=Running) → `health.py` marks status=AVAILABLE
+2. `health.py` writes `status_container['ready']` (bool from `container_statuses[0].ready`) and `status_container['restart_count']` every health cycle — zero extra K8s calls (same response already read)
+3. `health_central.set_traefik_proxy()` calls `_is_pod_networking_live(pod, input_pod)` per pod:
+   - Returns False if not AVAILABLE, or if readiness probe configured and `status_container['ready']` is False
+   - Returns True otherwise
+4. If not live: Traefik routes the pod's HTTP URL to `pods-api:8000` with a `replacePathRegex: .* → /pod-splash` middleware
+5. `pod.networking_live` bool is persisted to DB when it changes (no polling, just on-change write)
+6. Once readiness passes: `status_container['ready']` becomes True → next Traefik cycle switches routing back to the real K8s service
+
+### Splash Page (`/pod-splash`)
+
+Served by `api_misc.py`. Features:
+- Generic HTML — no pod ID, image name, or config exposed (bot-safe)
+- HTTP 503 status (prevents proxy caching)
+- `Retry-After: 15`, `Cache-Control: no-store`, `X-Robots-Tag: noindex`
+- `<meta http-equiv="refresh" content="15">` so browsers auto-reload
+- Applied only to HTTP protocol pods (TCP/postgres pods just fail to connect)
+- Tapis auth middleware is **skipped** in splash mode (splash page is publicly accessible)
+
+### Status Fields Added
+
+- `pod.healthchecks` — JSON column on `pod` table (migration `a1b2c3d4e5f6_init21`)
+- `pod.networking_live` — bool column on `pod` table (same migration), default false
+- `pod.status_container['ready']` — injected by health loop, no new column
+- `pod.status_container['restart_count']` — injected by health loop, no new column
+
+### Template Support
+
+`TemplateTagPodDefinition` has `healthchecks: PodHealthchecks | None`. Pods using a template inherit its healthchecks via `combine_pod_and_template_recursively`. A pod can override by setting its own `healthchecks` (pod-level takes precedence).

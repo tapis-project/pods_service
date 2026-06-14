@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse, HTMLResponse
 from tapisservice.errors import BaseTapisError
 from tapisservice.tapisfastapi.utils import g, ok, error
 from kubernetes_utils import get_traefik_configmap
@@ -21,6 +21,63 @@ async def api_traefik_config():
     config = get_traefik_configmap()
     yaml_config = yaml.safe_load(config.to_dict()['data']['traefik.yml'])
     return yaml_config
+
+@router.get(
+    "/pod-splash",
+    tags=["Misc"],
+    summary="pod_splash",
+    operation_id="pod_splash",
+    include_in_schema=False)
+async def pod_splash():
+    """Served by Traefik for pods that are AVAILABLE but not yet ready (readiness probe still running).
+    Returns a generic, anonymized HTML page — intentionally reveals no pod name, image, or config.
+    Auto-refreshes every 15 seconds so browsers pick up the real service once ready.
+    """
+    html = """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="refresh" content="15">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Starting…</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:system-ui,sans-serif;background:#0f1117;color:#e2e8f0;
+         display:flex;align-items:center;justify-content:center;min-height:100vh;padding:1rem}
+    .card{background:#1a1d27;border:1px solid #2d3148;border-radius:12px;
+          padding:2.5rem 3rem;max-width:420px;width:100%;text-align:center}
+    .spinner{width:40px;height:40px;border:3px solid #2d3148;
+             border-top-color:#6366f1;border-radius:50%;
+             animation:spin 0.9s linear infinite;margin:0 auto 1.5rem}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    h1{font-size:1.25rem;font-weight:600;margin-bottom:.5rem;color:#f1f5f9}
+    p{font-size:.9rem;color:#94a3b8;line-height:1.5;margin-bottom:.75rem}
+    .badge{display:inline-block;background:#1e2035;border:1px solid #3730a3;
+           color:#818cf8;font-size:.75rem;padding:.2rem .6rem;border-radius:999px;margin-top:.5rem}
+    .refresh{font-size:.75rem;color:#475569;margin-top:1.25rem}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="spinner"></div>
+    <h1>Service is starting up</h1>
+    <p>Health checks are running. The service will be available shortly.</p>
+    <p>This page refreshes automatically every 15 seconds.</p>
+    <span class="badge">waiting for readiness</span>
+    <p class="refresh">If this takes more than a few minutes, the service may have failed to start.</p>
+  </div>
+</body>
+</html>"""
+    return HTMLResponse(
+        content=html,
+        status_code=503,
+        headers={
+            "Retry-After": "15",
+            "Cache-Control": "no-store, no-cache, must-revalidate",
+            "X-Robots-Tag": "noindex, nofollow",
+        },
+    )
+
 
 @router.get("/healthcheck",
     tags=["Misc"],
