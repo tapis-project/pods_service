@@ -280,6 +280,19 @@
         "type": "string",
         "description": "Abaco service password is required to run tests as it's able to generate tokens."
       },
+      "local_development": {
+        "type": "boolean",
+        "description": "Local/dev deployment flag. Must be true for local_admin_usernames to take effect — keeps that list inert (no admin backdoor) in production configs.",
+        "default": false
+      },
+      "local_admin_usernames": {
+        "type": "array",
+        "description": "Usernames granted admin access without requiring the pods_admin SK role. Only honored when local_development is true. Use only in local dev/test environments.",
+        "default": [],
+        "items": {
+          "type": "string"
+        }
+      },
       "image_allow_list": {
         "type": "array",
         "description": "Docker images that users are allowed to use.",

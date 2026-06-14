@@ -700,6 +700,161 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /pods/templates/{template_id}/gallery:
+    get:
+      tags:
+      - Templates
+      summary: get_template_gallery
+      operationId: get_template_gallery
+      parameters:
+      - name: template_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Template Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /pods/templates/{template_id}/gallery/photos/{n}:
+    get:
+      tags:
+      - Templates
+      summary: get_template_gallery_photo
+      operationId: get_template_gallery_photo
+      parameters:
+      - name: template_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Template Id
+      - name: n
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: N
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    put:
+      tags:
+      - Templates
+      summary: upload_template_gallery_photo
+      operationId: upload_template_gallery_photo
+      parameters:
+      - name: template_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Template Id
+      - name: n
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: N
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Body_upload_template_gallery_photo'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+      - Templates
+      summary: delete_template_gallery_photo
+      operationId: delete_template_gallery_photo
+      parameters:
+      - name: template_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Template Id
+      - name: n
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: N
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /pods/templates/{template_id}/gallery/note:
+    put:
+      tags:
+      - Templates
+      summary: update_template_gallery_note
+      operationId: update_template_gallery_note
+      parameters:
+      - name: template_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Template Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              title: Request Body
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /pods/images:
     get:
       tags:
@@ -1037,7 +1192,8 @@ paths:
       tags:
       - Snapshots
       summary: list_snapshot_files
-      description: List files in snapshot.
+      description: List files in snapshot. Optional ?path= to list a subdirectory
+        (relative to snapshot root).
       operationId: list_snapshot_files
       parameters:
       - name: snapshot_id
@@ -1045,6 +1201,13 @@ paths:
         required: true
         schema:
           title: Snapshot Id
+      - name: path
+        in: query
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Path
       responses:
         '200':
           description: Successful Response
@@ -1493,7 +1656,8 @@ paths:
       tags:
       - Volumes
       summary: list_volume_files
-      description: List files in volume.
+      description: List files in volume. Optional ?path= to list a subdirectory (relative
+        to volume root).
       operationId: list_volume_files
       parameters:
       - name: volume_id
@@ -1501,6 +1665,13 @@ paths:
         required: true
         schema:
           title: Volume Id
+      - name: path
+        in: query
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Path
       responses:
         '200':
           description: Successful Response
@@ -3313,6 +3484,17 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
 components:
   schemas:
+    Body_upload_template_gallery_photo:
+      properties:
+        file:
+          type: string
+          format: binary
+          title: File
+          description: Photo to upload (PNG, JPEG, GIF, WEBP, max 5 MB).
+      type: object
+      required:
+      - file
+      title: Body_upload_template_gallery_photo
     Body_upload_to_jupyter:
       properties:
         file:
@@ -3563,6 +3745,70 @@ components:
           title: Detail
       type: object
       title: HTTPValidationError
+    HealthcheckProbe:
+      properties:
+        http_get_path:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Http Get Path
+          description: HTTP GET path for probe. e.g. /health
+        http_get_port:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Http Get Port
+          description: HTTP GET port for probe. e.g. 5000
+        http_get_scheme:
+          type: string
+          title: Http Get Scheme
+          description: HTTP GET scheme. HTTP or HTTPS.
+          default: HTTP
+        exec_command:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Exec Command
+          description: Exec command for probe. e.g. ['curl', '-f', 'http://localhost/health']
+        tcp_socket_port:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Tcp Socket Port
+          description: TCP socket port for probe. e.g. 5432
+        initial_delay_seconds:
+          type: integer
+          title: Initial Delay Seconds
+          description: 'Seconds after container start before probe begins. K8s default:
+            0.'
+          default: 10
+        period_seconds:
+          type: integer
+          title: Period Seconds
+          description: 'How often (seconds) to run the probe. K8s default: 10.'
+          default: 10
+        timeout_seconds:
+          type: integer
+          title: Timeout Seconds
+          description: 'Seconds probe must complete within. K8s default: 1.'
+          default: 5
+        failure_threshold:
+          type: integer
+          title: Failure Threshold
+          description: 'Consecutive failures before pod is unhealthy. K8s default:
+            3.'
+          default: 3
+        success_threshold:
+          type: integer
+          title: Success Threshold
+          description: 'Consecutive successes to mark pod healthy. K8s default: 1.'
+          default: 1
+      additionalProperties: false
+      type: object
+      title: HealthcheckProbe
+      description: Kubernetes health probe configuration for a single probe type.
     ImageDeleteResponse:
       properties:
         message:
@@ -3641,7 +3887,7 @@ components:
           - type: 'null'
           title: Creation Ts
           description: Time (UTC) that this image was created.
-          default: '2026-05-21T18:16:57.335916'
+          default: '2026-06-07T19:13:00.617453'
         added_by:
           type: string
           title: Added By
@@ -3700,163 +3946,6 @@ components:
       additionalProperties: false
       type: object
       title: LogsModel
-    Networking:
-      properties:
-        protocol:
-          type: string
-          title: Protocol
-          description: Which network protocol to use. `http`, `tcp`, `postgres`, or
-            `local_only`. `local_only` is only accessible from within the cluster.
-          default: http
-        port:
-          type: integer
-          title: Port
-          description: Pod port to expose via networking.url in this networking object.
-          default: 5000
-        url:
-          type: string
-          title: Url
-          description: URL used to access the port of the pod defined in this networking
-            object. Generated by service.
-          default: ''
-        ip_allow_list:
-          items:
-            type: string
-          type: array
-          title: Ip Allow List
-          description: List of IPs that are allowed to access this specific pod port.
-            If empty, all IPs are allowed. ex. ['127.0.0.1/32', '192.168.1.7']
-          default: []
-        tapis_auth:
-          type: boolean
-          title: Tapis Auth
-          description: If true, will require Tapis auth to access the pod.
-          default: false
-        tapis_auth_response_headers:
-          additionalProperties:
-            type: string
-          type: object
-          title: Tapis Auth Response Headers
-          description: Specification of headers to forward to the pod when using Tapis
-            auth.
-          default: {}
-        tapis_auth_allowed_users:
-          items:
-            type: string
-          type: array
-          title: Tapis Auth Allowed Users
-          description: 'List of users allowed to access the pod when using Tapis auth.
-            Supports literal usernames, ''*'' (all users), and permission-based groups:
-            ''AUTHORIZED_READS'' (READ+), ''AUTHORIZED_USERS'' (USER+), ''AUTHORIZED_ADMINS''
-            (ADMIN+, includes APPROVEDADMIN). Groups resolve against the pod''s permissions
-            list.'
-          default:
-          - AUTHORIZED_USERS
-        tapis_auth_return_path:
-          type: string
-          title: Tapis Auth Return Path
-          description: Path to redirect to when accessing the pod via Tapis auth.
-          default: /
-        tapis_auth_excluded_paths:
-          items:
-            type: string
-          type: array
-          title: Tapis Auth Excluded Paths
-          description: List of PathPrefix patterns to exclude from Tapis auth (no
-            forwardAuth). Useful for static assets that don't need auth. ex. ['/assets',
-            '/static', '/_app']
-          default: []
-        tapis_auth_excluded_path_regex:
-          items:
-            type: string
-          type: array
-          title: Tapis Auth Excluded Path Regex
-          description: List of PathRegexp patterns to exclude from Tapis auth. ex.
-            ['\\.(js|css|ico|png|jpg|jpeg|webp|gif|svg|woff2?|ttf|map)$']
-          default: []
-        cors_allow_origins:
-          items:
-            type: string
-          type: array
-          title: Cors Allow Origins
-          description: List of CORS allowed origins. ex. ['https://tacc.develop.tapis.io',
-            'https://tacc.tapis.io']
-          default: []
-        cors_allow_methods:
-          items:
-            type: string
-          type: array
-          title: Cors Allow Methods
-          description: List of CORS allowed methods. ex. ['GET', 'POST', 'PUT', 'DELETE']
-          default: []
-        cors_allow_headers:
-          items:
-            type: string
-          type: array
-          title: Cors Allow Headers
-          description: List of CORS allowed headers. ex. ['Content-Type', 'X-Tapis-Token']
-          default: []
-        cors_allow_credentials:
-          type: boolean
-          title: Cors Allow Credentials
-          description: Boolean to allow credentials to be sent with CORS requests.
-          default: false
-        cors_max_age:
-          type: integer
-          title: Cors Max Age
-          description: Max age of CORS preflight requests in seconds.
-          default: 100
-        tapis_ui_uri:
-          type: string
-          title: Tapis Ui Uri
-          description: Path to redirect to when accessing the pod via Tapis UI.
-          default: ''
-        tapis_ui_uri_redirect:
-          type: boolean
-          title: Tapis Ui Uri Redirect
-          description: If true, will redirect to the tapis_ui_uri when accessing the
-            pod via Tapis UI. Otherwise, just read-only uri.
-          default: false
-        tapis_ui_uri_description:
-          type: string
-          title: Tapis Ui Uri Description
-          description: Describing where the tapis_ui_uri will redirect to.
-          default: ''
-        proxy_compression:
-          type: boolean
-          title: Proxy Compression
-          description: Enable Traefik compress middleware for this HTTP endpoint.
-            Enabled by default for all HTTP protocol endpoints.
-          default: true
-        proxy_compression_encodings:
-          items:
-            type: string
-          type: array
-          title: Proxy Compression Encodings
-          description: 'Ordered list of compression encodings by priority. Valid values:
-            ''zstd'', ''br'', ''gzip''.'
-          default:
-          - zstd
-          - br
-          - gzip
-        proxy_compression_excluded_content_types:
-          items:
-            type: string
-          type: array
-          title: Proxy Compression Excluded Content Types
-          description: Content types to exclude from compression. Already-compressed
-            formats (images, video, archives) are excluded automatically. Set explicit
-            types here to add additional exclusions.
-          default: []
-        proxy_compression_min_response_body_bytes:
-          type: integer
-          title: Proxy Compression Min Response Body Bytes
-          description: Minimum response body size in bytes before compression is applied.
-            Responses smaller than this are not compressed.
-          default: 1024
-      additionalProperties: false
-      type: object
-      title: Networking
     NewImage:
       properties:
         image:
@@ -3938,6 +4027,14 @@ components:
             secret), ${secret:user:name} (explicit owner). Reference in environment_variables
             via ${pods:secrets:KEY}. Resolved at pod start.'
           default: {}
+        healthchecks:
+          anyOf:
+          - $ref: '#/components/schemas/PodHealthchecks'
+          - type: 'null'
+          description: 'Kubernetes health probe configuration. Supports liveness,
+            readiness, and startup probes with HTTP GET, exec command, or TCP socket
+            actions. Example: `{"readiness": {"http_get_path": "/health", "http_get_port":
+            5000}, "networking_requires_ready": true}`'
         status_requested:
           type: string
           title: Status Requested
@@ -3970,7 +4067,7 @@ components:
             instance is started. -1 for unlimited. None uses default.
         networking:
           additionalProperties:
-            $ref: '#/components/schemas/Networking'
+            $ref: '#/components/schemas/models_pods__Networking'
           type: object
           title: Networking
           description: 'Networking information. `{"url_suffix": {"protocol": "http"  "tcp",
@@ -4132,7 +4229,7 @@ components:
     NewTemplateTag:
       properties:
         pod_definition:
-          $ref: '#/components/schemas/TemplateTagPodDefinition'
+          $ref: '#/components/schemas/TemplateTagPodDefinition-Input'
           description: Pod definition for this template tag.
         commit_message:
           type: string
@@ -4263,6 +4360,35 @@ components:
       - status
       - version
       title: PodDeleteResponse
+    PodHealthchecks:
+      properties:
+        liveness:
+          anyOf:
+          - $ref: '#/components/schemas/HealthcheckProbe'
+          - type: 'null'
+          description: "Liveness probe \u2014 restarts container when it fails."
+        readiness:
+          anyOf:
+          - $ref: '#/components/schemas/HealthcheckProbe'
+          - type: 'null'
+          description: "Readiness probe \u2014 gates traffic routing when it fails."
+        startup:
+          anyOf:
+          - $ref: '#/components/schemas/HealthcheckProbe'
+          - type: 'null'
+          description: "Startup probe \u2014 disables liveness/readiness until it\
+            \ passes (good for slow-starting apps)."
+        networking_requires_ready:
+          type: boolean
+          title: Networking Requires Ready
+          description: When True, pod URL only routes to the real service after the
+            readiness probe passes. While the pod is AVAILABLE but not yet ready,
+            requests receive a generic 'service starting' splash page.
+          default: true
+      additionalProperties: false
+      type: object
+      title: PodHealthchecks
+      description: Kubernetes health probes configuration for a pod.
     PodLogRunFullResponse:
       properties:
         id:
@@ -4554,6 +4680,14 @@ components:
             secret), ${secret:user:name} (explicit owner). Reference in environment_variables
             via ${pods:secrets:KEY}. Resolved at pod start.'
           default: {}
+        healthchecks:
+          anyOf:
+          - $ref: '#/components/schemas/PodHealthchecks'
+          - type: 'null'
+          description: 'Kubernetes health probe configuration. Supports liveness,
+            readiness, and startup probes with HTTP GET, exec command, or TCP socket
+            actions. Example: `{"readiness": {"http_get_path": "/health", "http_get_port":
+            5000}, "networking_requires_ready": true}`'
         status_requested:
           type: string
           title: Status Requested
@@ -4586,7 +4720,7 @@ components:
             instance is started. -1 for unlimited. None uses default.
         networking:
           additionalProperties:
-            $ref: '#/components/schemas/Networking'
+            $ref: '#/components/schemas/models_pods__Networking'
           type: object
           title: Networking
           description: 'Networking information. `{"url_suffix": {"protocol": "http"  "tcp",
@@ -4631,8 +4765,18 @@ components:
           additionalProperties: true
           type: object
           title: Status Container
-          description: Status of container if exists. Gives phase.
+          description: Status of container if exists. Gives phase. When healthchecks
+            are configured, also includes 'ready' (bool) and 'restart_count' (int)
+            fields.
           default: {}
+        networking_live:
+          type: boolean
+          title: Networking Live
+          description: True when Traefik is actively routing traffic to this pod's
+            real service. False when pod is starting, stopped, or held behind the
+            readiness gate (networking_requires_ready=True and readiness probe not
+            yet passing).
+          default: false
         creation_ts:
           anyOf:
           - type: string
@@ -4646,7 +4790,14 @@ components:
             format: date-time
           - type: 'null'
           title: Update Ts
-          description: Time (UTC) that this pod was updated.
+          description: Time (UTC) that this pod was last updated by a user action.
+        last_status_check_ts:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Last Status Check Ts
+          description: Time (UTC) of last automated health/status check.
         start_instance_ts:
           anyOf:
           - type: string
@@ -5159,7 +5310,7 @@ components:
           title: Template Id
           description: template_id this tag is linked to
         pod_definition:
-          $ref: '#/components/schemas/TemplateTagPodDefinition'
+          $ref: '#/components/schemas/TemplateTagPodDefinition-Output'
           description: Pod definition for this template.
           default: {}
         commit_message:
@@ -5323,7 +5474,7 @@ components:
       type: object
       title: TemplateTagDependents
       description: Dependency information for a template tag.
-    TemplateTagPodDefinition:
+    TemplateTagPodDefinition-Input:
       properties:
         image:
           anyOf:
@@ -5405,7 +5556,7 @@ components:
             instance is started. -1 for unlimited. None uses default.
         networking:
           additionalProperties:
-            $ref: '#/components/schemas/Networking'
+            $ref: '#/components/schemas/models_templates_tags__Networking'
           type: object
           title: Networking
           description: 'Networking information. `{"url_suffix": {"protocol": "http"  "tcp",
@@ -5421,6 +5572,119 @@ components:
           title: Compute Queue
           description: Queue to run pod in. `default` is the default queue.
           default: default
+        healthchecks:
+          anyOf:
+          - $ref: '#/components/schemas/PodHealthchecks'
+          - type: 'null'
+          description: Kubernetes health probe configuration inherited by pods using
+            this template. Supports liveness, readiness, and startup probes.
+      additionalProperties: false
+      type: object
+      title: TemplateTagPodDefinition
+    TemplateTagPodDefinition-Output:
+      properties:
+        image:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Image
+          description: Which docker image to use, must be on allowlist, check /pods/images
+            for list.
+        template:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Template
+          description: Name of template to base this template off of.
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Description
+          description: Description of this pod.
+        command:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Command
+          description: Command to run in pod. ex. `["sleep", "5000"]` or `["/bin/bash",
+            "-c", "(exec myscript.sh)"]`
+        arguments:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Arguments
+          description: Arguments for the Pod's command.
+        environment_variables:
+          additionalProperties: true
+          type: object
+          title: Environment Variables
+          description: Environment variables to inject into pod. Use `${pods:secrets:KEY}`
+            to reference secret_map entries.
+          default: {}
+        secret_map:
+          additionalProperties:
+            type: string
+          type: object
+          title: Secret Map
+          description: Map of keys to secret references or placeholders. Use ${secret:name}
+            for user secrets, ${pods:default:val:?desc} for placeholders with defaults,
+            ${:?desc} for required placeholders. Secrets resolved at pod start.
+          default: {}
+        volume_mounts:
+          additionalProperties:
+            anyOf:
+            - $ref: '#/components/schemas/VolumeMount'
+            - type: 'null'
+          type: object
+          title: Volume Mounts
+          description: 'Volume mounts keyed by mount_path. For templates, tapisvolume/tapissnapshot
+            MUST use placeholder source_id (e.g., "${:?Description}"). Ex: {"/data":
+            {"type": "tapisvolume", "source_id": "${:?User data volume}"}, "/etc/config.ini":
+            {"type": "ephemeral", "config_content": "key=value"}}'
+          default: {}
+        time_to_stop_default:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Time To Stop Default
+          description: Default time (sec) for pod to run from instance start. -1 for
+            unlimited. 12 hour default.
+        time_to_stop_instance:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Time To Stop Instance
+          description: Time (sec) for pod to run from instance start. Reset each time
+            instance is started. -1 for unlimited. None uses default.
+        networking:
+          additionalProperties:
+            $ref: '#/components/schemas/models_templates_tags__Networking'
+          type: object
+          title: Networking
+          description: 'Networking information. `{"url_suffix": {"protocol": "http"  "tcp",
+            "port": int}}`'
+          default: {}
+        resources:
+          $ref: '#/components/schemas/models_templates_tags__Resources'
+          description: 'Pod resource management `{"cpu_limit": 3000, "mem_limit":
+            3000, "cpu_request": 500, "mem_limit": 500, "gpus": 0}`'
+          default: {}
+        compute_queue:
+          type: string
+          title: Compute Queue
+          description: Queue to run pod in. `default` is the default queue.
+          default: default
+        healthchecks:
+          anyOf:
+          - $ref: '#/components/schemas/PodHealthchecks'
+          - type: 'null'
+          description: Kubernetes health probe configuration inherited by pods using
+            this template. Supports liveness, readiness, and startup probes.
       additionalProperties: false
       type: object
       title: TemplateTagPodDefinition
@@ -5457,7 +5721,7 @@ components:
           title: Template Id
           description: template_id this tag is linked to
         pod_definition:
-          $ref: '#/components/schemas/TemplateTagPodDefinition'
+          $ref: '#/components/schemas/TemplateTagPodDefinition-Output'
           description: Pod definition for this template.
           default: {}
         commit_message:
@@ -5936,7 +6200,7 @@ components:
         networking:
           anyOf:
           - additionalProperties:
-              $ref: '#/components/schemas/Networking'
+              $ref: '#/components/schemas/models_pods__Networking'
             type: object
           - type: 'null'
           title: Networking
@@ -6314,6 +6578,177 @@ components:
       - status
       - version
       title: VolumesResponse
+    models_pods__Networking:
+      properties:
+        protocol:
+          type: string
+          title: Protocol
+          description: Which network protocol to use. `http`, `tcp`, `postgres`, or
+            `local_only`. `local_only` is only accessible from within the cluster.
+          default: http
+        port:
+          type: integer
+          title: Port
+          description: Pod port to expose via networking.url in this networking object.
+          default: 5000
+        url:
+          type: string
+          title: Url
+          description: URL used to access the port of the pod defined in this networking
+            object. Generated by service.
+          default: ''
+        ip_allow_list:
+          items:
+            type: string
+          type: array
+          title: Ip Allow List
+          description: List of IPs that are allowed to access this specific pod port.
+            If empty, all IPs are allowed. ex. ['127.0.0.1/32', '192.168.1.7']
+          default: []
+        tapis_auth:
+          type: boolean
+          title: Tapis Auth
+          description: If true, will require Tapis auth to access the pod.
+          default: false
+        tapis_auth_response_headers:
+          additionalProperties:
+            type: string
+          type: object
+          title: Tapis Auth Response Headers
+          description: Specification of headers to forward to the pod when using Tapis
+            auth.
+          default: {}
+        tapis_auth_allowed_users:
+          items:
+            type: string
+          type: array
+          title: Tapis Auth Allowed Users
+          description: 'List of users allowed to access the pod when using Tapis auth.
+            Supports literal usernames, ''*'' (all users), and permission-based groups:
+            ''AUTHORIZED_READS'' (READ+), ''AUTHORIZED_USERS'' (USER+), ''AUTHORIZED_ADMINS''
+            (ADMIN+, includes APPROVEDADMIN). Groups resolve against the pod''s permissions
+            list.'
+          default:
+          - AUTHORIZED_USERS
+        tapis_auth_return_path:
+          type: string
+          title: Tapis Auth Return Path
+          description: Path to redirect to when accessing the pod via Tapis auth.
+          default: /
+        tapis_auth_excluded_paths:
+          items:
+            type: string
+          type: array
+          title: Tapis Auth Excluded Paths
+          description: List of PathPrefix patterns to exclude from Tapis auth (no
+            forwardAuth). Useful for static assets that don't need auth. ex. ['/assets',
+            '/static', '/_app']
+          default: []
+        tapis_auth_excluded_path_regex:
+          items:
+            type: string
+          type: array
+          title: Tapis Auth Excluded Path Regex
+          description: List of PathRegexp patterns to exclude from Tapis auth. ex.
+            ['\\.(js|css|ico|png|jpg|jpeg|webp|gif|svg|woff2?|ttf|map)$']
+          default: []
+        cors_allow_origins:
+          items:
+            type: string
+          type: array
+          title: Cors Allow Origins
+          description: List of CORS allowed origins. ex. ['https://tacc.develop.tapis.io',
+            'https://tacc.tapis.io']
+          default: []
+        cors_allow_methods:
+          items:
+            type: string
+          type: array
+          title: Cors Allow Methods
+          description: List of CORS allowed methods. ex. ['GET', 'POST', 'PUT', 'DELETE']
+          default: []
+        cors_allow_headers:
+          items:
+            type: string
+          type: array
+          title: Cors Allow Headers
+          description: List of CORS allowed headers. ex. ['Content-Type', 'X-Tapis-Token']
+          default: []
+        cors_allow_credentials:
+          type: boolean
+          title: Cors Allow Credentials
+          description: Boolean to allow credentials to be sent with CORS requests.
+          default: false
+        cors_max_age:
+          type: integer
+          title: Cors Max Age
+          description: Max age of CORS preflight requests in seconds.
+          default: 100
+        tapis_ui_uri:
+          type: string
+          title: Tapis Ui Uri
+          description: Path to redirect to when accessing the pod via Tapis UI.
+          default: ''
+        tapis_ui_uri_redirect:
+          type: boolean
+          title: Tapis Ui Uri Redirect
+          description: If true, will redirect to the tapis_ui_uri when accessing the
+            pod via Tapis UI. Otherwise, just read-only uri.
+          default: false
+        tapis_ui_uri_description:
+          type: string
+          title: Tapis Ui Uri Description
+          description: Describing where the tapis_ui_uri will redirect to.
+          default: ''
+        proxy_compression:
+          type: boolean
+          title: Proxy Compression
+          description: Enable Traefik compress middleware for this HTTP endpoint.
+            Enabled by default for all HTTP protocol endpoints.
+          default: true
+        proxy_compression_encodings:
+          items:
+            type: string
+          type: array
+          title: Proxy Compression Encodings
+          description: 'Ordered list of compression encodings by priority. Valid values:
+            ''zstd'', ''br'', ''gzip''.'
+          default:
+          - zstd
+          - br
+          - gzip
+        proxy_compression_excluded_content_types:
+          items:
+            type: string
+          type: array
+          title: Proxy Compression Excluded Content Types
+          description: Content types to exclude from compression. Already-compressed
+            formats (images, video, archives) are excluded automatically. Set explicit
+            types here to add additional exclusions.
+          default: []
+        proxy_compression_min_response_body_bytes:
+          type: integer
+          title: Proxy Compression Min Response Body Bytes
+          description: Minimum response body size in bytes before compression is applied.
+            Responses smaller than this are not compressed.
+          default: 1024
+        custom_domain:
+          type: string
+          title: Custom Domain
+          description: Custom domain to route to this networking entry in addition
+            to the default pods URL. Must be a valid hostname. ex. 'myapp.example.com'.
+            Add a CNAME record pointing your domain to pods.tacc.tapis.io, then the
+            service will verify and activate routing automatically.
+          default: ''
+        custom_domain_verified:
+          type: boolean
+          title: Custom Domain Verified
+          description: Set to true by the service once the CNAME for custom_domain
+            is confirmed to point at the pods infrastructure. Do not set manually.
+          default: false
+      additionalProperties: false
+      type: object
+      title: Networking
     models_pods__Resources:
       properties:
         cpu_request:
@@ -6357,6 +6792,163 @@ components:
       additionalProperties: false
       type: object
       title: Resources
+    models_templates_tags__Networking:
+      properties:
+        protocol:
+          type: string
+          title: Protocol
+          description: Which network protocol to use. `http`, `tcp`, `postgres`, or
+            `local_only`. `local_only` is only accessible from within the cluster.
+          default: http
+        port:
+          type: integer
+          title: Port
+          description: Pod port to expose via networking.url in this networking object.
+          default: 5000
+        url:
+          type: string
+          title: Url
+          description: URL used to access the port of the pod defined in this networking
+            object. Generated by service.
+          default: ''
+        ip_allow_list:
+          items:
+            type: string
+          type: array
+          title: Ip Allow List
+          description: List of IPs that are allowed to access this specific pod port.
+            If empty, all IPs are allowed. ex. ['127.0.0.1/32', '192.168.1.7']
+          default: []
+        tapis_auth:
+          type: boolean
+          title: Tapis Auth
+          description: If true, will require Tapis auth to access the pod.
+          default: false
+        tapis_auth_response_headers:
+          additionalProperties:
+            type: string
+          type: object
+          title: Tapis Auth Response Headers
+          description: Specification of headers to forward to the pod when using Tapis
+            auth.
+          default: {}
+        tapis_auth_allowed_users:
+          items:
+            type: string
+          type: array
+          title: Tapis Auth Allowed Users
+          description: 'List of users allowed to access the pod when using Tapis auth.
+            Supports literal usernames, ''*'' (all users), and permission-based groups:
+            ''AUTHORIZED_READS'' (READ+), ''AUTHORIZED_USERS'' (USER+), ''AUTHORIZED_ADMINS''
+            (ADMIN+, includes APPROVEDADMIN). Groups resolve against the pod''s permissions
+            list.'
+          default:
+          - AUTHORIZED_USERS
+        tapis_auth_return_path:
+          type: string
+          title: Tapis Auth Return Path
+          description: Path to redirect to when accessing the pod via Tapis auth.
+          default: /
+        tapis_auth_excluded_paths:
+          items:
+            type: string
+          type: array
+          title: Tapis Auth Excluded Paths
+          description: List of PathPrefix patterns to exclude from Tapis auth (no
+            forwardAuth). Useful for static assets that don't need auth. ex. ['/assets',
+            '/static', '/_app']
+          default: []
+        tapis_auth_excluded_path_regex:
+          items:
+            type: string
+          type: array
+          title: Tapis Auth Excluded Path Regex
+          description: List of PathRegexp patterns to exclude from Tapis auth. ex.
+            ['\\.(js|css|ico|png|jpg|jpeg|webp|gif|svg|woff2?|ttf|map)$']
+          default: []
+        cors_allow_origins:
+          items:
+            type: string
+          type: array
+          title: Cors Allow Origins
+          description: List of CORS allowed origins. ex. ['https://tacc.develop.tapis.io',
+            'https://tacc.tapis.io']
+          default: []
+        cors_allow_methods:
+          items:
+            type: string
+          type: array
+          title: Cors Allow Methods
+          description: List of CORS allowed methods. ex. ['GET', 'POST', 'PUT', 'DELETE']
+          default: []
+        cors_allow_headers:
+          items:
+            type: string
+          type: array
+          title: Cors Allow Headers
+          description: List of CORS allowed headers. ex. ['Content-Type', 'X-Tapis-Token']
+          default: []
+        cors_allow_credentials:
+          type: boolean
+          title: Cors Allow Credentials
+          description: Boolean to allow credentials to be sent with CORS requests.
+          default: false
+        cors_max_age:
+          type: integer
+          title: Cors Max Age
+          description: Max age of CORS preflight requests in seconds.
+          default: 100
+        tapis_ui_uri:
+          type: string
+          title: Tapis Ui Uri
+          description: Path to redirect to when accessing the pod via Tapis UI.
+          default: ''
+        tapis_ui_uri_redirect:
+          type: boolean
+          title: Tapis Ui Uri Redirect
+          description: If true, will redirect to the tapis_ui_uri when accessing the
+            pod via Tapis UI. Otherwise, just read-only uri.
+          default: false
+        tapis_ui_uri_description:
+          type: string
+          title: Tapis Ui Uri Description
+          description: Describing where the tapis_ui_uri will redirect to.
+          default: ''
+        proxy_compression:
+          type: boolean
+          title: Proxy Compression
+          description: Enable Traefik compress middleware for this HTTP endpoint.
+            Enabled by default for all HTTP protocol endpoints.
+          default: true
+        proxy_compression_encodings:
+          items:
+            type: string
+          type: array
+          title: Proxy Compression Encodings
+          description: 'Ordered list of compression encodings by priority. Valid values:
+            ''zstd'', ''br'', ''gzip''.'
+          default:
+          - zstd
+          - br
+          - gzip
+        proxy_compression_excluded_content_types:
+          items:
+            type: string
+          type: array
+          title: Proxy Compression Excluded Content Types
+          description: Content types to exclude from compression. Already-compressed
+            formats (images, video, archives) are excluded automatically. Set explicit
+            types here to add additional exclusions.
+          default: []
+        proxy_compression_min_response_body_bytes:
+          type: integer
+          title: Proxy Compression Min Response Body Bytes
+          description: Minimum response body size in bytes before compression is applied.
+            Responses smaller than this are not compressed.
+          default: 1024
+      additionalProperties: false
+      type: object
+      title: Networking
     models_templates_tags__Resources:
       properties:
         cpu_request:

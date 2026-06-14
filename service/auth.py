@@ -315,7 +315,12 @@ def check_route_permissions(request):
     # Required for all API routes
     get_user_site_id()
     get_user_sk_roles()
-    g.admin = True if codes.ADMIN_ROLE in g.roles or g.username == "cgarcia" else False
+    # local_admin_usernames grants admin WITHOUT the SK pods_admin role — a convenience for
+    # local/test deployments (so test identities can exercise admin-gated paths). Gated behind
+    # local_development (default False) so a populated list can never act as a backdoor in a
+    # production config: BOTH the flag must be on AND the username listed.
+    local_admins = getattr(conf, 'local_admin_usernames', []) if getattr(conf, 'local_development', False) else []
+    g.admin = True if codes.ADMIN_ROLE in g.roles or g.username == "cgarcia" or g.username in local_admins else False
     # g.admin = user HAS the admin role — grants implicit access to all routes.
     # g.admin_active = user also sent X-Pods-Admin: true — activates UI-level admin powers (see all pods, etc.)
     g.admin_active = False

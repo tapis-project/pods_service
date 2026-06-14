@@ -670,10 +670,10 @@ class Pod(TapisPodBaseFull, table=True, validate=True):
                 if level != 'READ':
                     raise ValueError(f"tenant.* permissions only support READ level (cross-tenant auth gate). Got '{level}' in '{perm}'.")
             else:
-                # Standard username: alphanumeric with underscores/hyphens/dots/@(for emails)
-                res = re.fullmatch(r'[a-zA-Z][a-zA-Z0-9_.@-]*', user)
+                # Standard username: alphanumeric with underscores/hyphens/dots/@(for emails); leading _ allowed for service accounts
+                res = re.fullmatch(r'[a-zA-Z_][a-zA-Z0-9_.@-]*', user)
                 if not res:
-                    raise ValueError(f"Permission username must start with a letter and may contain alphanumeric characters, underscores, hyphens, dots, or @ (for email addresses). Got '{user}'.")
+                    raise ValueError(f"Permission username must start with a letter or underscore and may contain alphanumeric characters, underscores, hyphens, dots, or @ (for email addresses). Got '{user}'.")
         return v
 
     @validator('environment_variables')
@@ -947,7 +947,7 @@ class Pod(TapisPodBaseFull, table=True, validate=True):
     def check_description(cls, v):
         # ensure description is all ascii
         if not v.isascii():
-            raise ValueError(f"description field may only contain ASCII characters.")            
+            raise ValueError(f"description field may only contain ASCII characters.")
         # make sure description < 404 characters
         if len(v) > 404:
             raise ValueError(f"description field must be less than 404 characters. Inputted length: {len(v)}")
@@ -1133,6 +1133,7 @@ class UpdatePod(TapisApiModel):
     resources: Optional[Resources] = Field({}, description = 'Pod resource management {"cpu_limit": 3000, "mem_limit": 3000, "cpu_request": 500, "mem_limit": 500, "gpu": 0}', sa_column=Column(JSON))
     compute_queue: str = Field("default", description = "Queue to run pod in. `default` is the default queue.")
     template_overrides: Optional[Dict[str, Any]] = Field(None, description = 'Partial overrides for template values. Override volume_mounts or secret_map values without rewriting full template field. Ex: {"volume_mounts": {"/data": {"source_id": "my-vol"}}, "secret_map": {"DB_PASS": "${secret:mypass}"}}', sa_column=Column(JSON))
+    healthchecks: Optional[PodHealthchecks] = Field(None, description = 'Kubernetes health probe configuration. Supports liveness, readiness, and startup probes with HTTP GET, exec command, or TCP socket actions. Set to null to clear.', sa_column=Column(JSON))
 
     
 class ExecutePodCommands(BaseModel):

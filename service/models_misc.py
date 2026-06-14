@@ -7,7 +7,7 @@ from secrets import choice
 from datetime import datetime
 from typing import List, Dict, Literal, Any, Set
 from wsgiref import validate
-from pydantic import BaseModel, Field, validator, conint
+from pydantic import BaseModel, Field, validator, model_validator, conint
 from codes import PERMISSION_LEVELS
 
 from stores import pg_store
@@ -28,7 +28,7 @@ class SetPermission(TapisApiModel):
     Object with fields that users are allowed to specify for the Volume class.
     """
     # Required
-    user: str = Field(..., description = "User to modify permissions for.")
+    user: str = Field(..., description = "User to modify permissions for. Supports 'username' or 'tenant.<tenant_id>' format.")
     level: str = Field(..., description = "Permission level to give the user.")
 
     @validator('user')
@@ -51,10 +51,10 @@ class SetPermission(TapisApiModel):
             if len(tenant_id) > 64:
                 raise ValueError(f"'tenant.' permission tenant ID must be less than 64 characters. Got length {len(tenant_id)}.")
         else:
-            # Standard username: alphanumeric with underscores/hyphens/dots/@ (for emails)
-            res = re.fullmatch(r'[a-zA-Z][a-zA-Z0-9_.@-]*', v)
+            # Standard username: alphanumeric with underscores/hyphens/dots/@ (for emails); leading _ allowed for service accounts
+            res = re.fullmatch(r'[a-zA-Z_][a-zA-Z0-9_.@-]*', v)
             if not res:
-                raise ValueError(f"User must start with a letter and may contain alphanumeric characters, underscores, hyphens, dots, or @ (for email addresses), or use 'tenant.<tenant_id>' format. Got '{v}'.")
+                raise ValueError(f"User must start with a letter or underscore and may contain alphanumeric characters, underscores, hyphens, dots, or @ (for email addresses), or use 'tenant.<tenant_id>' format. Got '{v}'.")
         return v
 
     @validator('level')
@@ -62,6 +62,16 @@ class SetPermission(TapisApiModel):
         if v not in PERMISSION_LEVELS:
             raise ValueError(f"level must be in {PERMISSION_LEVELS}")
         return v
+
+    @model_validator(mode="after")
+    def check_tenant_level(cls, values):
+        user = getattr(values, 'user', '')
+        level = getattr(values, 'level', '')
+        if user and user.startswith('tenant.') and level != 'READ':
+            raise ValueError(f"tenant.* permissions only support READ level (cross-tenant auth gate). Got '{level}'.")
+        if user == '**' and level != 'READ':
+            raise ValueError(f"Site-wide '**' permissions only support READ level. Got '{level}'.")
+        return values
 
 class DeletePermission(TapisApiModel):
     """

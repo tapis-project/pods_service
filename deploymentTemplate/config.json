@@ -37,6 +37,8 @@
     "nfs_pvc_name": "pods-nfs-vol",
     "nfs_base_path": "/podsnfs",
     "pvc_storage_class_name": "standard",
+#DEV    "local_development": true,
+#DEV    "local_admin_usernames": ["_pods_testuser_admin"],
     "spawner_host_id": 0,
     "spawner_host_queues": [
         "tacc"
