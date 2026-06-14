@@ -117,6 +117,7 @@ The edge release. Pods learned to leave the cluster.
 - Volume/snapshot listing accepts `?path=` to list a subdirectory instead of the whole root.
 - Bring your own domain: pods can be served at a custom domain with DNS verification and an extended Traefik route.
 - Exec audit log records the executable, the result, and the duration of every command run in a pod.
+- Pod updates write a leaf-diff action log — the audit trail shows which individual fields changed, not just that an update happened.
 
 ### Bug fixes:
 - Timestamps are stamped by write-kind, so `updated` no longer moves on reads and internal writes.
