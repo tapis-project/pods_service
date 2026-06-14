@@ -104,6 +104,28 @@ class HttpUrlRedirectMiddleware:
 
 import codes
 
+def _pod_stack_grants(user, level, pod, roles=None, tenant=None):
+    """Stack permission inheritance: if a pod belongs to a stack, the parent stack's
+    permission list also grants access (effective pod perm = max(pod, stack)).
+
+    Returns True iff the pod's stack grants `level` to `user`. Falsey/missing stack_id or a
+    deleted stack → False (no inheritance, falls back to the pod's own result).
+    """
+    stack_id = getattr(pod, "stack_id", None)
+    if not stack_id:
+        return False
+    from models_stacks import Stack
+    stack = Stack.db_get_with_pk(
+        stack_id,
+        tenant=getattr(pod, "tenant_id", None) or tenant,
+        site=getattr(pod, "site_id", None),
+    )
+    if not stack:
+        return False
+    logger.info(f"Checking inherited stack '{stack_id}' permission for pod {getattr(pod, 'pod_id', '?')}.")
+    return check_permissions(user, level, stack, "stack", roles=roles, tenant=tenant)
+
+
 def check_permissions(user, level, object, object_type, roles=None, tenant=None):
     """Check the appropriate permissions store for user and level.
     user: username
@@ -151,6 +173,8 @@ def check_permissions(user, level, object, object_type, roles=None, tenant=None)
     wildcard_level = permissions.get("*")
     if not user_level and not wildcard_level:
         logger.info(f"Found no permissions for user {user} on {object_type}: {eval(f'object.{object_type}_id')}. Permissions: {permissions}")
+        if object_type == "pod" and _pod_stack_grants(user, level, object, roles=roles, tenant=tenant):
+            return True
         return False
     elif wildcard_level:
         # If we have a wildcard permission, use that instead of user permission.
@@ -167,6 +191,8 @@ def check_permissions(user, level, object, object_type, roles=None, tenant=None)
         logger.info(f"Allowing request - TENANT has appropriate permission for {object_type}: {eval(f'object.{object_type}_id')}.")
         return True
     else:
-        # we found the permission for the user but it was insufficient; return False right away
+        # we found the permission for the user but it was insufficient; try stack inheritance for pods
         logger.info(f"Found permission {level} for  {object_type}: {eval(f'object.{object_type}_id')}, insufficient permission, rejecting request.")
+        if object_type == "pod" and _pod_stack_grants(user, level, object, roles=roles, tenant=tenant):
+            return True
         return False

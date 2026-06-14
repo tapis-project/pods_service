@@ -75,6 +75,7 @@ from models_templates_tags import TemplateTag
 from models_cluster import Cluster
 from models_logs import Log
 from models_secrets import Secret
+from models_stacks import Stack
 
 target_metadata = SQLModel.metadata
 

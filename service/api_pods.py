@@ -2,10 +2,13 @@ import re
 
 from fastapi import APIRouter, Query
 from channels import CommandChannel
-from codes import REQUESTED, ON
+from codes import REQUESTED, ON, USER
 from pydantic import ValidationError
 
 from models_pods import Pod, NewPod, Password, PodsResponse, PodResponse, PodBase, PodBaseRead
+from models_stacks import Stack
+from stack_utils import validate_stack_fields
+from utils import check_permissions
 from models_templates_utils import validate_pod_secret_map_against_template, get_template_merged_secret_map, combine_pod_and_template_recursively
 from models_pods import PodBaseFull
 from models_volume_mounts_utils import (
@@ -362,6 +365,15 @@ async def create_pod(new_pod: NewPod):
         
         # Update pod's secret_map with resolved values
         pod.secret_map = working_map
+
+    # Stack membership + dependency validation (before any db writes).
+    if pod.stack_id:
+        stack = Stack.db_get_with_pk(pod.stack_id, tenant=g.request_tenant_id, site=g.site_id)
+        if not stack:
+            raise ValueError(f"stack_id '{pod.stack_id}' does not exist. Create the stack first with POST /pods/stacks.")
+        if not getattr(g, 'admin', False) and not check_permissions(g.username, USER, stack, "stack", roles=g.roles):
+            raise ValueError(f"You need USER+ permission on stack '{pod.stack_id}' to create a pod in it.")
+    validate_stack_fields(pod, tenant=g.request_tenant_id, site=g.site_id)
 
     # Create pod password db entry. If it's successful, we continue.
     password = Password(pod_id=pod.pod_id)

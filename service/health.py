@@ -430,6 +430,14 @@ def check_db_pods(k8_pods):
         try:
             ### Delete pods with status_requested = OFF or RESTART
             if pod.status_requested in [OFF, RESTART] and pod.status != STOPPED:
+                # Stack ordered teardown: hold until dependents are STOPPED (reverse dependency order).
+                # force_stop (set by stop ?force=true) bypasses the gate for an immediate teardown.
+                if pod.stack_id and not getattr(pod, 'force_stop', False):
+                    from stack_runner import evaluate_stop_gate
+                    allow_stop, waiting = evaluate_stop_gate(pod, tenant=pod.tenant_id, site=pod.site_id)
+                    if not allow_stop:
+                        logger.info(f"pod_id: {pod.pod_id} teardown gated; waiting on dependents to stop: {waiting}")
+                        continue
                 logger.info(f"pod_id: {pod.pod_id} found with status_requested: {pod.status_requested} and not STOPPED. Gracefully shutting pod down.")
                 container_exists, service_exists = graceful_rm_pod(pod, f"health found running {pod.status_requested} pod, set status to DELETING") # SHOULD ONLY LOG ONCE!!!
                 # if container and service not alive. Update status to STOPPED. UPDATE RESTART to ON.
@@ -440,6 +448,7 @@ def check_db_pods(k8_pods):
                     pod.time_to_stop_ts = None
                     pod.time_to_stop_instance = None
                     pod.status_container = {}
+                    pod.force_stop = False  # one-shot: consumed once the pod is down
                     if pod.status_requested == RESTART:
                         logger.info(f"pod_id: {pod.pod_id} in RESTART. Now in STOPPED, so switching status_requested back to ON.")
                         pod.status_requested = ON
@@ -503,6 +512,13 @@ def check_db_pods(k8_pods):
             ### Start pods here by putting command setting status="REQUESTED", if status_requested = ON and status = STOPPED.
             if pod.status_requested in ['ON', RESTART] and pod.status == STOPPED:
                 logger.info(f"pod_id: {pod.pod_id} found status_requested: {pod.status_requested} and STOPPED. Starting.")
+                # Stack ordering gate: hold start until every dependency is intended-ON and ready.
+                if pod.depends_on:
+                    from stack_runner import evaluate_start_gate
+                    allow_start, blocking = evaluate_start_gate(pod, tenant=pod.tenant_id, site=pod.site_id)
+                    if not allow_start:
+                        logger.info(f"pod_id: {pod.pod_id} start gated by depends_on; waiting on: {blocking}")
+                        continue
                 original_pod_status = pod.status_requested
                 if pod.status_requested == RESTART:
                     logger.info(f"pod_id: {pod.pod_id} in RESTART and STOPPED, so switching status_requested back to ON.")

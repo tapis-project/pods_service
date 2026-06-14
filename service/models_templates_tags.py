@@ -686,11 +686,82 @@ class TemplateTagPodDefinition(TapisModel):
                 raise ValueError(f"compute_queue must be lowercase alphanumeric.")
         return v
 
+VALID_STACK_RESTART_POLICIES = ["ordered", "parallel"]
+VALID_READY_CONDITIONS = ["available", "ready"]
+
+
+class StackMemberDefinition(TemplateTagPodDefinition):
+    """One pod within a stack template (kind='stack').
+
+    Inherits every TemplateTagPodDefinition field (image, template, command, environment_variables,
+    secret_map, volume_mounts, networking, resources, healthchecks, ...) and adds the stack-topology
+    fields. Members are addressed internally by `name`; depends_on and ${stack:<name>:...} references
+    use names, never pod_ids. A member carries NO pod_id literal — the external pod_id is chosen at
+    instantiation (request pod_ids override, else `{stack_id}{name}`) so the template stays reusable.
+    """
+    name: str = Field(..., description = "Logical, stack-unique handle for this member. Lowercase "
+        "alphanumeric, first char alpha, 3-64 chars. Used by depends_on and ${stack:<name>:...}; this "
+        "is NOT the pod_id (that is derived or overridden at instantiation).")
+    depends_on: List[str] = Field([], description = "Names of other members that must reach their "
+        "ready_condition before this member starts. Rewritten to pod_ids at instantiation.",
+        sa_column=Column(ARRAY(String)))
+    ready_condition: str = Field("available", description = "When this member counts as 'up' for "
+        "dependents: 'available' (status AVAILABLE) or 'ready' (readiness probe passing; requires "
+        "healthchecks.readiness).")
+
+    @validator('name')
+    def check_name(cls, v):
+        # Short names are fine here — the derived pod_id is `{stack_id}{name}`, and stack_id alone
+        # already satisfies the pod_id 3-char minimum. So a member may be `db`, `ui`, etc.
+        if not re.fullmatch(r'[a-z][a-z0-9]*', v or ""):
+            raise ValueError("stack member 'name' must be lowercase alphanumeric, first char alpha.")
+        if len(v) > 32 or len(v) < 1:
+            raise ValueError(f"stack member 'name' length must be between 1-32 characters. Got: {len(v)}")
+        return v
+
+    @validator('ready_condition')
+    def check_ready_condition(cls, v):
+        if v not in VALID_READY_CONDITIONS:
+            raise ValueError(f"ready_condition must be one of {VALID_READY_CONDITIONS}. Got '{v}'.")
+        return v
+
+
+class StackTagDefinition(TapisModel):
+    """A whole stack defined in one template tag. Instantiated via POST /pods/stacks/from-template
+    into a runtime Stack + member pods."""
+    restart_policy: str = Field("ordered", description = "How stack actions order members: 'ordered' "
+        "(honor depends_on) or 'parallel'.")
+    secret_map: Dict[str, str] = Field({}, description = "Shared, stack-scoped secrets. Members "
+        "reference these via ${stack:secrets:KEY}. Only placeholders, ${pods:random:N}, or "
+        "${secret:...} are allowed (a shared template must not embed resolved values). Resolved once "
+        "per stack; values live on the stack, never copied into member pods.", sa_column=Column(JSON))
+    members: List[StackMemberDefinition] = Field([], description = "The pods that make up this stack "
+        "(at least one; member names unique).")
+
+    @validator('restart_policy')
+    def check_restart_policy(cls, v):
+        if v not in VALID_STACK_RESTART_POLICIES:
+            raise ValueError(f"restart_policy must be one of {VALID_STACK_RESTART_POLICIES}. Got '{v}'.")
+        return v
+
+    @validator('members')
+    def check_members(cls, v):
+        if not v:
+            raise ValueError("stack_definition.members must contain at least one member.")
+        names = [m.name for m in v]
+        dupes = sorted({n for n in names if names.count(n) > 1})
+        if dupes:
+            raise ValueError(f"stack member names must be unique within a stack. Duplicates: {dupes}")
+        return v
+
+
 class TemplateTagBase(TapisApiModel):
     # Required
     template_id: str = Field(..., description="template_id this tag is linked to")#, foreign_key="template.template_id")
     # User Input
-    pod_definition: TemplateTagPodDefinition = Field({}, description = "Pod definition for this template.", sa_column=Column(JSON))
+    pod_definition: TemplateTagPodDefinition = Field({}, description = "Pod definition for this template (kind='pod').", sa_column=Column(JSON))
+    kind: str = Field("pod", description = "Tag kind: 'pod' (single pod_definition, default) or 'stack' (multi-pod stack_definition).")
+    stack_definition: Optional[StackTagDefinition] = Field(None, description = "Stack definition when kind='stack'. Instantiate via POST /pods/stacks/from-template.", sa_column=Column(JSON))
     commit_message: str = Field("", description = "Commit message for this template tag.")
     tag: str = Field("latest", description = "Tag for this template. Default is 'latest'.")
     # Optional
@@ -716,6 +787,39 @@ class TemplateTag(TapisTemplateTagBaseFull, table=True, validate=True):
     @validator('pod_definition')
     def check_pod_definition(cls, v):
         return v
+
+    @validator('kind')
+    def check_kind(cls, v):
+        v = v or "pod"
+        if v not in ("pod", "stack"):
+            raise ValueError(f"kind must be 'pod' or 'stack'. Got '{v}'.")
+        return v
+
+    @model_validator(mode="after")
+    def check_kind_consistency(cls, values):
+        """Exactly one of pod_definition / stack_definition may be populated, matching `kind`."""
+        kind = getattr(values, 'kind', 'pod') or 'pod'
+
+        def _nonempty(x):
+            if x is None:
+                return False
+            if isinstance(x, dict):
+                return bool(x)
+            d = x.dict() if hasattr(x, 'dict') else {}
+            return any(val not in (None, {}, [], "") for val in d.values())
+
+        has_pod = _nonempty(getattr(values, 'pod_definition', None))
+        has_stack = _nonempty(getattr(values, 'stack_definition', None))
+
+        if kind == "stack":
+            if not has_stack:
+                raise ValueError("kind='stack' requires a non-empty stack_definition.")
+            if has_pod:
+                raise ValueError("kind='stack' must not set pod_definition (use stack_definition only).")
+        else:  # pod
+            if has_stack:
+                raise ValueError("stack_definition is only valid with kind='stack'. Set kind='stack'.")
+        return values
 
     @validator('template_id')
     def check_template_id(cls, v):
@@ -820,7 +924,8 @@ class TemplateTag(TapisTemplateTagBaseFull, table=True, validate=True):
     
     def display_small(self):
         display = self.dict()
-        display.pop('pod_definition')
+        display.pop('pod_definition', None)
+        display.pop('stack_definition', None)
         display.pop('template_id')
         return display
 
@@ -857,7 +962,9 @@ class NewTemplateTag(TapisApiModel):
     """
     Object with fields that users are allowed to specify for the Template class.
     """
-    pod_definition: TemplateTagPodDefinition = Field(..., description = "Pod definition for this template tag.", sa_column=Column(JSON))
+    pod_definition: TemplateTagPodDefinition = Field({}, description = "Pod definition for this template tag (kind='pod').", sa_column=Column(JSON))
+    kind: str = Field("pod", description = "Tag kind: 'pod' (default) or 'stack'.")
+    stack_definition: Optional[StackTagDefinition] = Field(None, description = "Stack definition for this template tag (required when kind='stack').", sa_column=Column(JSON))
     commit_message: str = Field(..., description = "Commit message for this template tag.")
     tag: str = Field("latest", description = "Tag for this template. Default is 'latest'.")
 

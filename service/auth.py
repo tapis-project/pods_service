@@ -22,6 +22,7 @@ from models_snapshots import Snapshot
 from models_templates import Template
 from models_images import Image
 from models_secrets import Secret
+from models_stacks import Stack
 from utils import check_permissions
 
 TOKEN_RE = re.compile('Bearer (.+)')
@@ -215,6 +216,22 @@ def check_route_permissions(request):
          #["/pods/clusters/{cluster_id}/remove_pod/{pod_id}", "POST", codes.ADMIN],
          # GRAPHQL
          ["/pods/graphql", "POST", codes.NONE],  # GraphQL endpoint, no auth needed yet
+        # STACKS — MUST be registered before the /pods/{pod_id} routes below; the {pod_id}
+        # regex ([^/]+) would otherwise swallow "stacks".
+        ["/pods/stacks/{stack_id}/permissions", "GET", codes.USER],
+        ["/pods/stacks/{stack_id}/permissions/{user}", "DELETE", codes.ADMIN],
+        ["/pods/stacks/{stack_id}/permissions", "POST", codes.ADMIN],
+        ["/pods/stacks/{stack_id}/action", "POST", codes.ADMIN],  # parity: direct pod stop/start/restart require pod ADMIN
+        ["/pods/stacks/{stack_id}/save_as_template", "POST", codes.USER],
+        ["/pods/stacks/from-template", "POST", codes.NONE],
+        ["/pods/stacks/{stack_id}", "GET", codes.READ],
+        ["/pods/stacks/{stack_id}", "PUT", codes.USER],
+        ["/pods/stacks/{stack_id}", "DELETE", codes.ADMIN],
+        ["/pods/stacks", "GET", codes.NONE],
+        ["/pods/stacks", "POST", codes.NONE],
+        # stack membership — set on the pod, pod-ADMIN gated (suffixed → before bare /pods/{pod_id})
+        ["/pods/{pod_id}/stack", "POST", codes.ADMIN],
+        ["/pods/{pod_id}/stack", "DELETE", codes.ADMIN],
         # PODS
         ["/pods/{pod_id}/permissions", "GET", codes.USER],
         ["/pods/{pod_id}/permissions/{user}", "DELETE", codes.ADMIN],
@@ -350,6 +367,10 @@ def check_route_permissions(request):
         logger.debug(f"Matched clusters/--cluster_id-- route. request.url.path: {request.url.path}")
         cluster = check_object_id(request, 'cluster', 2)
         has_pem = check_permissions(user=g.username, object=cluster, object_type="cluster", level=matched_route[2] , roles=g.roles)
+    elif "{stack_id}" in matched_route[0]:
+        logger.debug(f"Matched /--stack_id-- route. request.url.path: {request.url.path}")
+        stack = check_object_id(request, 'stack', 3)
+        has_pem = check_permissions(user=g.username, object=stack, object_type="stack", level=matched_route[2] , roles=g.roles)
     elif "{pod_id}" in matched_route[0]:
         logger.debug(f"Matched /--pod_id-- route. request.url.path: {request.url.path}")
         pod = check_object_id(request, 'pod', 2)

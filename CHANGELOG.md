@@ -105,6 +105,12 @@ The edge release. Pods learned to leave the cluster.
 - `SetPermission` re-enforces the tenant-level guard — `tenant.*` and `**` grants are READ-only.
 
 
+## 26Q2.1
+
+### New features:
+- **Stacks** — compose-style multi-pod deployments as one resource: ordered startup, permission inheritance, and stack templates (save-as and create-from). Members share secrets through a `secret_map` that is checked at write time, so a stack can never reference someone else's secret.
+
+
 ## 26Q2.0
 
 ### New features:

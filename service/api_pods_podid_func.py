@@ -4,7 +4,7 @@ from models_pods import Pod, Password, PodResponse, PodPermissionsResponse, PodC
 from models_traffic import TrafficLog, TrafficLogsResponse
 from models_pod_log_runs import PodLogRun, PodLogRunsResponse, PodLogRunResponse
 from log_archive_utils import read_archive
-from models_templates_tags import Template, TemplateTag, TemplateTagResponse, NewTemplateTagFromPod
+from models_templates_tags import Template, TemplateTag, TemplateTagResponse, NewTemplateTagFromPod, Networking as TemplateTagNetworking
 from models_templates_utils import combine_pod_and_template_recursively
 from models_misc import SetPermission
 from channels import CommandChannel
@@ -19,6 +19,7 @@ from kubernetes_utils import run_k8_exec, k8s_copy_bytes_to_pod, NAMESPACE, k8, 
 from utils import check_permissions
 from errors import ResourceError, PermissionsException
 from models_volume_mounts_utils import validate_volume_mounts_on_start
+from stack_template_utils import sanitize_member_networking, placeholderize_secret_value
 from datetime import datetime
 import time
 import re
@@ -1011,21 +1012,25 @@ async def delete_pod_permission(pod_id, user):
     summary="stop_pod",
     operation_id="stop_pod",
     response_model=PodResponse)
-async def stop_pod(pod_id):
+async def stop_pod(pod_id, force: bool = False):
     """
     Stop a pod.
 
     Note:
     - Sets status_requested to OFF. Pod will attempt to get to STOPPED status unless start_pod is ran.
+    - If this pod is in a stack with restart_policy='ordered', teardown normally waits until pods that
+      depend_on it are STOPPED (reverse order). Pass ?force=true to stop it immediately, bypassing that
+      ordering — useful when the dependency order doesn't matter for this stop.
 
     Returns updated pod object.
     """
-    logger.info(f"GET /pods/{pod_id}/stop - Top of stop_pod.")
+    logger.info(f"GET /pods/{pod_id}/stop - Top of stop_pod. force={force}")
 
     pod = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
     pod.status_requested = OFF
-    pod.db_update(f"'{g.username}' ran stop_pod, set to OFF")
-                  
+    pod.force_stop = force
+    pod.db_update(f"'{g.username}' ran stop_pod, set to OFF{' (force, bypassing stack order)' if force else ''}")
+
     return ok(result=pod.display(), msg = "Updated pod's status_requested to OFF.")
 
 
@@ -1211,6 +1216,15 @@ def validate_token(request: Request, token: str = None):
         return False, None, None
 
 
+# Template-authoring networking keys. A live pod's networking dict carries runtime-only keys the
+# template Networking model forbids (custom_domain, custom_domain_verified, cert_ready, ...), so a
+# verbatim copy fails tag validation. sanitize_member_networking (pure, in stack_template_utils)
+# keeps only these template-valid keys when snapshotting — mirrors the stack save path.
+_TEMPLATE_NET_FIELDS = set(
+    getattr(TemplateTagNetworking, "model_fields", None) or TemplateTagNetworking.__fields__
+)
+
+
 @router.post(
     "/pods/{pod_id_net}/save_pod_as_template_tag",
     tags=["Pods"],
@@ -1229,6 +1243,10 @@ async def save_pod_as_template_tag(pod_id_net, new_template_tag_from_pod: NewTem
     logger.info(f"POST /pods/{pod_id_net}/save_pod_as_template_tag - Top of save_pod_as_template_tag.")
     
     pod = Pod.db_get_with_pk(pod_id_net, tenant=g.request_tenant_id, site=g.site_id)
+    if not pod:
+        # Guard: without this, the .get_pod_definition_for_template_tag() call below raises an
+        # opaque 500 ('NoneType' object has no attribute ...). Return a clear 400 instead.
+        raise BadRequestError(f"Pod with id '{pod_id_net}' not found in tenant '{g.request_tenant_id}', site '{g.site_id}'.")
 
     # Auth already checks permissions for pod_id. We must also check permissions for template.
     template = Template.db_get_with_pk(new_template_tag_from_pod.template_id, tenant="siteadmintable", site=g.site_id)
@@ -1245,6 +1263,21 @@ async def save_pod_as_template_tag(pod_id_net, new_template_tag_from_pod: NewTem
 
     # Create a dict of only modified fields
     modified_pod_def = {field: current_pod_def[field] for field in modified_fields if field not in ["pod_id"]}
+
+    # Hygiene so a live pod validates as a *template* pod_definition (mirrors the stack snapshot
+    # path in api_stacks.save_stack_as_template). Two live-pod artifacts the template models reject:
+    #   1) networking carries runtime-only keys (custom_domain, cert_ready, cert_state, ...) that the
+    #      template Networking model forbids -> strip to the template-valid field set.
+    #   2) secret_map holds concrete secret references (${secret:user:name}) which template validation
+    #      rejects and which would leak a real secret -> replace each value with a ${:?...} blank the
+    #      deployer fills. Keys are preserved so ${pods:secrets:KEY} env refs still resolve.
+    if "networking" in modified_pod_def:
+        modified_pod_def["networking"] = sanitize_member_networking(
+            modified_pod_def["networking"], _TEMPLATE_NET_FIELDS)
+    if "secret_map" in modified_pod_def:
+        modified_pod_def["secret_map"] = {
+            k: placeholderize_secret_value(v)
+            for k, v in (modified_pod_def["secret_map"] or {}).items()}
     logger.debug(f"Modified pod definition: {modified_pod_def}")
 
     template_tag = TemplateTag(**new_template_tag_from_pod.dict(), pod_definition=modified_pod_def)
