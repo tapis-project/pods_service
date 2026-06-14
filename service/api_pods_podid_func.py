@@ -473,10 +473,27 @@ async def exec_pod_commands(pod_id, command: ExecutePodCommands):
         elif fail_on_non_success and not results[-1]["success"]:
             custom_msg = f"Execution stopped due to command failure on latest command. Consider setting fail_on_non_success=False to continue through errors."
 
-    # Update pod history with summary
-    summary = f"'{g.username}' executed {len(commands)} commands."
+    # Build audit log entry.
+    # Security: only log the executable name (r["command"][0]) — never
+    # arguments, which may contain secret values after <<tapissecret_*>>
+    # substitution.  stdout/stderr are also never stored here.
+    success_count = sum(1 for r in results if r["success"] is True)
+    total_duration = round(sum(r.get("duration_sec", 0) for r in results), 2)
+
+    def _cmd_label(r: dict) -> str:
+        cmd = r.get("command", [])
+        exe = (cmd[0] if isinstance(cmd, list) and cmd else "exec")
+        # Truncate very long binary paths to the basename
+        exe = exe.split("/")[-1][:24]
+        result_str = "ok" if r["success"] is True else f"exit {r.get('exit_code', '?')}"
+        dur = round(r.get("duration_sec", 0), 2)
+        return f"{exe}({result_str}, {dur}s)"
+
+    cmd_parts = ", ".join(_cmd_label(r) for r in results)
+    summary = f"'{g.username}' exec {success_count}/{len(results)} ok  [{cmd_parts}]  {total_duration}s total"
     if custom_msg:
-        summary += f" ({custom_msg.split(' Consider')[0]})"
+        # Strip the "Consider …" advice — action log is for auditors, not users
+        summary += f"  ({custom_msg.split(' Consider')[0]})"
     pod.db_update(summary)
 
     total_commands = len(commands)
