@@ -1139,9 +1139,174 @@ A template tag can describe an entire stack (e.g. postgres + redis + n8n main + 
 **Endpoints** (`api_stacks.py`):
 - `POST /pods/stacks/from-template` `{template, stack_id, pod_ids?, secrets?, overrides?, description?}` — resolves ids, validates (`validate_stack_definition`: cycles via DFS, self-dep, `ready`⇒readiness probe, `${stack:…}` ref existence), prechecks collisions, creates the Stack (with shared `secret_map`), then creates members in **topological order** (`topo_order`, so a dependency exists + is same-stack before its dependent is validated) by reusing `create_pod` per member. **Transactional**: any member failure rolls back every pod created so far + the stack.
 - `POST /pods/stacks/{stack_id}/save_as_template` `{template_id, tag, commit_message?}` — snapshots a live stack into a `kind='stack'` tag: pod_ids → names (strip `{stack_id}` prefix), depends_on ids → names, member k8 hostnames reversed back to `${stack:<name>:host}`, and **all concrete secret values replaced with `${:?…}` placeholders** (never embeds a real secret).
+  - **Snapshot minimization** (so a captured member reads like an *authored* definition, not the fully-resolved live pod): each member is pruned against service defaults — `minimize_member_networking` resets `tapis_auth_allowed_users` to the **`AUTHORIZED_USERS`** sentinel (so real usernames never leak into a reusable template) then drops per-entry fields equal to the `Networking` model defaults (keeping `protocol`/`port` and **any `${…}` reference**); `minimize_resources` keeps only positively-set CPU/mem (drops `-1`/`0`/`None`); `compute_queue: "default"`, empty values, and default `ready_condition`/`depends_on` are dropped. Net: a litellm `db` member's ~25-field networking block collapses to `{protocol, port}` and the 13 baked usernames disappear. Helpers are pure (`stack_template_utils`) + unit-tested. **Still not pruned** (cosmetic / deeper): the vestigial `pod_definition` that `NewTemplateTag` defaults onto a stack tag, and the pod-template-layer flattening when a member itself extends a `kind='pod'` template.
 
 **Validation reuse**: `add_template_tag` runs `validate_stack_definition` + per-secret_map template rules for `kind='stack'` tags at creation, so a bad stack template is rejected before it's stored. Pure helpers are unit-tested in `tests/test_stack_templates.py` (24 tests: derivation, precedence, cycles, topo order, structural validation, compile).
 
 **Phase-1 limits** (noted for follow-up): member-level `template` refs and `save_as_template` host-reversal assume same-stack re-instantiation; shared-secret rotation updates the stack's one source (pods unchanged) but isn't yet a dedicated endpoint; stack randoms cache on the stack row (not yet SK).
+
+### Stack updates & the layer model (L0 / L1 / L2)
+
+"What updates when" across pods, stacks, and the templates they derive from. There are **three
+layers**, updated by **two triggers**, with **two risk profiles**. (Front-end companion with
+ASCII diagrams: tapis-ui `src/app/Pods/STACK_UPDATE_MODEL.md`.)
+
+Every field on a running member pod resolves by one precedence chain — **higher wins**:
+
+```
+  ① USER OVERRIDE       pod.modified_fields (what the user set)        ← always wins
+  ② STACK-TEMPLATE      the member's definition in stack_definition     (L2 baseline)
+  ③ POD-TEMPLATE        member.template → e.g. codeserver:latest        (L1, recursive)
+  ④ SERVICE DEFAULTS    port 5000, restartPolicy: Never, …              (floor)
+```
+
+This is exactly the merge order already implemented in
+`models_templates_utils.combine_pod_and_template_recursively` — the stack layer (②) only seeds
+the member pod's baseline before that runs.
+
+- **L0 — pod ⟵ pod-template.** A pod stores `template` as a **moving tag** (`x:tag`, re-resolves
+  to newest each start) or a **pinned snapshot** (`x:tag@timestamp`, frozen). The health loop
+  re-derives on **every restart** (`derive_template_info` + `combine_pod_and_template_recursively`,
+  `health_central.py`). Safe to do automatically — one resource, in place, idempotent. The explicit
+  "re-pin to newest now" knob is `POST /pods/{id}/restart` with `grab_latest_template_tag=true`.
+- **L1 — member-pod ⟵ pod-template.** A stack member *is* a pod (with `stack_id`), so **L1 == L0**:
+  a member whose `template: "postgres:16"` auto-tracks postgres on its own restart, with zero stack
+  involvement and zero extra code.
+- **L2 — stack ⟵ stack-template.** The stack records `from_template`, **pinned at deploy**. This is
+  **never auto-applied** — a stack-template bump can add / recreate / **delete** member pods (and
+  touch their volumes). So L2 is an **explicit, reviewed plan → apply** (the `helm upgrade
+  --dry-run → apply` model).
+
+#### `POST /pods/stacks/{stack_id}/update` — the L2 reviewed update
+
+Body `StackUpdateRequest` `{ template?, pod_ids?, secrets?, confirm? }`; query `?dry_run=`.
+
+- **`?dry_run=true`** → returns the per-member **plan**, no side effects:
+  ```json
+  { "result": { "from": "litellm:prod@…v1", "to": "litellm:prod@…v2",
+      "members": [ {"name":"db","pod_id":"litellmdb","kind":"recreate",
+                    "changed_fields":["image"],"destructive":false},
+                   {"name":"llk","kind":"patch","changed_fields":["environment_variables"]},
+                   {"name":"cache","kind":"add"} ],
+      "has_destructive": false, "requires_confirm": false } }
+  ```
+  `kind ∈ add | remove | recreate | patch | unchanged`. The diff is the **pure**
+  `stack_template_utils.compute_stack_member_plan(old_members, new_members)` (mirrors the FE so the
+  UI preview matches): recreate fields = `image|template|networking|volume_mounts`; everything else
+  patches; a `volume_mounts` change or a member removal is `destructive`. (7 unit tests in
+  `tests/test_stack_templates.py`.)
+- **without `dry_run`** → applies in **data-safe order** `create → recreate → patch → remove`
+  (so a mid-apply failure never deletes before additions succeed; re-run to converge). `confirm ==
+  stack_id` is **required when the plan is destructive**. Existing members keep their live `pod_id`;
+  new members derive `{stack_id}{name}` (or `pod_ids[name]`). Adds/recreates reuse the from-template
+  member-create path (so `${stack:…}` refs compile correctly); patches apply only the changed
+  fields then restart; removes call `delete_pod_resources`. Finally re-pins `from_template` to the
+  target and merges `secret_map` (`setdefault` keeps already-resolved randoms).
+
+```bash
+# review, then apply
+curl -XPOST ".../v3/pods/stacks/litellm1/update?dry_run=true" -d '{"template":"litellm:prod"}'
+curl -XPOST  .../v3/pods/stacks/litellm1/update -d '{"template":"litellm:prod","confirm":"litellm1"}'
+```
+
+**Override preservation.** `patch` touches only changed fields, so user overrides on *unchanged*
+fields survive (the ① layer is re-stamped). `recreate` currently rebuilds the member from the
+template, **resetting that member's pod-level overrides** — full per-field 3-way merge on recreate
+is a documented follow-up (see gaps).
+
+### Worked example — `litellm` across the layers
+
+A two-pod stack: `db` (postgres) + `llk` (litellm), sharing one DB password.
+
+**1 · Author the stack-template (L2 source).** `kind='stack'` tag with two members; the password
+is a shared secret, the DB host is a cross-member ref:
+```jsonc
+{ "restart_policy": "ordered",
+  "secret_map": { "PG_PASSWORD": "${:?provide shared secret 'PG_PASSWORD'}" },
+  "members": [
+    { "name": "db", "image": "postgres:16", "ready_condition": "ready",
+      "environment_variables": { "POSTGRES_PASSWORD": "${pods:secrets:PG_PASSWORD}" },
+      "secret_map": { "PG_PASSWORD": "${stack:secrets:PG_PASSWORD}" } },
+    { "name": "llk", "image": "ghcr.io/berriai/litellm:v1.81.3-stable", "depends_on": ["db"],
+      "environment_variables": {
+        "DATABASE_URL": "postgresql://litellm:${pods:secrets:PG_PASSWORD}@${stack:db:host}:5432/litellm" },
+      "secret_map": { "PG_PASSWORD": "${stack:secrets:PG_PASSWORD}" } } ] }
+```
+`${stack:db:host}` → `db`'s in-cluster `k8_name` at instantiation; `${stack:secrets:PG_PASSWORD}`
+stays a *reference* resolved once from the stack row at pod start.
+
+**2 · Instantiate (compile L2 → runtime Stack + member pods).**
+```bash
+curl -XPOST .../v3/pods/stacks/from-template \
+  -d '{"template":"litellm:prod","stack_id":"litellm1","secrets":{"PG_PASSWORD":"s3cret"}}'
+# → pods litellm1db, litellm1llk; stack.from_template = litellm:prod@<ts-v1>
+```
+
+**3 · L1 — bump just the postgres image.** `db`'s `template` (if it had one, e.g.
+`postgres:16` as a moving tag) auto-tracks on restart; otherwise edit the member and restart pulling
+latest:
+```bash
+curl -XPOST .../v3/pods/litellm1db/restart -d '{}'                       # plain restart
+curl -XPOST '.../v3/pods/litellm1db/restart' -d '{"grab_latest_template_tag":true}'  # re-pin to newest tag
+```
+Scope: one pod. Nothing else in the stack moves. (UI: the pod's Advanced-Restart "Pull latest
+version of this tag" checkbox.)
+
+**4 · L2 — publish v2 and roll the stack forward.** Say `litellm:prod@v2` adds an env var to `llk`
+and a `cache` member. Review, then apply:
+```bash
+curl -XPOST '.../v3/pods/stacks/litellm1/update?dry_run=true' -d '{"template":"litellm:prod"}'
+# plan: llk = patch (environment_variables), cache = add, db = unchanged   → not destructive
+curl -XPOST  .../v3/pods/stacks/litellm1/update -d '{"template":"litellm:prod"}'
+```
+Your `secrets.PG_PASSWORD` and any field you overrode on `llk` are preserved; `cache` is created in
+dependency order. (UI: the stack shows an "update available" chip → review modal → Apply.)
+
+### Status, gaps & rough user flows (2026-06)
+
+| Area | State | Notes |
+|---|---|---|
+| Runtime stacks (resource, perm inheritance, ordering runner) | **done** | `7c2b25e7` |
+| `from-template` / `save_as_template` | **done** | transactional; 24 unit tests |
+| L1 pull-latest restart (`grab_latest_template_tag`) | **done** | API + UI Advanced-Restart toggle |
+| L2 `/update` dry_run plan + apply | **done, ⚠ untested on cluster** | pure diff verified standalone + 7 tests; apply path needs a live `make test` round-trip |
+| FE: structured per-member stack editor, go-to-template, update-available badge, review modal | **done** | tapis-ui; raw-fetch bridge until `make spec` regen of `Pods.StacksApi` |
+
+**Known gaps / follow-ups:**
+1. **Snapshot minimization — *done* for the big wins** (`save_as_template` now prunes member
+   networking/resources vs service defaults, keeps all `${…}` refs; verbose ~25-field blocks
+   collapse to `{protocol, port}`). **Still open:** the vestigial `pod_definition` that
+   `NewTemplateTag` defaults onto a `kind='stack'` tag (cosmetic — the validator treats it as
+   empty; dropping it needs a model/validation change), and the *layer flattening* when a member
+   extends a `kind='pod'` template (the resolved fields are re-captured rather than diffed against
+   that pod-template — a deeper, modified_fields-aware snapshot).
+2. **User-specific data leak — *done*.** Baked `tapis_auth_allowed_users` is reset to the
+   **`AUTHORIZED_USERS`** sentinel on snapshot. (Other deployment-specifics — baked URLs,
+   `custom_domain` — are already dropped by `sanitize_member_networking` keeping only
+   template-valid keys.)
+3. **`recreate` resets a member's pod-level overrides** (rebuilds from template). Needs a per-field
+   3-way merge (old-tag → new-tag with the user overlay re-applied).
+4. **The L2 update plan has no provenance** — it doesn't show whether a changed field came *from the
+   template* vs *your override*, so a blind Apply could clobber an intentional override. Add a
+   provenance marker per changed field.
+5. **Apply is best-effort, not transactional** — a failure mid-apply leaves a partial state (additions
+   done, removals not). It's ordered create→recreate→patch→remove so data is never lost first, and
+   re-running converges, but there is no automatic rollback like `from-template` has.
+6. Phase-2 carry-overs: member-level `template` refs end-to-end, a shared-secret **rotation**
+   endpoint, SK-backed stack randoms.
+
+**User flows that can surprise:**
+- **Snapshot → re-snapshot drift.** Instantiate from `litellm:prod@v1`, change nothing, `save_as_template`
+  → with minimization (done), the v2 networking/resources now closely match v1 and baked usernames are
+  gone; residual drift comes only from the vestigial `pod_definition` and member-template flattening
+  (gap #1 residual). Still treat snapshots of a *templated* member as needing a glance, not a guaranteed
+  byte-identical round-trip. (UI labels Save-as-Template **experimental**.)
+- **Renamed public member.** A member's public URL is governed by its `pod_id`; if instantiation used
+  `pod_ids` to rename (`main` → `myn8n`), a later `/update` only re-derives `{stack_id}{name}` for
+  **newly added** members — existing members keep their renamed id, but a brand-new member won't pick
+  up a desired custom id unless you pass `pod_ids` again.
+- **Destructive update.** Removing a member from the template deletes the live pod on Apply (gated by
+  `confirm == stack_id`). Volume behaviour follows `delete_pod_resources`; verify whether attached
+  volumes should be retained before relying on it for stateful members.
 
 Migration: `d7c3e9a14f08_init23` adds `templatetag.kind`/`stack_definition` and `stack.secret_map`/`from_template`.

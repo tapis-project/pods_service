@@ -599,7 +599,8 @@ class PodBaseFull(PodBaseRead):
         display.pop('site_id')
         display.pop('modified_fields')
         display.pop('action_logs')
-        
+        display.pop('force_stop', None)  # transient internal flag; not part of the read model
+
         # Redact config_content if not requested (for both ephemeral and tapisvolume types)
         if not include_configs and display.get('volume_mounts'):
             for mount_path, mount_config in display['volume_mounts'].items():
@@ -885,6 +886,12 @@ class Pod(TapisPodBaseFull, table=True, validate=True):
             elif not image and template:
                 logger.debug(f"top of first check_images derive_template_info() with tenant_id: {tenant_id}, site_id: {site_id}")
                 template_name_str, template, template_tag = derive_template_info(template, tenant=tenant_id, site=site_id)
+                if getattr(template_tag, "kind", "pod") == "stack":
+                    raise ValueError(
+                        f"Template '{template_name_str}' is a stack template (kind='stack') — it "
+                        f"defines multiple pods, not one. Instantiate it with "
+                        f"POST /pods/stacks/from-template (body: {{\"template\": \"{template_name_str}\", "
+                        f"\"stack_id\": \"<id>\"}}), not as a single pod.")
                 image = template_tag.pod_definition.get("image")
                 inner_template = template_tag.pod_definition.get("template")
                 if image:
@@ -1047,6 +1054,7 @@ class Pod(TapisPodBaseFull, table=True, validate=True):
         display.pop('site_id')
         display.pop('modified_fields')
         display.pop('action_logs', None)
+        display.pop('force_stop', None)  # transient internal flag; not part of the read model
         #display['action_logs'] = display['action_logs'][-10:]
         
         # Redact config_content if not requested

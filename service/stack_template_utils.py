@@ -33,6 +33,61 @@ def k8_name(site_id: str, tenant_id: str, pod_id: str) -> str:
     return f"pods-{site_id}-{tenant_id}-{pod_id}"
 
 
+def match_live_member_pod_ids(
+    stack_id: str,
+    member_images: Dict[str, str],
+    kind_by_name: Dict[str, str],
+    live: List[Any],
+) -> Dict[str, str]:
+    """Map member_name -> the EXISTING live pod_id, robust to pod-id drift.
+
+    The naive approach (strip the `{stack_id}` prefix off each live pod_id to recover
+    its member name) fails whenever a member's pod_id doesn't follow the
+    `{stack_id}{name}` convention — most notably a legacy member whose pod_id is the
+    *bare* stack_id. When that member can't be matched, update derives a fresh
+    `{stack_id}{name}` pod_id for it, creating a DUPLICATE and orphaning the real pod.
+    This function repairs that so update reuses the live pod.
+
+    Args:
+        member_images: {name: image} for every member across the old + new tags.
+        kind_by_name:  {name: plan_kind} from compute_stack_member_plan
+                       ('add' | 'remove' | 'recreate' | 'patch' | 'unchanged').
+        live:          member pods (objects exposing ``.pod_id`` and ``.image``).
+
+    Pass 1 claims pods whose id follows the convention. Pass 2 reconciles leftovers:
+    a member that PERSISTS or is REMOVED (kind != 'add') but whose conventional pod is
+    absent is matched to an unclaimed live pod, preferring an equal image; a single
+    remaining candidate is taken outright. 'add' members are never leftover-matched —
+    they legitimately have no live pod yet.
+    """
+    names = set(member_images)
+    name_to_pid: Dict[str, str] = {}
+    claimed = set()
+
+    # Pass 1: exact `{stack_id}{name}` convention.
+    for pod in live:
+        pid = pod.pod_id
+        nm = pid[len(stack_id):] if (pid.startswith(stack_id) and len(pid) > len(stack_id)) else None
+        if nm and nm in names and nm not in name_to_pid:
+            name_to_pid[nm] = pid
+            claimed.add(pid)
+
+    # Pass 2: reconcile id-drift for members that should have a live pod.
+    for nm in [n for n in names if n not in name_to_pid and kind_by_name.get(n) != "add"]:
+        cands = [p for p in live if p.pod_id not in claimed]
+        if not cands:
+            break
+        want = member_images.get(nm) or ""
+        match = next((p for p in cands if (getattr(p, "image", "") or "") == want), None)
+        if match is None and len(cands) == 1:
+            match = cands[0]
+        if match is not None:
+            name_to_pid[nm] = match.pod_id
+            claimed.add(match.pod_id)
+
+    return name_to_pid
+
+
 def resolve_member_pod_ids(
     member_names: List[str],
     stack_id: str,
@@ -198,6 +253,57 @@ def validate_stack_definition(
     return errors
 
 
+def sanitize_member_networking(
+    net: Optional[Dict[str, Any]],
+    allowed_fields,
+    drop=("url",),
+) -> Optional[Dict[str, Any]]:
+    """Strip runtime-only keys from a live pod's networking so it validates as *template* networking.
+
+    A live pod's networking entries carry service-managed keys (custom_domain, custom_domain_verified,
+    a generated url, ...) that the template Networking model forbids (extra=forbid). When snapshotting
+    a live stack into a kind='stack' tag we keep only `allowed_fields` per entry, and also drop
+    anything in `drop` (the generated `url` is re-derived per pod at instantiation).
+
+    `allowed_fields` is the set of template-valid networking field names (passed in by the caller so
+    this stays a pure, import-light function). Returns a new dict; non-dict input is returned as-is.
+    """
+    if not isinstance(net, dict):
+        return net
+    allowed = set(allowed_fields)
+    drop = set(drop or ())
+    cleaned: Dict[str, Any] = {}
+    for entry_name, spec in net.items():
+        if isinstance(spec, dict):
+            spec = {k: v for k, v in spec.items() if k in allowed and k not in drop}
+        cleaned[entry_name] = spec
+    return cleaned
+
+
+def placeholderize_secret_value(val: Any) -> Any:
+    """For snapshots: keep shared-stack references and existing placeholders; replace any concrete
+    secret reference/value with a required placeholder so a template never embeds a real secret."""
+    if not isinstance(val, str):
+        return val
+    if val.startswith("${stack:secrets:") or val.startswith("${:?") or val.startswith("${pods:default:"):
+        return val
+    return "${:?provide this secret value}"
+
+
+def unbake_host_refs(s: Any, k8_to_ref: Dict[str, str]) -> Any:
+    """Reverse a stack's member k8 hostnames back into portable ${stack:<name>:host} references.
+
+    `k8_to_ref` maps each member's in-cluster k8 name -> its ${stack:<name>:host} reference. Used when
+    snapshotting a live stack so cross-member wiring becomes template-portable again. Non-str in,
+    non-str out unchanged.
+    """
+    if not isinstance(s, str):
+        return s
+    for k8, ref in k8_to_ref.items():
+        s = s.replace(k8, ref)
+    return s
+
+
 def compile_member_stack_refs(
     env: Optional[Dict[str, str]],
     secret_map: Optional[Dict[str, str]],
@@ -258,3 +364,153 @@ def compile_member_stack_refs(
         env[k] = v
 
     return env, secret_map
+
+
+# ── L2 reviewed-update plan (pure diff between two member sets) ──────────────────
+# Mirrors the tapis-ui computeStackUpdatePlan so the dry_run plan the API returns matches
+# what the UI previews. See tapis-ui src/app/Pods/STACK_UPDATE_MODEL.md §3.
+
+# A change to one of these forces recreating the member pod (vs an in-place patch).
+PLAN_RECREATE_FIELDS = ["image", "template", "networking", "volume_mounts"]
+# A change to one of these can be applied with a patch + restart.
+PLAN_PATCH_FIELDS = [
+    "environment_variables", "secret_map", "command", "arguments",
+    "resources", "depends_on", "ready_condition", "healthchecks",
+]
+
+
+def _stable(v: Any) -> str:
+    """Order-insensitive serialization so field equality ignores dict key order."""
+    import json
+    return json.dumps(v, sort_keys=True, default=str)
+
+
+def compute_stack_member_plan(
+    old_members: List[Dict[str, Any]],
+    new_members: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Diff two stack-template member sets (pinned tag vs newer tag) by member `name`.
+
+    Returns a list of {name, kind, changed_fields, destructive} where kind is one of
+    add | remove | recreate | patch | unchanged. Destructive == a member is removed, or a
+    PERSISTENT volume (tapisvolume/tapissnapshot) is added/removed/repointed. An
+    ephemeral/config_content mount carries no data, so changing it is a non-destructive
+    recreate. Pure — no DB, no side effects.
+    """
+    old_by = {m["name"]: m for m in (old_members or []) if m.get("name")}
+    new_by = {m["name"]: m for m in (new_members or []) if m.get("name")}
+    names = sorted(set(old_by) | set(new_by))
+    fields = list(dict.fromkeys(PLAN_RECREATE_FIELDS + PLAN_PATCH_FIELDS))
+
+    plan: List[Dict[str, Any]] = []
+    for name in names:
+        o, n = old_by.get(name), new_by.get(name)
+        if o and not n:
+            plan.append({"name": name, "kind": "remove", "changed_fields": [], "destructive": True})
+            continue
+        if n and not o:
+            plan.append({"name": name, "kind": "add", "changed_fields": [], "destructive": False})
+            continue
+        changed = [f for f in fields if _stable(o.get(f)) != _stable(n.get(f))]
+        if not changed:
+            plan.append({"name": name, "kind": "unchanged", "changed_fields": [], "destructive": False})
+            continue
+        recreate = any(f in PLAN_RECREATE_FIELDS for f in changed)
+        plan.append({
+            "name": name,
+            "kind": "recreate" if recreate else "patch",
+            "changed_fields": changed,
+            # Only a persistent-volume topology change risks data — not a config edit.
+            "destructive": _persistent_volume_changed(o.get("volume_mounts"), n.get("volume_mounts")),
+        })
+    return plan
+
+
+# A mount holds real data only if it's a tapisvolume/tapissnapshot. Ephemeral/config
+# mounts (config_content) carry no data — changing them is a safe recreate.
+_PERSISTENT_MOUNT_TYPES = {"tapisvolume", "tapissnapshot"}
+
+
+def _is_persistent_mount(vm: Any) -> bool:
+    return isinstance(vm, dict) and str(vm.get("type") or "").lower() in _PERSISTENT_MOUNT_TYPES
+
+
+def _persistent_volume_changed(old_vm: Any, new_vm: Any) -> bool:
+    """True only when a persistent volume is added, removed, or repointed (source_id/sub_path)
+    between two member versions. A config_content / ephemeral-mount change returns False."""
+    old_vm = old_vm if isinstance(old_vm, dict) else {}
+    new_vm = new_vm if isinstance(new_vm, dict) else {}
+    for path in set(old_vm) | set(new_vm):
+        o, n = old_vm.get(path), new_vm.get(path)
+        o_persist, n_persist = _is_persistent_mount(o), _is_persistent_mount(n)
+        if o_persist != n_persist:
+            return True  # persistent added / removed / type-flipped
+        if o_persist and n_persist:
+            o_id = (str(o.get("source_id") or ""), str(o.get("sub_path") or ""))
+            n_id = (str(n.get("source_id") or ""), str(n.get("sub_path") or ""))
+            if o_id != n_id:
+                return True  # repointed to different data
+    return False
+
+
+# ── snapshot minimization (save_as_template hygiene) ────────────────────────────
+# Prune a live-pod snapshot down to an authored-looking definition: drop fields equal to service
+# defaults, but KEEP every ${...} reference / secret_map / placeholder. Also reset baked
+# tapis_auth_allowed_users to the AUTHORIZED_USERS sentinel so a template never leaks real usernames.
+# See tapis-ui src/app/Pods/STACK_UPDATE_MODEL.md (snapshot = authored layer, not resolved blob).
+
+AUTHORIZED_USERS_SENTINEL = ["AUTHORIZED_USERS"]
+
+
+def _has_ref(v: Any) -> bool:
+    """True if a value (or anything nested) carries a ${...} reference — those are never pruned."""
+    if isinstance(v, str):
+        return "${" in v
+    if isinstance(v, dict):
+        return any(_has_ref(x) for x in v.values())
+    if isinstance(v, list):
+        return any(_has_ref(x) for x in v)
+    return False
+
+
+def strip_defaults(
+    d: Dict[str, Any],
+    defaults: Dict[str, Any],
+    always_keep: Tuple[str, ...] = (),
+) -> Dict[str, Any]:
+    """Drop top-level keys whose value equals defaults[key] or is empty; keep always_keep keys and
+    any value carrying a ${...} reference. Pure."""
+    out: Dict[str, Any] = {}
+    for k, v in (d or {}).items():
+        if k in always_keep or _has_ref(v):
+            out[k] = v
+            continue
+        if k in defaults and _stable(v) == _stable(defaults[k]):
+            continue
+        if v in (None, {}, [], ""):
+            continue
+        out[k] = v
+    return out
+
+
+def minimize_member_networking(
+    networking: Dict[str, Any], entry_defaults: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Per networking entry: reset tapis_auth_allowed_users to the AUTHORIZED_USERS sentinel (so baked
+    usernames never persist into a reusable template), then strip fields equal to model defaults
+    (always keep protocol/port and any ${...} ref)."""
+    out: Dict[str, Any] = {}
+    for name, entry in (networking or {}).items():
+        if not isinstance(entry, dict):
+            out[name] = entry
+            continue
+        e = dict(entry)
+        if "tapis_auth_allowed_users" in e:
+            e["tapis_auth_allowed_users"] = list(AUTHORIZED_USERS_SENTINEL)
+        out[name] = strip_defaults(e, entry_defaults, always_keep=("protocol", "port"))
+    return out
+
+
+def minimize_resources(resources: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep only meaningfully-set resource fields (positive ints); drop None / -1 (unset) / 0."""
+    return {k: v for k, v in (resources or {}).items() if isinstance(v, int) and v > 0}
