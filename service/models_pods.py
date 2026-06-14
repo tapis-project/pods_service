@@ -112,6 +112,9 @@ class Networking(TapisModel):
     proxy_compression_encodings: list[str] = Field(["zstd", "br", "gzip"], description = "Ordered list of compression encodings by priority. Valid values: 'zstd', 'br', 'gzip'.")
     proxy_compression_excluded_content_types: list[str] = Field([], description = "Content types to exclude from compression. Already-compressed formats (images, video, archives) are excluded automatically. Set explicit types here to add additional exclusions.")
     proxy_compression_min_response_body_bytes: int = Field(1024, description = "Minimum response body size in bytes before compression is applied. Responses smaller than this are not compressed.")
+    # Bring-your-own-domain
+    custom_domain: str = Field("", description = "Custom domain to route to this networking entry in addition to the default pods URL. Must be a valid hostname. ex. 'myapp.example.com'. Add a CNAME record pointing your domain to pods.tacc.tapis.io, then the service will verify and activate routing automatically.")
+    custom_domain_verified: bool = Field(False, description = "Set to true by the service once the CNAME for custom_domain is confirmed to point at the pods infrastructure. Do not set manually.")
 
     @validator('protocol')
     def check_protocol(cls, v):
@@ -349,6 +352,35 @@ class Networking(TapisModel):
         if v > 10485760:  # 10 MiB max
             raise ValueError(f"networking.proxy_compression_min_response_body_bytes must be <= 10485760 (10 MiB). Got {v}.")
         return v
+
+    @validator('custom_domain')
+    def check_custom_domain(cls, v):
+        if v:
+            import re as _re
+            # Must be a valid hostname (labels separated by dots, no scheme, no path)
+            if '/' in v or ':' in v:
+                raise ValueError(f"networking.custom_domain must be a bare hostname without scheme or path. Got '{v}'")
+            labels = v.split('.')
+            if len(labels) < 2:
+                raise ValueError(f"networking.custom_domain must be a fully-qualified domain (at least two labels). Got '{v}'")
+            label_re = _re.compile(r'^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?$')
+            for label in labels:
+                if not label or not label_re.match(label):
+                    raise ValueError(f"networking.custom_domain has invalid label '{label}' in '{v}'")
+            if len(v) > 253:
+                raise ValueError(f"networking.custom_domain must be 253 characters or fewer. Got length {len(v)}.")
+            # POD-HIJACK GUARD: never let a custom_domain name the pods infrastructure
+            # itself. Verification only proves the name RESOLVES to our ingress — which
+            # is trivially true for any *.pods.<base> hostname — so without this a pod
+            # could claim another pod's hostname, and the resulting longer Host rule
+            # wins traefik's length-based priority. Real ownership proof (a per-pod TXT
+            # challenge) is the proper fix; this closes the self-referential case.
+            lowered = v.lower()
+            if '.pods.' in f".{lowered}" or lowered.startswith('pods.'):
+                raise ValueError(
+                    f"networking.custom_domain may not be a pods-infrastructure hostname "
+                    f"(got '{v}'). Use a domain you control and point a CNAME at the pods ingress.")
+        return v.lower() if v else v
 
     @model_validator(mode="after")
     def check_tapis_protocol_with_configured_options(cls, values):

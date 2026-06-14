@@ -110,7 +110,7 @@ http:
     {{ pname }}:
       entryPoints:
        - web
-      rule: "Host(`{{ pdata.url }}`)"
+      rule: "Host(`{{ pdata.url }}`){% if pdata.custom_domain and pdata.custom_domain_verified %} || Host(`{{ pdata.custom_domain }}`){% endif %}"
       {% if pdata.tapis_auth or pdata.cors_allow_origins or pdata.ip_allow_list or (pdata.proxy_compression is defined and pdata.proxy_compression) -%}
       middlewares:
         {% if pdata.ip_allow_list -%}
@@ -138,7 +138,7 @@ http:
       entryPoints:
        - web
       rule: >-
-        Host(`{{ pdata.url }}`) && (
+        (Host(`{{ pdata.url }}`){% if pdata.custom_domain and pdata.custom_domain_verified %} || Host(`{{ pdata.custom_domain }}`){% endif %}) && (
         {%- set rule_parts = [] -%}
         {%- for path in pdata.tapis_auth_excluded_paths -%}
           {%- set _ = rule_parts.append('PathPrefix(`' + path + '`)') -%}

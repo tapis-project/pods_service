@@ -115,6 +115,7 @@ The edge release. Pods learned to leave the cluster.
 - Template gallery: templates can carry photos and a note (5MB per image, admin-gated writes).
 - Volume and snapshot usage reporting, plus pod events and per-pod metrics routes.
 - Volume/snapshot listing accepts `?path=` to list a subdirectory instead of the whole root.
+- Bring your own domain: pods can be served at a custom domain with DNS verification and an extended Traefik route.
 
 ### Bug fixes:
 - Timestamps are stamped by write-kind, so `updated` no longer moves on reads and internal writes.

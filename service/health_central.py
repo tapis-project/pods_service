@@ -12,6 +12,7 @@ Does the following:
 """
 
 import os
+import socket
 import subprocess
 import time
 import random
@@ -270,6 +271,14 @@ def nfs_folder_init(tenant):
         raise BaseTapyException(msg)
 
 
+def _check_custom_domain_dns(custom_domain: str, pods_ingress: str) -> bool:
+    """Return True if custom_domain resolves to the same IP as pods_ingress."""
+    try:
+        return socket.gethostbyname(custom_domain) == socket.gethostbyname(pods_ingress)
+    except socket.gaierror:
+        return False
+
+
 def set_traefik_proxy():
     all_pods = []
     stmt = select(Pod)
@@ -343,6 +352,26 @@ def set_traefik_proxy():
                 )),
                 "proxy_compression_min_response_body_bytes": net_info.get('proxy_compression_min_response_body_bytes', 1024),
             }
+            ## custom domain (BYOD) — only relevant for http protocol
+            custom_domain = net_info.get('custom_domain', '')
+            custom_domain_verified = net_info.get('custom_domain_verified', False)
+            if custom_domain and net_info.get('protocol') == 'http':
+                pods_ingress = 'pods.' + net_info['url'].split('.pods.', 1)[1]
+                currently_verified = _check_custom_domain_dns(custom_domain, pods_ingress)
+                if currently_verified != custom_domain_verified:
+                    try:
+                        raw_net = {k: (v.dict() if hasattr(v, 'dict') else dict(v)) for k, v in input_pod.networking.items()}
+                        raw_net.setdefault(net_name, {})['custom_domain_verified'] = currently_verified
+                        input_pod.networking = raw_net
+                        input_pod.db_update(tenant=input_pod.tenant_id, site=input_pod.site_id, user_update=False)
+                        logger.info(f"custom_domain_verified={currently_verified} for pod {pod.pod_id} net '{net_name}'")
+                    except Exception as e:
+                        logger.error(f"Failed to update custom_domain_verified for pod {pod.pod_id}: {e}")
+                    custom_domain_verified = currently_verified
+            custom_domain_info = {
+                "custom_domain": custom_domain,
+                "custom_domain_verified": custom_domain_verified,
+            }
             logger.debug(f"pod_id: {pod_id}, tapis_domain: {tapis_domain}, net_info: {net_info}, traefik_forward_auth_info: {forward_auth_info}, cors_info: {cors_info}, ip_allow_list: {ip_allow_list_info}, compression_info: {compression_info}")
             match net_info['protocol']:
                 case "tcp":
@@ -360,6 +389,8 @@ def set_traefik_proxy():
                     template_info.update(ip_allow_list_info)
                     # proxy compression
                     template_info.update(compression_info)
+                    # custom domain (BYOD)
+                    template_info.update(custom_domain_info)
                     http_proxy_info[traefik_service_name] = template_info
                 case "postgres":
                     # ip_allow_list
