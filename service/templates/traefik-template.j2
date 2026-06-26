@@ -17,6 +17,10 @@ http:
           - "501-599"
         service: pods-service
         query: "/error-handler/{status}"
+    not-found-rewrite:
+      replacePathRegex:
+        regex: ".*"
+        replacement: "/pod-not-found"
 
     {% for pname, pdata in http_proxy_info.items() -%}
     {% if pdata.tapis_auth -%}
@@ -183,7 +187,7 @@ http:
     catch-all-error-handler:
       rule: "PathPrefix(`/*`)"
       middlewares:
-       - "error-handler"
+       - "not-found-rewrite"
       service: pods-service
 
   services:
