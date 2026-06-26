@@ -13,6 +13,7 @@ Does the following:
 
 import os
 import socket
+import ssl
 import subprocess
 import time
 import random
@@ -279,6 +280,144 @@ def _check_custom_domain_dns(custom_domain: str, pods_ingress: str) -> bool:
         return False
 
 
+# In-memory throttle/state for TLS cert probing. Keyed by (pod_id, net_name).
+# health_central is a single long-running process, so module-level state is safe here
+# and keeps throttle bookkeeping out of the DB (we only write the DB on real transitions).
+_cert_probe_last = {}        # (pod_id, net_name) -> monotonic ts of last probe
+_cert_provision_started = {} # (pod_id, net_name) -> monotonic ts cert was first seen provisioning
+
+
+def _probe_cert_status(hostname: str, timeout: float) -> str:
+    """Probe hostname:443 and classify the outcome — CRITICAL distinction:
+
+    - 'ready'       — a browser-style *verifying* TLS handshake succeeded → the real
+                      Let's Encrypt cert is live and trusted.
+    - 'invalid'     — we connected, but the TLS/cert is not trusted (name mismatch /
+                      Traefik still serving its default cert) → genuinely still provisioning.
+    - 'unreachable' — we couldn't even connect (DNS / timeout / no route). This is NOT a
+                      cert problem; it usually means the health pod has no path to the
+                      *public* URL. We must NOT treat this as "provisioning" — doing so
+                      mislabels healthy pods and makes the UI divert users to a wait page
+                      for a cert that's actually fine.
+
+    The old code collapsed 'invalid' and 'unreachable' into one False, which is what caused
+    "all pods say cert not ready" in environments where the probe can't reach the endpoint.
+    """
+    ctx = ssl.create_default_context()  # check_hostname=True, verify_mode=CERT_REQUIRED
+    try:
+        sock = socket.create_connection((hostname, 443), timeout=timeout)
+    except Exception:
+        return 'unreachable'
+    try:
+        with ctx.wrap_socket(sock, server_hostname=hostname) as ssock:
+            ssock.getpeercert()
+        return 'ready'
+    except ssl.SSLError:
+        # Connected, but cert untrusted/mismatched (e.g. default cert during issuance).
+        return 'invalid'
+    except Exception:
+        # Handshake-time timeout or other ambiguous failure — don't guess "provisioning".
+        return 'unreachable'
+    finally:
+        try:
+            sock.close()
+        except Exception:
+            pass
+
+
+def _evaluate_http_cert(input_pod, net_name, net_info, now_mono):
+    """Throttled TLS-cert readiness check for one http networking entry. VISIBILITY ONLY —
+    the result never affects routing (see set_traefik_proxy).
+
+    Persists cert_ready/cert_state/timings into input_pod.networking (same write-back pattern
+    as custom_domain_verified) and appends action_logs on state transitions. Honors the cert_*
+    config knobs. Returns cert_ready (bool). Idempotent: an already-good cert on a pre-existing
+    pod is detected 'ready' on the first reachable probe; an unreachable probe leaves state
+    untouched so healthy pods are never mislabeled 'provisioning'.
+    """
+    url = net_info.get('url')
+    if not url or not getattr(conf, 'cert_splash_enabled', True):
+        return True
+
+    prev_ready = bool(net_info.get('cert_ready', False))
+    prev_state = net_info.get('cert_state', '') or ''
+
+    # Once a cert is confirmed live it stays valid (~90d); stop probing.
+    if prev_ready:
+        return True
+
+    key = (input_pod.pod_id, net_name)
+    interval = getattr(conf, 'cert_probe_interval_seconds', 6)
+    last = _cert_probe_last.get(key)
+    if last is not None and now_mono - last < interval:
+        return prev_ready
+    _cert_probe_last[key] = now_mono
+
+    timeout = getattr(conf, 'cert_probe_timeout_seconds', 4)
+    status = _probe_cert_status(url, timeout)   # 'ready' | 'invalid' | 'unreachable'
+
+    # Unreachable from the health pod → we cannot determine cert state, so we DON'T guess.
+    # Leave cert_state untouched (stays '' / unknown) so nothing logs "provisioning" and the
+    # UI never diverts users to the wait page for a pod whose cert is probably fine.
+    if status == 'unreachable':
+        return False
+
+    ready = (status == 'ready')
+    started = _cert_provision_started.setdefault(key, now_mono)
+    max_wait = getattr(conf, 'cert_provisioning_max_seconds', 180)
+
+    log = None
+    if ready:
+        new_state = 'ready'
+        if prev_state != 'ready':
+            log = f"TLS certificate ready for {url}"
+    elif now_mono - started >= max_wait:
+        # Connected but cert still untrusted past max wait — record 'failed' (informational).
+        new_state = 'failed'
+        if prev_state != 'failed':
+            log = f"TLS certificate still not verified for {url} after {int(now_mono - started)}s"
+    else:
+        # Connected, cert not yet trusted → genuinely mid-issuance.
+        new_state = 'provisioning'
+        if prev_state != 'provisioning':
+            log = f"TLS certificate provisioning for {url} (Let's Encrypt)…"
+
+    if new_state != prev_state or ready != prev_ready:
+        try:
+            raw_net = {k: (v.dict() if hasattr(v, 'dict') else dict(v)) for k, v in input_pod.networking.items()}
+            entry = raw_net.setdefault(net_name, {})
+            entry['cert_ready'] = ready
+            entry['cert_state'] = new_state
+            # Wall-clock timestamps for the admin timings view (set once, on first transition).
+            now_iso = datetime.utcnow().isoformat()
+            if new_state == 'provisioning' and not entry.get('cert_provisioning_started_at'):
+                entry['cert_provisioning_started_at'] = now_iso
+            if ready and not entry.get('cert_ready_at'):
+                entry['cert_ready_at'] = now_iso
+            input_pod.networking = raw_net
+            input_pod.db_update(log=log, tenant=input_pod.tenant_id, site=input_pod.site_id, user_update=False)
+        except Exception as e:
+            logger.error(f"Failed to update cert_state for pod {input_pod.pod_id} net '{net_name}': {e}")
+
+    return ready
+
+
+def _prewarm_cert(pod_id, key_suffix, hostname, now_mono):
+    """Fire-and-forget TLS handshake to trigger Traefik's on-demand cert issuance for a domain
+    before any user visits it (the first handshake to a certless host is what kicks off ACME).
+    Used for BYOD custom domains, whose cert state we don't otherwise track. Throttled per host;
+    result is intentionally ignored."""
+    if not hostname or not getattr(conf, 'cert_splash_enabled', True):
+        return
+    key = (pod_id, key_suffix)
+    interval = getattr(conf, 'cert_probe_interval_seconds', 6)
+    last = _cert_probe_last.get(key)
+    if last is not None and now_mono - last < interval:
+        return
+    _cert_probe_last[key] = now_mono
+    _probe_cert_status(hostname, getattr(conf, 'cert_probe_timeout_seconds', 4))
+
+
 def _is_pod_networking_live(pod, input_pod) -> bool:
     """Return True when traffic should route to the real pod service.
     Uses status_container['ready'] (written by health.py each cycle) so this
@@ -311,6 +450,13 @@ def set_traefik_proxy():
     stmt = select(Pod)
     for tenant in SITE_TENANT_DICT[conf.site_id]:
         all_pods += pg_store[conf.site_id][tenant].run("execute", stmt, scalars=True, all=True)
+
+    # Prune cert-state entries for pods that no longer exist — these module-level dicts are
+    # keyed by (pod_id, net_name) and would otherwise grow unbounded as pods are deleted.
+    _valid_pod_ids = {p.pod_id for p in all_pods}
+    for _cert_dict in (_cert_probe_last, _cert_provision_started):
+        for _stale in [k for k in _cert_dict if k[0] not in _valid_pod_ids]:
+            del _cert_dict[_stale]
 
     ### Proxy ports and config changes
     # For proxy config later. proxy_info_x = {pod.k8_name: {routing_port, url}, ...} 
@@ -345,6 +491,21 @@ def set_traefik_proxy():
                 traefik_service_name = f"{pod.k8_name}-{net_name}"
             else:
                 traefik_service_name = pod.k8_name
+
+            # Cert tracking + pre-warm — VISIBILITY ONLY, never routing. We probe/track the
+            # cert once the pod is AVAILABLE (action_logs + admin timings) and warm it via a
+            # best-effort handshake. We deliberately do NOT hold the splash on cert state:
+            # doing so broke working pods and deadlocked issuance — the splash middleware
+            # rewrites every path (incl. the ACME HTTP-01 challenge at /.well-known/...), so a
+            # cert-gated splash prevents the very cert it's waiting for, and the in-cluster
+            # verifying probe can't always reach the public endpoint. Pods route to the real
+            # backend as soon as networking-live (splash is driven by readiness only); Traefik
+            # issues the cert on the first real hit, and the UI holding route covers users.
+            if net_info.get('protocol') == 'http' and input_pod.status == AVAILABLE:
+                _now_mono = time.monotonic()
+                _evaluate_http_cert(input_pod, net_name, net_info, _now_mono)
+                if net_info.get('custom_domain') and net_info.get('custom_domain_verified'):
+                    _prewarm_cert(input_pod.pod_id, f"{net_name}:custom", net_info['custom_domain'], _now_mono)
 
             # Splash mode: route to pods-api splash endpoint instead of real service
             if splash_mode and net_info.get('protocol') == 'http':

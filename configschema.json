@@ -117,6 +117,31 @@
         "description": "Whether or not to echo postgres engine queries for debugging.",
         "default": false
       },
+      "cert_splash_enabled": {
+        "type": "boolean",
+        "description": "When true, the health loop probes each http pod domain's TLS certificate and holds the Traefik splash route (rather than the real pod) until a valid Let's Encrypt cert is confirmed, logging provisioning progress to the pod's action_logs. Set false to disable cert tracking/holding entirely.",
+        "default": true
+      },
+      "cert_probe_interval_seconds": {
+        "type": "integer",
+        "description": "Minimum seconds between TLS handshake probes for a single pod domain while its cert is being provisioned. Throttles outbound probes so a burst of starting pods can't stall the health loop.",
+        "default": 6
+      },
+      "cert_probe_timeout_seconds": {
+        "type": "integer",
+        "description": "Timeout (seconds) for the outbound TLS handshake used to detect whether a pod domain's Let's Encrypt cert is live.",
+        "default": 4
+      },
+      "cert_provisioning_max_seconds": {
+        "type": "integer",
+        "description": "How long to keep holding the splash / marking a domain 'provisioning' before giving up (state 'failed') and releasing the splash so the pod is at least reachable. Guards dev/local domains that will never get a public cert.",
+        "default": 180
+      },
+      "cert_splash_refresh_seconds": {
+        "type": "integer",
+        "description": "Auto-refresh / Retry-After interval (seconds) for the Traefik splash page shown while a pod is starting or its cert is being issued.",
+        "default": 10
+      },
       "compute_queues": {
         "type": "array",
         "description": "List of node objects available to the spawner using this config.",

@@ -115,6 +115,11 @@ class Networking(TapisModel):
     # Bring-your-own-domain
     custom_domain: str = Field("", description = "Custom domain to route to this networking entry in addition to the default pods URL. Must be a valid hostname. ex. 'myapp.example.com'. Add a CNAME record pointing your domain to pods.tacc.tapis.io, then the service will verify and activate routing automatically.")
     custom_domain_verified: bool = Field(False, description = "Set to true by the service once the CNAME for custom_domain is confirmed to point at the pods infrastructure. Do not set manually.")
+    # TLS certificate provisioning (Let's Encrypt via Traefik) — service-managed, do not set manually
+    cert_ready: bool = Field(False, description = "Set to true by the service once a browser-style verifying HTTPS handshake to this networking url succeeds (the Let's Encrypt certificate is live and valid). Used by the UI to avoid sending users to a domain whose cert is still being issued. Do not set manually.")
+    cert_state: str = Field("", description = "Service-managed TLS certificate provisioning state for this networking entry: '' (not started), 'provisioning' (cert being issued by Let's Encrypt), 'ready' (cert valid), or 'failed' (still pending past the configured max wait). Do not set manually.")
+    cert_provisioning_started_at: str = Field("", description = "Service-managed UTC ISO timestamp of when cert provisioning was first observed for this entry. Used for admin cert-timing diagnostics. Do not set manually.")
+    cert_ready_at: str = Field("", description = "Service-managed UTC ISO timestamp of when this entry's TLS certificate was first confirmed ready. Used for admin cert-timing diagnostics. Do not set manually.")
 
     @validator('protocol')
     def check_protocol(cls, v):
