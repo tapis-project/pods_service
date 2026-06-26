@@ -111,6 +111,9 @@ The edge release. Pods learned to leave the cluster.
 - **Stacks** — compose-style multi-pod deployments as one resource: ordered startup, permission inheritance, and stack templates (save-as and create-from). Members share secrets through a `secret_map` that is checked at write time, so a stack can never reference someone else's secret.
 - Stack update endpoint. Destructive from-template updates (member delete/recreate) require stack ADMIN, matching delete.
 
+### Bug fixes:
+- Restored tables dropped by a bad migration; migrations now run and verify on startup.
+
 
 ## 26Q2.0
 

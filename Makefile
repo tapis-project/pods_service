@@ -113,6 +113,14 @@ endif
 	@printf "  🔗 : Spec URL: $(LCYAN)http://$$(minikube ip):$$(kubectl get service pods-api | grep -o -P '(?<=8000:)\d+(?=/TCP)')$(NC)/openapi.json\n"
 	@printf "  🔗 : Traefik Dash URL: $(LCYAN)http://$$(minikube ip):$$(kubectl get service pods-traefik | grep -o -P '(?<=8080:)\d+(?=/TCP)')$(NC)/dashboard\n"
 	@printf "\n"
+ifeq ($(DEV_TOOLS),true)
+# Surface model/schema drift in the terminal. Wait for the new pods-api to be
+# ready (its startup runs `alembic upgrade head`, so the DB is at head by then),
+# then run the read-only check. Non-fatal: never fails `make up`.
+	@printf "  🔍 : Waiting for pods-api to be ready, then checking for migration drift...\n"
+	@kubectl rollout status deploy/pods-api --timeout=120s >/dev/null 2>&1 || true
+	@$(MAKE) -C $(CURDIR) --no-print-directory check || true
+endif
 
 
 #: Initialize a few templates
@@ -250,13 +258,31 @@ endif
 # Directory of tapis-typescript repo relative to this one (override with TAPIS_TS_DIR=...)
 export TAPIS_TS_DIR ?= ../tapis-typescript
 
-#: Run Alembic migrations inside the running pods-api container (requires make up first).
-#: alembic/versions is live-mounted when DEV_TOOLS=true; new .py files appear instantly.
+# alembic/versions is live-mounted when DEV_TOOLS=true; new .py files appear instantly.
+#: Apply Alembic migrations (alembic upgrade head) in the pods-api container (needs make up).
 migrate:
 	@printf "Makefile: $(GREEN)migrate$(NC)\n"
 	@printf "  📦 : Running alembic upgrade head in pods-api container.\n"
 	kubectl exec deploy/pods-api -- bash -c "cd /home/tapis && alembic upgrade head 2>&1 | grep -E 'Running upgrade|ERROR|already up to date' || true"
 	@printf "  ✅ : Migrations complete.\n"
+	@printf "\n"
+
+# Read-only: writes no files, makes no schema changes. Runs at the end of make up too.
+#: Check whether models have drifted from the DB schema (do you need a new migration?).
+check:
+	@printf "Makefile: $(GREEN)check$(NC)\n"
+	@printf "  🔍 : alembic check in pods-api container.\n"
+	kubectl exec deploy/pods-api -- bash -c "cd /home/tapis && alembic check 2>&1 | grep -E 'No new upgrade|New upgrade operations detected' || true"
+	@printf "\n"
+
+# Usage: make autorevision msg="add foo column". Review the generated file before committing.
+#: Autogenerate a new Alembic revision from model changes (manual dev step).
+autorevision:
+	@printf "Makefile: $(GREEN)autorevision$(NC)\n"
+	@if [ -z "$(msg)" ]; then printf "  ❌ : provide a message, e.g. make autorevision msg=\"add foo column\"\n"; exit 1; fi
+	@printf "  📦 : alembic revision --autogenerate -m '$(msg)' in pods-api container.\n"
+	kubectl exec deploy/pods-api -- bash -c "cd /home/tapis && alembic revision --autogenerate -m '$(msg)'"
+	@printf "  ✅ : Revision generated in alembic/versions/ — review it before committing.\n"
 	@printf "\n"
 
 

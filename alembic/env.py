@@ -76,6 +76,9 @@ from models_cluster import Cluster
 from models_logs import Log
 from models_secrets import Secret
 from models_stacks import Stack
+from models_traffic import TrafficLog
+from models_pod_log_runs import PodLogRun
+from models_template_gallery import TemplateGallery
 
 target_metadata = SQLModel.metadata
 
@@ -93,7 +96,9 @@ def run_migrations_online():
     # This callback is used to prevent an auto-migration from being generated when
     # there are no changes to the schema https://stackoverflow.com/questions/70203927
     def process_revision_directives(context, revision, directives):
-        if config.cmd_opts.autogenerate:
+        # `autogenerate` is only present on cmd_opts for `alembic revision`;
+        # it's absent for `alembic check`, so guard with getattr.
+        if getattr(config.cmd_opts, "autogenerate", False):
             script = directives[0]
             if not script.upgrade_ops_list and script.upgrade_ops.is_empty():
                 directives[:] = []
