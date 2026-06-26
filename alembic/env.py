@@ -5,9 +5,19 @@ import logging
 from logging.config import fileConfig
 import re
 import os
+import hashlib
 
 from sqlalchemy import create_engine, text
 from sqlalchemy import pool
+
+
+def _advisory_key(name: str) -> int:
+    """Stable signed-bigint key for a Postgres advisory lock, derived from a schema name.
+    Used to serialize concurrent `alembic upgrade` runs (multiple API replicas start at once)
+    so they don't race on the same tenant schema."""
+    h = hashlib.sha1(("pods_alembic:" + name).encode()).digest()
+    # 63-bit unsigned, shifted into the signed bigint range pg_advisory_xact_lock expects.
+    return int.from_bytes(h[:8], "big") % (2 ** 63) - (2 ** 62)
 
 from alembic import context
 
@@ -124,6 +134,16 @@ def run_migrations_online():
                 logger.info(f"{connection}")
                 # Start a transaction context
                 with connection.begin():
+                    # Serialize concurrent migrators: multiple API replicas all run
+                    # `alembic upgrade head` on startup, and racing on the same tenant schema
+                    # caused intermittent failures (the "restart it twice" symptom). A
+                    # transaction-scoped advisory lock makes the others wait, then find the
+                    # schema already at head (no-op). pg_advisory_xact_lock auto-releases at
+                    # COMMIT/ROLLBACK — no manual unlock, safe across crashes.
+                    connection.execute(
+                        text("SELECT pg_advisory_xact_lock(:k)"),
+                        {"k": _advisory_key(name)},
+                    )
                     connection.execute(text(f'SET search_path TO "{tenant}"'))
                     connection.dialect.default_schema_name = tenant
                     context.configure(
