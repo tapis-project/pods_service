@@ -184,14 +184,21 @@ class TestParseSecretReferenceDefaultPlaceholder:
         assert ref.description == "Redis hostname"
     
     def test_default_placeholder_empty_default(self):
-        """${pods:default::?description} with empty default should be marked required."""
+        """${pods:default::?description} is OPTIONAL with an empty-string default.
+
+        The pods:default: form always carries a default, so it is never required —
+        an empty default means "leave blank → resolves to ''". Required-with-no-default
+        is expressed by ${:?desc} instead.
+        """
         ref, error = parse_secret_reference("${pods:default::?Optional cache host}")
-        
+
         assert error is None
         assert ref.is_placeholder is True
-        # Empty default value means it's effectively required
-        assert ref.default_value is None
-        assert ref.is_required is True
+        # Empty default is preserved (not coerced to None) so has_default stays True
+        # and resolution injects "".
+        assert ref.default_value == ""
+        assert ref.is_required is False
+        assert ref.description == "Optional cache host"
     
     def test_default_placeholder_numeric_value(self):
         """Default value can be numeric."""

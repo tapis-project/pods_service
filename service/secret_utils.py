@@ -293,12 +293,17 @@ def parse_secret_reference(value: str, actor: str = None) -> Tuple[Optional[Secr
             if not desc_part.startswith('?'):
                 return (None, f"Invalid placeholder format: '{value}'. Description must start with '?' (e.g., ${{pods:default:value:?description}}).")
             description = desc_part[1:]  # Strip the leading ?
+        # The pods:default: form always carries a default, so it is never required.
+        # An empty default (${pods:default::?desc}) means "optional, default empty
+        # string" — leave it blank and it resolves to "". (Required-with-no-default
+        # is expressed by ${:?desc}.) We keep the empty string rather than coercing
+        # to None so has_default stays True and resolution injects "".
         return (SecretReference(
             raw_value=value,
             is_placeholder=True,
-            is_required=(default_value == ''),
+            is_required=False,
             secret_id=None,
-            default_value=default_value if default_value else None,
+            default_value=default_value,
             description=description,
             is_user_secret=False,
             secret_owner=None
