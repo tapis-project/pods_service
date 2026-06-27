@@ -11,7 +11,7 @@ if [ $PODS_COMPONENT = "api" ]; then
     # Set up stores during init.
     python3 -u /home/tapis/service/stores.py
     # Start API with 5 worker processes
-    cd /home/tapis/service; uvicorn api:api --workers ${PODS_UVICORN_WORKERS:-6} --host 0.0.0.0 --port 8000
+    cd /home/tapis/service; uvicorn api:api --workers ${PODS_UVICORN_WORKERS:-1} --host 0.0.0.0 --port 8000
     # prod - https://www.uvicorn.org/deployment/
     # gunicorn uvicorn.worker stuff
 elif [ $PODS_COMPONENT = "health" ]; then
