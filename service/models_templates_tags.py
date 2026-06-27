@@ -898,7 +898,16 @@ class TemplateTag(TapisTemplateTagBaseFull, table=True, validate=True):
                 if mount_config and mount_config.get('type') in ('ephemeral', 'tapisvolume') and mount_config.get('config_content'):
                     content_size = len(mount_config['config_content'])
                     mount_config['config_content'] = f"<{content_size} bytes - use ?include_configs=true to retrieve>"
-        
+
+        # Kind-aware: a stack tag carries a vestigial default pod_definition (and vice versa) that the
+        # mutual-exclusion validator keeps empty. Drop the irrelevant definition so responses and
+        # save_as_template snapshots aren't noisy. The combine/instantiation paths read the model
+        # fields directly (not display()), so they are unaffected.
+        if getattr(self, 'kind', 'pod') == 'stack':
+            display.pop('pod_definition', None)
+        else:
+            display.pop('stack_definition', None)
+
         return display
     
     def display_small(self):

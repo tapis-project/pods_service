@@ -115,6 +115,8 @@ The edge release. Pods learned to leave the cluster.
 - Restored tables dropped by a bad migration; migrations now run and verify on startup.
 - `PODS_UVICORN_WORKERS` defaults to 1 so only one background loop runs.
 - Unexpected 500s log the full server traceback instead of a bare message.
+- Startup migrations are serialized with a Postgres advisory lock, so concurrent replicas can't race each other.
+- Template tag display is kind-aware — a stack tag no longer shows an empty pod definition.
 
 
 ## 26Q2.0
