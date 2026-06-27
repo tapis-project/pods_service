@@ -954,6 +954,7 @@ class NewTemplateTag(TapisApiModel):
     kind: str = Field("pod", description = "Tag kind: 'pod' (default) or 'stack'.")
     stack_definition: Optional[StackTagDefinition] = Field(None, description = "Stack definition for this template tag (required when kind='stack').", sa_column=Column(JSON))
     commit_message: str = Field(..., description = "Commit message for this template tag.")
+    description: str = Field("", description = "Description of template tag. Markdown-supported version notes/usage, distinct from the one-line commit_message.")
     tag: str = Field("latest", description = "Tag for this template. Default is 'latest'.")
 
 class NewTemplateTagFromPod(TapisApiModel):
@@ -961,6 +962,7 @@ class NewTemplateTagFromPod(TapisApiModel):
     Object with fields that users are allowed to specify for the Template class when creating a new template tag from a pod.
     """
     commit_message: str = Field(..., description = "Commit message for this template tag.")
+    description: str = Field("", description = "Description of template tag. Markdown-supported version notes/usage, distinct from the one-line commit_message.")
     tag: str = Field("latest", description = "Tag for this template. Default is 'latest'.")
     template_id: str = Field(..., description="template_id this tag is linked to")
 
