@@ -1,7 +1,7 @@
 import re
 import json
 from fastapi import APIRouter, Query
-from models_pods import Pod, UpdatePod, PodResponse, Password, PodDeleteResponse, PodsFinalResponse, PodBaseFull
+from models_pods import Pod, UpdatePod, PodResponse, Password, PodDeleteResponse, PodsFinalResponse, PodBaseFull, ResetPodFields
 from channels import CommandChannel
 from tapisservice.tapisfastapi.utils import g, ok, error
 from models_templates_utils import combine_pod_and_template_recursively, get_template_merged_secret_map, validate_pod_secret_map_against_template
@@ -244,6 +244,101 @@ async def update_pod(pod_id, update_pod: UpdatePod):
                           "status_requested, volume_mounts, networking, or resources.")})
 
 
+# Fields that can be reset to their template default. The value is what the field
+# is cleared to BEFORE re-deriving from the template (so combine_pod_and_template
+# re-supplies it). See CONFIG_CONTENT_MODEL.md (tapis-ui). Identity/lifecycle
+# fields (pod_id, template, status_requested, …) are intentionally excluded.
+RESETTABLE_FIELD_DEFAULTS = {
+    "volume_mounts": {},
+    "environment_variables": {},
+    "secret_map": {},
+    "networking": {},
+    "resources": {},
+    "template_overrides": None,
+    "healthchecks": None,
+    "command": None,
+    "arguments": None,
+    "image": "",
+    "description": "",
+    "compute_queue": "default",
+    "depends_on": None,
+    "ready_condition": None,
+}
+
+
+@router.post(
+    "/pods/{pod_id}/reset_field",
+    tags=["Pods"],
+    summary="reset_pod_field",
+    operation_id="reset_pod_field",
+    response_model=PodResponse)
+async def reset_pod_field(pod_id, reset_fields: ResetPodFields):
+    """
+    Reset one or more pod fields to their template default.
+
+    Removes each field from `modified_fields` and re-materializes it from the
+    pod's template, re-linking the field to the template (undoing a pod-level
+    override). Only valid for template-backed pods.
+
+    NOTE: whole-field — resetting `volume_mounts` reverts ALL of the pod's mounts
+    to the template, including any the user added. Restart required to apply.
+    """
+    logger.info(f"RESET /pods/{pod_id}/reset_field - fields: {reset_fields.fields}")
+
+    pod = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
+
+    if not pod.template:
+        raise ValueError("Pod has no template; there is no template default to reset to.")
+
+    fields = list(reset_fields.fields or [])
+    if not fields:
+        raise ValueError("No fields provided to reset.")
+
+    invalid = [f for f in fields if f not in RESETTABLE_FIELD_DEFAULTS]
+    if invalid:
+        raise ValueError(
+            f"Cannot reset field(s) {invalid}. Resettable fields: {sorted(RESETTABLE_FIELD_DEFAULTS.keys())}."
+        )
+
+    pre_reset_pod = pod.dict().copy()
+
+    # Provenance ledger without the reset fields (and their sub-fields, e.g.
+    # resources.cpu_limit) so combine_pod_and_template stops skipping them.
+    new_modified = [
+        m for m in (pod.modified_fields or [])
+        if m not in fields and not any(m.startswith(f"{f}.") for f in fields)
+    ]
+
+    # Re-derive: combine a copy whose provenance no longer claims these fields, so
+    # the template supplies them, then re-materialize the derived values into the
+    # pod. Re-materializing (vs. clearing to empty) keeps the configs visible in
+    # the raw pod view — matching how a freshly-created template pod looks.
+    derive_copy = PodBaseFull(**pod.dict().copy())
+    for field in fields:
+        setattr(derive_copy, field, RESETTABLE_FIELD_DEFAULTS[field])
+    derive_copy.modified_fields = list(new_modified)
+    derived = combine_pod_and_template_recursively(
+        derive_copy, derive_copy.template, tenant=g.request_tenant_id, site=g.site_id
+    )
+
+    for field in fields:
+        setattr(pod, field, getattr(derived, field, RESETTABLE_FIELD_DEFAULTS[field]))
+    pod.modified_fields = new_modified
+
+    post_reset_pod = pod.dict().copy()
+    if post_reset_pod == pre_reset_pod:
+        return error(
+            result=pod.display(),
+            msg="Reset made no changes — those fields already match the template default.")
+
+    pod.db_update(f"'{g.username}' reset to template default: {', '.join(fields)}")
+
+    return ok(
+        result=pod.display(),
+        msg=f"Reset {len(fields)} field(s) to template default. Restart the pod to apply.",
+        metadata={"note": "Field(s) re-linked to the template; restart the pod to apply changes."})
+
+
 def delete_pod_resources(pod, password):
     """Tear down a pod's Kubernetes-side resources (PVCs and ConfigMaps created for pvc/ephemeral
     volume mounts) and delete its DB rows. Shared by delete_pod and the stack cascade-delete so the
@@ -342,6 +437,232 @@ async def delete_pod(pod_id, force: bool = False):
     return ok(result="", msg="Pod successfully deleted.")
 
 
+# ── Provenance: per-field "what is pod vs what is template" ────────────────────
+# Fields attributed by the provenance view, with their service defaults (the value
+# a non-template pod has when the user sets nothing). Used to tell a template-
+# provided value apart from a plain service default.
+PROVENANCE_FIELD_DEFAULTS = {
+    "image": "",
+    "command": None,
+    "arguments": None,
+    "environment_variables": {},
+    "secret_map": {},
+    "volume_mounts": {},
+    "networking": {"default": {"protocol": "http", "port": 5000}},
+    "resources": {},
+    "healthchecks": None,
+    "compute_queue": "default",
+    "time_to_stop_default": 43200,
+    "time_to_stop_instance": None,
+    "description": "",
+    "status_requested": "ON",
+    "depends_on": None,
+    "ready_condition": "available",
+    "template_overrides": None,
+}
+
+
+def _prov_norm(v):
+    """Normalize a value to a plain JSON-comparable form (pydantic objects → dict)."""
+    if hasattr(v, "model_dump"):
+        try:
+            return v.model_dump()
+        except Exception:
+            pass
+    if hasattr(v, "dict"):
+        try:
+            return v.dict()
+        except Exception:
+            pass
+    return v
+
+
+def compute_pod_provenance(pod, tenant, site):
+    """Per-field attribution of a pod's effective values: which came from the USER
+    (a pod override, tracked in modified_fields), from the TEMPLATE, or are plain
+    service DEFAULTS. This is the canonical "what is pod vs what is template" format.
+
+    Provenance is decided by `modified_fields` (the override ledger) — NOT by whether
+    a value happens to be non-empty. A materialized-but-unmodified field (e.g. a
+    template pod's volume_mounts, copied into the row at creation) correctly reads as
+    'template' here even though its stored value is non-empty.
+
+    For each field returns: source (pod|template|default), in_modified_fields,
+    template_provides, and the pod_value / template_value / derived_value so you can
+    see exactly where the effective value came from.
+    """
+    mf = set(pod.modified_fields or [])
+    has_template = bool(pod.template)
+
+    if has_template:
+        # Derived = the real merged view (pod overrides layered on top of template).
+        derived = combine_pod_and_template_recursively(
+            PodBaseFull(**pod.dict().copy()), pod.template, tenant=tenant, site=site)
+        # Template-only = a clean pod (overridable fields reset to default, nothing
+        # marked modified) carrying just the template — isolates the template's own
+        # contribution from the pod's materialized/overridden values.
+        template_only = PodBaseFull(**pod.dict().copy())
+        for f, dflt in PROVENANCE_FIELD_DEFAULTS.items():
+            setattr(template_only, f, dflt)
+        template_only.modified_fields = []
+        template_only = combine_pod_and_template_recursively(
+            template_only, template_only.template, tenant=tenant, site=site)
+    else:
+        derived = pod
+        template_only = None
+
+    fields = attribute_pod_fields(
+        modified_fields=pod.modified_fields,
+        pod_view=pod,
+        template_only_view=template_only,
+        derived_view=derived,
+        has_template=has_template,
+    )
+
+    counts = {"pod": 0, "template": 0, "default": 0}
+    for info in fields.values():
+        counts[info["source"]] += 1
+
+    return {
+        "pod_id": pod.pod_id,
+        "template": pod.template or None,
+        "has_template": has_template,
+        "modified_fields": list(pod.modified_fields or []),
+        "summary": counts,
+        "fields": fields,
+    }
+
+
+def attribute_pod_fields(modified_fields, pod_view, template_only_view, derived_view, has_template):
+    """Pure attribution: given the three views of a pod (raw stored, template-only,
+    and merged/derived) plus the modified_fields ledger, decide each field's source.
+
+    source = 'pod'      → field (or a field.* subfield) is in modified_fields (user override)
+             'template' → not modified, and the template provides a non-default value
+             'default'  → not modified and template doesn't set it (plain service default)
+
+    Kept free of model/DB/g so it can be tested exhaustively. `*_view` are anything
+    with the pod field names as attributes (real models, SimpleNamespace, mocks).
+    """
+    mf = set(modified_fields or [])
+    fields = {}
+    for f, dflt in PROVENANCE_FIELD_DEFAULTS.items():
+        in_mod = (f in mf) or any(m.startswith(f + ".") for m in mf)
+        pod_val = _prov_norm(getattr(pod_view, f, None))
+        der_val = _prov_norm(getattr(derived_view, f, None))
+        tmpl_val = (
+            _prov_norm(getattr(template_only_view, f, None)) if has_template else None
+        )
+        template_provides = has_template and tmpl_val != _prov_norm(dflt)
+
+        if in_mod:
+            source = "pod"
+        elif template_provides:
+            source = "template"
+        else:
+            source = "default"
+
+        fields[f] = {
+            "source": source,
+            "in_modified_fields": in_mod,
+            "template_provides": template_provides,
+            "pod_value": pod_val,
+            "template_value": tmpl_val,
+            "derived_value": der_val,
+        }
+    return fields
+
+
+@router.get(
+    "/pods/{pod_id}/overrides",
+    tags=["Pods"],
+    summary="get_pod_overrides",
+    operation_id="get_pod_overrides",
+    response_model=PodsFinalResponse)
+async def get_pod_overrides(pod_id):
+    """
+    Lean "what the user actually set" view: only the pod's override layer (the fields in
+    modified_fields) plus identity (pod_id, template, status). The normal GET resolves every
+    default/template value, hiding what's a real user override and bloating the payload; this
+    returns just the sparse override layer — legible and safe to round-trip on edit. Pairs with
+    /provenance (per-field source). See tapis-ui src/app/Pods/LAYERING_MODEL.md.
+    """
+    logger.info(f"GET /pods/{pod_id}/overrides - Top of get_pod_overrides.")
+    pod = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
+    return ok(result=pod.display_overrides(), msg="Pod overrides (user-set layer) retrieved successfully.")
+
+
+@router.get(
+    "/pods/{pod_id}/provenance",
+    tags=["Pods"],
+    summary="get_pod_provenance",
+    operation_id="get_pod_provenance",
+    response_model=PodsFinalResponse)
+async def get_pod_provenance(pod_id):
+    """
+    Per-field provenance for a pod: which fields are the user's overrides (pod),
+    which come from the template, and which are plain service defaults.
+
+    Source-of-truth is `modified_fields`, NOT value-emptiness — so a template pod's
+    materialized-but-unmodified fields read as 'template'. For each field you get
+    source (pod|template|default), in_modified_fields, and the pod/template/derived
+    values, so the determination is fully inspectable.
+    """
+    logger.info(f"GET /pods/{pod_id}/provenance - Top of get_pod_provenance.")
+    pod = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
+    result = compute_pod_provenance(pod, tenant=g.request_tenant_id, site=g.site_id)
+    return ok(result=result, msg="Pod provenance computed successfully.")
+
+
+def derive_pod_for_display(pod, mode, *, tenant, site):
+    """
+    Produce the pod object that GET /pods/{id} should display, in one of three modes.
+
+    Why this exists: a pod is stored SPARSE — fields the user didn't override are
+    empty on the row, and the template supplies them only when merged. So the UI
+    needs two things to render the Overview: the RESOLVED values (merge the template)
+    AND `modified_fields` (the override ledger, to colour each field pod-vs-template).
+    Historically that meant two calls: GET /pods/{id} (sparse + modified_fields) plus
+    GET /pods/{id}/derived (merged values). This helper lets the single GET return both.
+
+    mode:
+      "none" → the raw stored pod (sparse; template fields empty unless overridden).
+      "lite" → template-merged values via combine_pod_and_template_recursively, with
+               NO password lookup / legacy <<TAPIS_*>> interpolation. The cheap
+               "resolved definition" the Overview UI wants — merge is in-memory.
+      "full" → "lite" + legacy <<TAPIS_*>>/<<tapissecret_*>> interpolation from the
+               Password table (parity with GET /pods/{id}/derived).
+
+    In every mode the returned object keeps `modified_fields` (combine starts from the
+    pod's own dict and never clears it), so .display() carries both resolved values and
+    provenance. Template-less pods are returned unchanged (combine is a no-op), so
+    ?derived_lite is free for them — same single cheap response either way.
+    """
+    if mode == "none":
+        return pod
+    pod_for_derive = PodBaseFull(**pod.dict().copy())
+    if pod_for_derive.template:
+        final_pod = combine_pod_and_template_recursively(
+            pod_for_derive, pod_for_derive.template, tenant=tenant, site=site)
+    else:
+        final_pod = pod_for_derive
+    if mode == "full":
+        # Legacy placeholder interpolation — parity with the /derived endpoint.
+        pods_env = Password.db_get_with_pk(
+            pod_for_derive.pod_id, pod_for_derive.tenant_id, pod_for_derive.site_id).dict()
+        if final_pod.environment_variables:
+            for key, val in final_pod.environment_variables.items():
+                if not isinstance(val, str):
+                    continue
+                new_val = val
+                for match in re.findall(r'<<TAPIS_(.*?)>>', val):
+                    new_val = new_val.replace(f"<<TAPIS_{match}>>", pods_env.get(match, ""))
+                for match in re.findall(r'<<tapissecret_(.*?)>>', val):
+                    new_val = new_val.replace(f"<<tapissecret_{match}>>", pods_env.get(match, ""))
+                final_pod.environment_variables[key] = new_val
+    return final_pod
+
+
 @router.get(
     "/pods/{pod_id}",
     tags=["Pods"],
@@ -351,21 +672,28 @@ async def delete_pod(pod_id, force: bool = False):
 async def get_pod(
     pod_id: str,
     include_configs: bool = Query(False, description="Include full config_content for volume mounts using field. Default: false (shows placeholder with size)"),
-    check_unresolved: bool = Query(True, description="Check for unresolved ${...} patterns and include in metadata. Default: True")
+    check_unresolved: bool = Query(True, description="Check for unresolved ${...} patterns and include in metadata. Default: True"),
+    derived: bool = Query(False, description="Return the template-merged definition (also interpolates legacy <<TAPIS_*>> placeholders). Like GET /pods/{pod_id}/derived but on this endpoint, so the merged values come back alongside modified_fields in one call."),
+    derived_lite: bool = Query(False, description="Fast template-only merge for display: combines templates but skips password lookup + legacy placeholder interpolation. Returns resolved values AND modified_fields in a single call. Template-less pods are unchanged.")
     ):
     """
     Get a pod.
 
     Returns retrieved pod object.
-    
+
     Use check_unresolved=true to detect any ${...} patterns that haven't been resolved.
+    Use derived_lite=true (or derived=true) to get the template-merged values together
+    with modified_fields in a single request, instead of also calling /derived.
     """
-    logger.info(f"GET /pods/{pod_id} - Top of get_pod.")
+    logger.info(f"GET /pods/{pod_id} - Top of get_pod. derived={derived}, derived_lite={derived_lite}")
 
     pod = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
-    
+
+    derive_mode = "lite" if derived_lite else ("full" if derived else "none")
+
     metadata = {}
     if check_unresolved:
+        # Report unresolved ${...} on the STORED values (pre-merge) — what's actually persisted.
         unresolved = check_pod_unresolved_patterns(
             secret_map=pod.secret_map,
             environment_variables=pod.environment_variables,
@@ -374,7 +702,12 @@ async def get_pod(
         if unresolved:
             metadata["unresolved_patterns"] = unresolved
 
-    return ok(result=pod.display(include_configs=include_configs), metadata=metadata, msg="Pod retrieved successfully.")
+    final = derive_pod_for_display(pod, derive_mode, tenant=g.request_tenant_id, site=g.site_id)
+    if derive_mode != "none":
+        metadata["derived"] = True
+        metadata["derived_mode"] = derive_mode
+
+    return ok(result=final.display(include_configs=include_configs), metadata=metadata, msg="Pod retrieved successfully.")
 
 
 @router.get(
@@ -386,15 +719,18 @@ async def get_pod(
 async def get_derived_pod(
     pod_id: str,
     include_configs: bool = Query(False, description="Include full config_content for volume mounts using field. Default: false (shows placeholder with size)"),
-    resolve_secrets: bool = Query(False, description="Resolve and show actual secret values (admin only). Default: false. Use to preview how secrets will be interpolated.")
+    resolve_secrets: bool = Query(False, description="Resolve and show secret values (admin only). Default: false. Honours each secret's readable flag: a write-only (readable=False) secret is NOT read — its value comes back as the sentinel '<<write-only>>'. Use to preview how secrets interpolate."),
+    reveal_write_only: bool = Query(False, description="Admin escalation for resolve_secrets: also read+reveal write-only (readable=False) secret values, bypassing the readable flag (the same privileged read pods use at start). Admin only. Implies resolve_secrets.")
     ):
     """
     Derive a pod's final definition if templates are used.
 
     Returns final pod definition to be used for pod creation.
-    
+
     Use resolve_secrets=true (admin only) to preview how secrets will be interpolated
-    into environment_variables and config_content.
+    into environment_variables and config_content. By default this honours each
+    secret's write-only (readable=False) flag — those come back as '<<write-only>>'.
+    Pass reveal_write_only=true (admin only) to bypass that and see write-only values.
     """
     logger.info(f"GET /pods/{pod_id}/derived - Top of get_derived_pod.")
 
@@ -432,14 +768,20 @@ async def get_derived_pod(
                 
             final_pod.environment_variables[key] = new_val
 
-    # If resolve_secrets=true, resolve the secret_map and inject into env vars and config_content
+    # If resolve_secrets=true, resolve the secret_map and inject into env vars and config_content.
+    # reveal_write_only implies resolve_secrets and additionally bypasses the write-only gate.
     resolved_secrets = {}
     resolve_errors = []
-    if resolve_secrets:
-        # resolve_secrets is a privileged operation — requires admin role (g.admin)
+    if resolve_secrets or reveal_write_only:
+        # Both are privileged operations — require admin role (g.admin)
         if not getattr(g, 'admin', False):
-            raise PermissionsException("resolve_secrets=true requires admin privileges (pods_admin role)")
-        
+            raise PermissionsException("resolve_secrets/reveal_write_only require admin privileges (pods_admin role)")
+
+        # for_display=True honours each secret's readable flag (write-only → sentinel).
+        # reveal_write_only flips it off, reading write-only values via the service
+        # account (same mechanism pods use at start) — the explicit admin escape hatch.
+        for_display = not reveal_write_only
+
         # Resolve secret_map values
         if final_pod.secret_map:
             resolved_secrets, resolve_errors = resolve_secret_map(
@@ -448,7 +790,8 @@ async def get_derived_pod(
                 tenant_id=input_pod.tenant_id,
                 actor=g.username,  # Short refs should be expanded at creation, explicit refs have owner embedded
                 pod_id=input_pod.pod_id,
-                pod=input_pod  # Pass pod for networking/random resolution
+                pod=input_pod,  # Pass pod for networking/random resolution
+                for_display=for_display
             )
             if resolve_errors:
                 logger.warning(f"Secret resolution errors for derived pod {pod_id}: {resolve_errors}")

@@ -576,6 +576,10 @@ class PodBaseRead(PodBase):
     update_ts: datetime | None = Field(None, description = "Time (UTC) that this pod was last updated by a user action.")
     last_status_check_ts: datetime | None = Field(None, description = "Time (UTC) of last automated health/status check.")
     start_instance_ts: datetime | None = Field(None, description = "Time (UTC) that this pod instance was started.")
+    # Read-schema field: surfaced in pod responses so the UI can show config/override
+    # provenance (template vs pod) and gate revert-to-template. Lives here (not on
+    # PodBaseFull) so PodBaseRead — which validates list/get responses — accepts it.
+    modified_fields: List[str] = Field([], description = "Fields that have been modified by the user since creation.", sa_column=Column(ARRAY(String, dimensions=1)))
 
 
 class PodBaseFull(PodBaseRead):
@@ -585,7 +589,6 @@ class PodBaseFull(PodBaseRead):
     k8_name: str = Field("", description = "Name to use for Kubernetes name.")
     logs: str = Field("", description = "Logs from kubernetes pods, useful for debugging and reading results.")
     permissions: List[str] = Field([], description = "Pod permissions for each user.", sa_column=Column(ARRAY(String, dimensions=1)))
-    modified_fields: List[str] = Field([], description = "Fields that have been modified by the user since creation.", sa_column=Column(ARRAY(String, dimensions=1)))
     action_logs: List[str] = Field([], description = "Log of past 10 actions taken on this pod.", sa_column=Column(ARRAY(String, dimensions=1)))
     force_stop: bool = Field(False, description = "Transient flag: when True the health loop tears this pod down immediately, bypassing stack reverse-order teardown. Set by stop ?force=true; cleared once STOPPED.")
 
@@ -602,7 +605,8 @@ class PodBaseFull(PodBaseRead):
         display.pop('tenant_id')
         display.pop('permissions')
         display.pop('site_id')
-        display.pop('modified_fields')
+        # modified_fields is kept in the response — the UI reads it to show config/
+        # override provenance (template vs overridden) and gate revert-to-template.
         display.pop('action_logs')
         display.pop('force_stop', None)  # transient internal flag; not part of the read model
 
@@ -612,8 +616,34 @@ class PodBaseFull(PodBaseRead):
                 if mount_config and mount_config.get('type') in ('ephemeral', 'tapisvolume') and mount_config.get('config_content'):
                     content_size = len(mount_config['config_content'])
                     mount_config['config_content'] = f"<{content_size} bytes - use ?include_configs=true to retrieve>"
-        
+
         return display
+
+    def display_overrides(self):
+        """Lean "what the user actually set" view: ONLY the fields in modified_fields (the
+        sparse override layer), plus identity. The fat read model resolves every default/
+        template value, hiding what's a user override; this returns just the override layer
+        so it's legible and safe to round-trip on edit. Pairs with the /provenance view
+        (which shows per-field source). See tapis-ui src/app/Pods/LAYERING_MODEL.md."""
+        full = self.dict()
+        mf = self.modified_fields or []
+        overrides = {}
+        for key in mf:
+            if "." in key:
+                # per-subfield entry (e.g. resources.cpu_limit) → group under its parent
+                parent, sub = key.split(".", 1)
+                parent_val = full.get(parent) or {}
+                if isinstance(parent_val, dict) and sub in parent_val:
+                    overrides.setdefault(parent, {})[sub] = parent_val[sub]
+            elif key in full:
+                overrides[key] = full[key]
+        return {
+            "pod_id": self.pod_id,
+            "template": self.template or None,
+            "status": getattr(self, "status", None),
+            "modified_fields": list(mf),
+            "overrides": overrides,
+        }
 
 
 TapisPodBaseFull = create_model("TapisPodBaseFull", __base__= type("_ComboModel", (PodBaseFull, TapisModel), {}))
@@ -1057,7 +1087,8 @@ class Pod(TapisPodBaseFull, table=True, validate=True):
         display.pop('tenant_id')
         display.pop('permissions')
         display.pop('site_id')
-        display.pop('modified_fields')
+        # modified_fields is kept in the response — the UI reads it to show config/
+        # override provenance (template vs overridden) and gate revert-to-template.
         display.pop('action_logs', None)
         display.pop('force_stop', None)  # transient internal flag; not part of the read model
         #display['action_logs'] = display['action_logs'][-10:]
@@ -1159,6 +1190,18 @@ class UpdatePod(TapisApiModel):
     healthchecks: Optional[PodHealthchecks] = Field(None, description = 'Kubernetes health probe configuration. Supports liveness, readiness, and startup probes with HTTP GET, exec command, or TCP socket actions. Set to null to clear.', sa_column=Column(JSON))
     depends_on: Optional[List[str]] = Field(None, description = "Same-stack pod IDs that must reach their ready_condition before this pod is started (honored when the stack's restart_policy is 'ordered').", sa_column=Column(ARRAY(String)))
     ready_condition: Optional[str] = Field(None, description = "When this pod counts as 'up' for dependents: 'available' or 'ready' (readiness probe passing).")
+
+
+class ResetPodFields(TapisApiModel):
+    """
+    Request to reset one or more pod fields to their template default.
+
+    Each listed field is removed from `modified_fields` and re-materialized from
+    the pod's template, re-linking it to the template (undoing a pod-level
+    override). Only valid for template-backed pods. Whole-field granularity:
+    resetting `volume_mounts` reverts ALL of the pod's mounts to the template.
+    """
+    fields: List[str] = Field(..., description="Pod fields to reset to template default, e.g. ['volume_mounts'].")
 
 
 class ExecutePodCommands(BaseModel):

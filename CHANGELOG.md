@@ -113,6 +113,7 @@ The edge release. Pods learned to leave the cluster.
 - Template tags carry a description, and `pods:default:` placeholders are always optional (an empty default resolves to an empty string).
 - Per-pod TLS certificate provisioning, with cert state visible in the health loop.
 - Status-aware landing pages: a pod that is starting, stopped, errored, finished, or missing says so in the browser instead of failing opaquely.
+- Pod layering: reset a single field back to its template value, see provenance and overrides, sparse `volume_mounts`, and a cheap `derived_lite` read for merged display values.
 
 ### Bug fixes:
 - Restored tables dropped by a bad migration; migrations now run and verify on startup.

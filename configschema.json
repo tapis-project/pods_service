@@ -117,6 +117,11 @@
         "description": "Whether or not to echo postgres engine queries for debugging.",
         "default": false
       },
+      "sparse_volume_mounts": {
+        "type": "boolean",
+        "description": "DEBUG/experimental. When true, new template pods store ONLY the user's volume_mounts (sparse) instead of materializing the template-merged mounts into the row, and the derive step merges template+pod mounts per mount-path (pod wins) — matching how environment_variables/secret_map already work. Default false = legacy behavior (materialize at create; skip template merge when volume_mounts is modified), zero impact on existing pods. See tapis-ui src/app/Pods/LAYERING_MODEL.md.",
+        "default": false
+      },
       "cert_splash_enabled": {
         "type": "boolean",
         "description": "When true, the health loop probes each http pod domain's TLS certificate and holds the Traefik splash route (rather than the real pod) until a valid Let's Encrypt cert is confirmed, logging provisioning progress to the pod's action_logs. Set false to disable cert tracking/holding entirely.",

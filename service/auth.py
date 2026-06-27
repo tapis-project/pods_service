@@ -132,6 +132,7 @@ def check_route_permissions(request):
         ["/traefik-config", "GET", "NOT-API"],
         ["/error-handler/{status}", "GET", "NOT-API"],
         ["/pod-splash", "GET", "NOT-API"],      # startup splash — Traefik routes here during readiness gate
+        ["/pod-not-found", "GET", "NOT-API"],   # friendly 404 — Traefik catch-all routes here for unmatched pod hosts
         ["/healthcheck", "GET", "NOT-API"],
         # IMAGES
         ["/pods/images/{image_id:path}", "GET", codes.NONE],
@@ -252,6 +253,8 @@ def check_route_permissions(request):
         ["/pods/{pod_id}/log-runs", "GET", codes.READ],
         ["/pods/{pod_id}/log-runs/{run_index}", "GET", codes.READ],
         ["/pods/{pod_id}/derived", "GET", codes.READ],
+        ["/pods/{pod_id}/provenance", "GET", codes.READ],
+        ["/pods/{pod_id}/overrides", "GET", codes.READ],
         ["/pods/{pod_id}/download_from_pod{path:path}", "GET", codes.ADMIN],
         ["/pods/{pod_id}/list_files{path:path}", "GET", codes.ADMIN],
         ["/pods/{pod_id}/exec", "POST", codes.ADMIN],
@@ -259,6 +262,7 @@ def check_route_permissions(request):
         ["/pods/{pod_id_net}/auth/callback", "GET", "NEED-BASEURL"], # oauth
         ["/pods/{pod_id}", "GET", codes.READ],
         ["/pods/{pod_id}", "PUT", codes.USER],
+        ["/pods/{pod_id}/reset_field", "POST", codes.ADMIN],
         ["/pods/{pod_id}", "DELETE", codes.ADMIN],
         ["/pods", "GET", codes.NONE],
         ["/pods", "POST", codes.NONE]
@@ -426,6 +430,7 @@ def authentication(request):
         request.url.path == '/openapi.json' or
         request.url.path == '/traefik-config' or
         request.url.path == '/pod-splash' or
+        request.url.path == '/pod-not-found' or
         request.url.path == '/healthcheck' or
         request.url.path.startswith('/error-handler/')):
         pass
