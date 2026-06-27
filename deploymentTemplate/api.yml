@@ -35,6 +35,10 @@ spec:
           value: api
         - name: DEBUG_SLEEP_LOOP
           value: 'false'
+#DEV        # Dev-only: warn on startup if models have drifted from the DB schema
+#DEV        # (i.e. you should run `make autorevision`). Stripped in prod builds.
+#DEV        - name: PODS_CHECK_MIGRATIONS
+#DEV          value: 'true'
         - name: SERVICE_PASSWORD
           valueFrom:
             secretKeyRef:

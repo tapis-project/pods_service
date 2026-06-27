@@ -217,8 +217,39 @@ if __name__ == "__main__":
     rabbitmq_init()
     role_init()
     import subprocess
-    time.sleep(3)
-    print("\n\n\n\n\nAlembic -- Updating with current migration files")
-    subprocess.run("alembic upgrade head", shell=True)
-    print("\n\n\n\n\nAlembic -- Running revision autogeneration")
-    subprocess.run("alembic revision -m 'init25' --autogenerate", shell=True) #Dev step for new migrations
+
+    # Apply any pending Alembic migrations on startup. `upgrade head` is
+    # idempotent ("already up to date" when nothing is pending), so it is safe
+    # to leave on for every deploy and needs no separate migrate step. Set
+    # PODS_RUN_MIGRATIONS=false to skip it (e.g. when migrations are run as a
+    # dedicated step / Job instead).
+    if os.environ.get("PODS_RUN_MIGRATIONS", "true").lower() == "true":
+        time.sleep(3)
+        print("\n\n\n\n\nAlembic -- applying pending migrations (upgrade head)")
+        result = subprocess.run("alembic upgrade head", shell=True)
+        if result.returncode != 0:
+            # Fail fast rather than start the API against an out-of-date schema.
+            raise RuntimeError("alembic upgrade head failed; refusing to start.")
+    else:
+        print("\n\n\n\n\nAlembic -- PODS_RUN_MIGRATIONS=false, skipping migrations on startup")
+
+    # Dev convenience: a fast read-only check of whether the models have drifted
+    # from the DB schema, i.e. whether a new migration should be generated.
+    # `alembic check` writes no files and makes no schema changes; it just exits
+    # non-zero when there are pending autogenerate ops. Non-fatal — it only
+    # prints a banner so you know to run `make autorevision`. Off by default;
+    # enabled in dev via PODS_CHECK_MIGRATIONS (set by the #DEV deploy template).
+    if os.environ.get("PODS_CHECK_MIGRATIONS", "false").lower() == "true":
+        print("\n\n\n\n\nAlembic -- checking for model/schema drift (alembic check)")
+        if subprocess.run("alembic check", shell=True).returncode != 0:
+            print(
+                "\n" + "=" * 72 +
+                "\n  ⚠️  ALEMBIC: models have drifted from the DB schema."
+                "\n      Generate a migration with:  make autorevision msg=\"...\""
+                "\n" + "=" * 72 + "\n"
+            )
+
+    # NOTE: Generating new migrations is a deliberate developer action (change
+    # models -> create a revision), not something to run on every startup --
+    # auto-running it created noisy/empty revisions and would run against prod.
+    # Use `make autorevision msg="..."` to generate a new revision by hand.
