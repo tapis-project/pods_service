@@ -66,6 +66,13 @@ async def error_handler(request: Request, exc):
             response = error(msg=str(exc))
             status_code = 400
         else:
+            # Unexpected exception: log the full server-side traceback (file:line) so 500s are
+            # diagnosable from the service logs even when conf.show_traceback is off in prod. The
+            # response stays terse — the traceback is logs-only, never returned to the caller.
+            logger.error(
+                f"Unexpected exception handling {request.method} {request.url.path}: "
+                f"{repr(exc)}\n{traceback.format_exc()}"
+            )
             response = error(msg=f'Unexpected. {repr(exc)} debug: {exc.errors() if hasattr(exc, "errors") else "no errors() method"}')
             status_code = 500
 
