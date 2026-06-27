@@ -386,6 +386,133 @@ async def admin_debug_traffic():
     return ok(result={"steps": steps, "conclusion": "Pipeline looks healthy — all steps passed. If DB still empty, check health-loop pod logs for insert errors (validator issue likely fixed by latest deploy)."})
 
 
+def _check_certs() -> dict:
+    """
+    Aggregate per-domain TLS certificate (Let's Encrypt/ACME) state across all AVAILABLE
+    pods. The health loop records cert_ready/cert_state on each http networking entry, so
+    this just rolls those up — no extra probing. Useful for answering "is ACME actually
+    issuing certs in this environment?" (e.g. it won't be, locally), and is intentionally
+    capped at 'warning' so an environment without ACME doesn't turn overall health red.
+    """
+    from models_pods import Pod
+    from codes import AVAILABLE
+
+    def _parse(v):
+        """Parse a UTC ISO timestamp (datetime or str) → datetime, or None."""
+        if v is None or v == "":
+            return None
+        if isinstance(v, datetime):
+            return v
+        try:
+            return datetime.fromisoformat(str(v).replace("Z", ""))
+        except Exception:
+            return None
+
+    def _secs(a, b):
+        """Seconds between two timestamps (a - b), rounded; None if either missing/negative."""
+        if not a or not b:
+            return None
+        d = (a - b).total_seconds()
+        return round(d, 1) if d >= 0 else None
+
+    enabled = bool(getattr(conf, 'cert_splash_enabled', True))
+    counts = {"ready": 0, "provisioning": 0, "failed": 0, "unknown": 0}
+    sampled = []
+    errors = []
+    prov_secs_all = []      # cert issuance duration (provisioning_started → ready)
+    from_create_all = []    # pod create → cert ready
+
+    for site, tenants in SITE_TENANT_DICT.items():
+        for tenant in tenants:
+            if tenant in ("siteadmintable", "defaulttables"):
+                continue
+            try:
+                pods = Pod.db_get_all(tenant=tenant, site=site)
+            except Exception as e:
+                errors.append(f"{site}/{tenant}: {e}")
+                continue
+            for pod in pods:
+                if pod.status != AVAILABLE:
+                    continue
+                created_at = _parse(getattr(pod, 'creation_ts', None))
+                available_at = _parse(getattr(pod, 'start_instance_ts', None))
+                for net_name, net in (pod.networking or {}).items():
+                    nd = net if isinstance(net, dict) else (net.dict() if hasattr(net, 'dict') else dict(net))
+                    if nd.get('protocol') != 'http' or not nd.get('url'):
+                        continue
+                    ready = bool(nd.get('cert_ready'))
+                    state = nd.get('cert_state') or ''
+                    if ready or state == 'ready':
+                        key = 'ready'
+                    elif state in ('provisioning', 'failed'):
+                        key = state
+                    else:
+                        key = 'unknown'
+                    counts[key] += 1
+
+                    # Timings (only meaningful once the cert is ready and timestamps exist)
+                    prov_started = _parse(nd.get('cert_provisioning_started_at'))
+                    cert_ready_at = _parse(nd.get('cert_ready_at'))
+                    provisioning_seconds = _secs(cert_ready_at, prov_started)
+                    from_available_seconds = _secs(cert_ready_at, available_at)
+                    from_create_seconds = _secs(cert_ready_at, created_at)
+                    if provisioning_seconds is not None:
+                        prov_secs_all.append(provisioning_seconds)
+                    if from_create_seconds is not None:
+                        from_create_all.append(from_create_seconds)
+
+                    if len(sampled) < 30:
+                        sampled.append({
+                            "site": site, "tenant": tenant, "pod_id": pod.pod_id,
+                            "net": net_name, "url": nd.get('url'),
+                            "cert_state": state or ('ready' if ready else 'unknown'),
+                            "cert_ready": ready,
+                            "cert_ready_at": nd.get('cert_ready_at') or None,
+                            "provisioning_seconds": provisioning_seconds,
+                            "from_available_seconds": from_available_seconds,
+                            "from_create_seconds": from_create_seconds,
+                        })
+
+    def _stats(xs):
+        if not xs:
+            return None
+        return {"samples": len(xs), "min": round(min(xs), 1),
+                "avg": round(sum(xs) / len(xs), 1), "max": round(max(xs), 1)}
+
+    timings = {
+        "provisioning_seconds": _stats(prov_secs_all),   # cert issuance duration
+        "from_create_seconds": _stats(from_create_all),  # pod create → cert ready
+    }
+
+    if errors:
+        return {"status": "error", "message": f"DB query errors: {errors}",
+                "counts": counts, "timings": timings, "sampled": sampled}
+    if not enabled:
+        return {"status": "ok", "message": "Cert tracking disabled (cert_splash_enabled=false).",
+                "acme_working": None, "counts": counts, "timings": timings, "sampled": sampled}
+
+    total = sum(counts.values())
+    acme_working = counts['ready'] > 0
+    if total == 0:
+        status, msg = "ok", "No AVAILABLE pods with http domains to check."
+    elif acme_working and counts['failed'] == 0:
+        status, msg = "ok", f"ACME issuing certs: {counts['ready']} ready, {counts['provisioning']} provisioning."
+    elif acme_working:
+        status, msg = "warning", f"{counts['ready']} cert(s) ready but {counts['failed']} failed to provision."
+    else:
+        status, msg = "warning", (
+            f"No certs confirmed ready ({counts['provisioning']} provisioning, "
+            f"{counts['failed']} failed, {counts['unknown']} unknown) — Let's Encrypt/ACME "
+            f"may not be reachable here (expected on local/dev)."
+        )
+
+    if timings["provisioning_seconds"]:
+        msg += f" Avg issue {timings['provisioning_seconds']['avg']}s."
+
+    return {"status": status, "message": msg, "acme_working": acme_working,
+            "counts": counts, "timings": timings, "sampled": sampled}
+
+
 @router.get(
     "/pods/admin/health",
     tags=["Admin"],
@@ -395,16 +522,18 @@ async def admin_debug_traffic():
 async def admin_health():
     """
     Admin-only diagnostic endpoint. Checks database, RabbitMQ, Traefik pod
-    status, and traffic ingestion state. Returns a structured report with
-    per-subsystem status (ok / warning / error) and human-readable messages.
+    status, traffic ingestion state, RBAC, and TLS cert (ACME) provisioning.
+    Returns a structured report with per-subsystem status (ok / warning / error)
+    and human-readable messages.
     """
     db = _check_database()
     rabbit = _check_rabbitmq()
     traefik = _check_traefik()
     traffic = _check_traffic_ingestion()
     rbac = _check_rbac()
+    certs = _check_certs()
 
-    subsystems = {"database": db, "rabbitmq": rabbit, "traefik": traefik, "traffic_ingestion": traffic, "rbac": rbac}
+    subsystems = {"database": db, "rabbitmq": rabbit, "traefik": traefik, "traffic_ingestion": traffic, "rbac": rbac, "certs": certs}
 
     # Roll up: any error → error, any warning → warning, else ok
     statuses = [s["status"] for s in subsystems.values()]
