@@ -101,9 +101,11 @@ paths:
       description: 'Admin-only diagnostic endpoint. Checks database, RabbitMQ, Traefik
         pod
 
-        status, and traffic ingestion state. Returns a structured report with
+        status, traffic ingestion state, RBAC, and TLS cert (ACME) provisioning.
 
-        per-subsystem status (ok / warning / error) and human-readable messages.'
+        Returns a structured report with per-subsystem status (ok / warning / error)
+
+        and human-readable messages.'
       operationId: admin_health
       responses:
         '200':
@@ -2865,6 +2867,55 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /pods/stacks/{stack_id}/update:
+    post:
+      tags:
+      - Stacks
+      summary: update_stack_from_template
+      description: "Re-derive a stack from a newer stack-template tag \u2014 the L2\
+        \ *reviewed* update.\n\nWith `?dry_run=true`: returns the per-member plan\
+        \ (add/remove/recreate/patch) + whether a typed\nconfirm is required, with\
+        \ **no side effects**. Without dry_run: applies it \u2014 create new members,\n\
+        patch or recreate changed ones, delete removed ones (gated by `confirm` ==\
+        \ stack_id when the plan\nis destructive), then re-pin `from_template` to\
+        \ the target tag.\n\nUser overrides on UNCHANGED fields are preserved (patch\
+        \ only touches changed fields). `recreate`\nrebuilds a member from the template;\
+        \ full per-field 3-way merge on recreate is a documented\nfollow-up (see tapis-ui\
+        \ STACK_UPDATE_MODEL.md). Apply order is create -> patch -> remove so a\n\
+        mid-apply failure never destroys data before additions succeed; re-run to\
+        \ converge."
+      operationId: update_stack_from_template
+      parameters:
+      - name: stack_id
+        in: path
+        required: true
+        schema:
+          title: Stack Id
+      - name: dry_run
+        in: query
+        required: false
+        schema:
+          type: boolean
+          default: false
+          title: Dry Run
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StackUpdateRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /pods/{pod_id}:
     put:
       tags:
@@ -4372,7 +4423,7 @@ components:
           - type: 'null'
           title: Creation Ts
           description: Time (UTC) that this image was created.
-          default: '2026-06-09T09:16:47.454847'
+          default: '2026-06-27T00:26:21.118798'
         added_by:
           type: string
           title: Added By
@@ -4791,6 +4842,12 @@ components:
           type: string
           title: Commit Message
           description: Commit message for this template tag.
+        description:
+          type: string
+          title: Description
+          description: Description of template tag. Markdown-supported version notes/usage,
+            distinct from the one-line commit_message.
+          default: ''
         tag:
           type: string
           title: Tag
@@ -4809,6 +4866,12 @@ components:
           type: string
           title: Commit Message
           description: Commit message for this template tag.
+        description:
+          type: string
+          title: Description
+          description: Description of template tag. Markdown-supported version notes/usage,
+            distinct from the one-line commit_message.
+          default: ''
         tag:
           type: string
           title: Tag
@@ -6323,6 +6386,47 @@ components:
         /pods/stacks/from-template
 
         into a runtime Stack + member pods.'
+    StackUpdateRequest:
+      properties:
+        template:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Template
+          description: Target stack-template ref to update to, e.g. 'immich:prod@2026-...'.
+            Omit to use the newest tag matching the stack's pinned moving tag.
+        pod_ids:
+          anyOf:
+          - additionalProperties:
+              type: string
+            type: object
+          - type: 'null'
+          title: Pod Ids
+          description: 'Per-member pod_id override for newly-added members, {member_name:
+            pod_id}.'
+        secrets:
+          anyOf:
+          - additionalProperties:
+              type: string
+            type: object
+          - type: 'null'
+          title: Secrets
+          description: Values for any new required secret placeholders introduced
+            by the target tag.
+        confirm:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Confirm
+          description: Typed stack_id; required when the plan deletes or rebuilds
+            members (destructive).
+      additionalProperties: false
+      type: object
+      title: StackUpdateRequest
+      description: "Body for POST /pods/stacks/{stack_id}/update \u2014 re-derive\
+        \ a stack from a newer stack-template tag.\n\nReviewed/explicit (never automatic):\
+        \ use ?dry_run=true to get the per-member plan\n(add/remove/recreate/patch)\
+        \ without side effects, then POST again to apply."
     StacksResponse:
       properties:
         message:
@@ -7981,6 +8085,36 @@ components:
           description: Set to true by the service once the CNAME for custom_domain
             is confirmed to point at the pods infrastructure. Do not set manually.
           default: false
+        cert_ready:
+          type: boolean
+          title: Cert Ready
+          description: Set to true by the service once a browser-style verifying HTTPS
+            handshake to this networking url succeeds (the Let's Encrypt certificate
+            is live and valid). Used by the UI to avoid sending users to a domain
+            whose cert is still being issued. Do not set manually.
+          default: false
+        cert_state:
+          type: string
+          title: Cert State
+          description: 'Service-managed TLS certificate provisioning state for this
+            networking entry: '''' (not started), ''provisioning'' (cert being issued
+            by Let''s Encrypt), ''ready'' (cert valid), or ''failed'' (still pending
+            past the configured max wait). Do not set manually.'
+          default: ''
+        cert_provisioning_started_at:
+          type: string
+          title: Cert Provisioning Started At
+          description: Service-managed UTC ISO timestamp of when cert provisioning
+            was first observed for this entry. Used for admin cert-timing diagnostics.
+            Do not set manually.
+          default: ''
+        cert_ready_at:
+          type: string
+          title: Cert Ready At
+          description: Service-managed UTC ISO timestamp of when this entry's TLS
+            certificate was first confirmed ready. Used for admin cert-timing diagnostics.
+            Do not set manually.
+          default: ''
       additionalProperties: false
       type: object
       title: Networking

@@ -112,6 +112,7 @@ The edge release. Pods learned to leave the cluster.
 - Stack update endpoint. Destructive from-template updates (member delete/recreate) require stack ADMIN, matching delete.
 - Template tags carry a description, and `pods:default:` placeholders are always optional (an empty default resolves to an empty string).
 - Per-pod TLS certificate provisioning, with cert state visible in the health loop.
+- Status-aware landing pages: a pod that is starting, stopped, errored, finished, or missing says so in the browser instead of failing opaquely.
 
 ### Bug fixes:
 - Restored tables dropped by a bad migration; migrations now run and verify on startup.
