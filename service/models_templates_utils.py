@@ -509,9 +509,12 @@ def combine_pod_and_template_recursively(input_obj, template_name, seen_template
                 elif mod_key.startswith("volume_mount."):
                     pass  # Reserved for future per-mount overrides
                 elif mod_key == "volume_mounts":
-                    # Skip template merge if user explicitly modified volume_mounts at pod creation
-                    # The merge was already done at creation time and stored in pod.volume_mounts
-                    if "volume_mounts" in input_obj_modified_fields:
+                    # LEGACY: when volume_mounts was materialized at create (full merged set stored
+                    # in the row), skip the template merge and use that stored value as-is.
+                    # SPARSE (conf.sparse_volume_mounts): the row holds ONLY the user's mounts, so
+                    # DON'T skip — fall through to the per-mount-path merge below (template ∪ pod,
+                    # pod wins), exactly like environment_variables/secret_map. See LAYERING_MODEL.md.
+                    if "volume_mounts" in input_obj_modified_fields and not conf.get("sparse_volume_mounts", False):
                         logger.debug(f"volume_mounts in modified_fields - skipping template merge, using pod's stored value")
                         continue
                     

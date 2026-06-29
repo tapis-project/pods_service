@@ -59,6 +59,13 @@ from __init__ import t
 logger = get_logger(__name__)
 
 
+# Placeholder substituted for a write-only (readable=False) SK secret when resolving
+# for DISPLAY. The real value is never fetched in that path, so callers/UI can show a
+# "write-only, hidden" marker instead of a blank. Pod-start injection (for_display=
+# False) is unaffected and still resolves the real value.
+WRITE_ONLY_DISPLAY_SENTINEL = "<<write-only>>"
+
+
 # Pattern for short secret reference: ${secret:secretname}
 # Auto-expands to include current user at resolution time
 SECRET_SHORT_PATTERN = re.compile(r'^\$\{secret:([a-zA-Z0-9_-]+)\}$')
@@ -711,6 +718,7 @@ def resolve_secret_map(
     pod_id: str = None,
     pod: Any = None,
     _resolve_stack_refs: bool = True,
+    for_display: bool = False,
 ) -> Tuple[Dict[str, str], List[str]]:
     """
     Resolve all secret references in secret_map to their actual values.
@@ -870,7 +878,27 @@ def resolve_secret_map(
                         }
                     )
                     continue
-                
+
+                # DISPLAY path honours the secret's write-only flag, exactly like the
+                # user-facing GET /pods/secrets/{id}/value endpoint: a readable=False
+                # secret's value cannot be retrieved via API, so we do NOT read it from
+                # SK — we return a sentinel and leave the value hidden. Pod-start
+                # injection (for_display=False) skips this and resolves the real value,
+                # so running pods still receive write-only secrets.
+                if for_display and not getattr(secret, 'readable', True):
+                    resolved[env_var] = WRITE_ONLY_DISPLAY_SENTINEL
+                    log_secret_event(
+                        event_type="SECRET_READ_DENIED",
+                        secret_id=ref.secret_id,
+                        sk_secret_name=secret.sk_secret_name,
+                        actor=effective_actor,
+                        pod_id=pod_id,
+                        tenant_id=tenant_id,
+                        site_id=site_id,
+                        details={"reason": "readable=False (write-only)", "context": "display_resolve"}
+                    )
+                    continue
+
                 # Fetch actual value from SK using service account
                 result = t.sk.readSecret(
                     secretType='user',

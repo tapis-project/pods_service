@@ -19,6 +19,7 @@ from models_volume_mounts_utils import (
 )
 from secret_utils import get_placeholder_warnings, resolve_secret_map, resolve_random_passwords, resolve_pod_networking, expand_short_secret_references, get_config_secret_map_warnings, check_pod_unresolved_patterns
 from tapisservice.tapisfastapi.utils import g, ok
+from tapisservice.config import conf
 from tapisservice.logs import get_logger
 logger = get_logger(__name__)
 
@@ -236,11 +237,26 @@ async def create_pod(new_pod: NewPod):
                 if placeholder_errors:
                     raise ValueError(f"Volume mount placeholder errors: {'; '.join(placeholder_errors)}")
                 
-                # Store the resolved mounts on the pod - this includes:
-                # - Template mounts with placeholders resolved
-                # - User's volume_mounts (overrides/additions)
-                # - Explicit removals (None values) are already removed from resolved_mounts
-                pod.volume_mounts = resolved_mounts
+                # Store the resolved mounts on the pod.
+                if conf.get("sparse_volume_mounts", False):
+                    # SPARSE (experimental, see LAYERING_MODEL.md): store ONLY the user's own
+                    # mounts (resolved) + explicit removals (None) — NOT the template's mounts.
+                    # The template's mounts are merged in at derive time (per mount-path, pod
+                    # wins), exactly like environment_variables/secret_map. This keeps
+                    # volume_mounts off the materialize path so it stays a true sparse override.
+                    sparse_mounts = {}
+                    for p, v in (pod_volume_mounts or {}).items():
+                        if v is None:
+                            sparse_mounts[p] = None  # explicit removal of an inherited mount
+                        elif p in resolved_mounts:
+                            sparse_mounts[p] = resolved_mounts[p]
+                    pod.volume_mounts = sparse_mounts
+                else:
+                    # LEGACY (default): materialize the full template-merged set into the row.
+                    # - Template mounts with placeholders resolved
+                    # - User's volume_mounts (overrides/additions)
+                    # - Explicit removals (None values) are already removed from resolved_mounts
+                    pod.volume_mounts = resolved_mounts
                 
                 # Include placeholder resolution info in metadata
                 if placeholder_meta.get("volume_placeholders"):
