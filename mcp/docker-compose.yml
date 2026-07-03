@@ -13,6 +13,14 @@ services:
       # Read the committed spec dump from the repo (mounted below) — the public
       # gateway doesn't serve /openapi.json. Refresh the file, restart, done.
       - PODS_SPEC=/app/pods-openapi.yml
+      # Durable audit log lives here (mounted volume below) — the full MCP history
+      # survives restarts and powers /audit/history. Unset it to go back to in-memory.
+      - BRIDGE_STATE_DIR=/data
     volumes:
       - ../docs/openapi_v3-pods.yml:/app/pods-openapi.yml:ro
+      - pods-mcp-state:/data
     restart: unless-stopped
+
+volumes:
+  # Named volume — persists across `docker compose up --build` / restarts.
+  pods-mcp-state:

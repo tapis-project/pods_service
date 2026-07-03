@@ -97,6 +97,14 @@ mcp = FastMCP.from_openapi(
     openapi_spec=spec,
     client=client,
     name="Tapis Pods",
+    instructions=(
+        "Audit convention: EVERY tool call may (and should) include two reserved "
+        "arguments that are stripped before execution and recorded in the "
+        "human-visible audit trail: `intent` — one short sentence saying WHY you "
+        "are making this call; `agent` — who is calling (your model/agent name, "
+        "e.g. 'fable-5 orchestrator', 'haiku subagent'). They are not part of any "
+        "tool's schema; the server removes them before validation."
+    ),
     route_maps=build_route_maps(verbose=VERBOSE),
     # The Tapis response envelope ({status,message,result,...}) can drift from the
     # declared response_model on minor fields; don't fail a proxy call over that.
