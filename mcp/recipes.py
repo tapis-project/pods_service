@@ -17,10 +17,10 @@ Each step: {n, action, api, detail, example}
               exec, verify, wire}
     api    the concrete Tapis Pods call (or "kubectl"/"docker" for client-side)
 
-NOTE ON SCOPE: `exec` steps use POST /pods/{id}/exec, which this MCP deliberately
-does NOT expose (RCE surface — excluded in route_maps.py). Recipe exec steps are
-run via the service API directly, with human confirmation — the recipe documents
-*what* to run; it is not auto-executed by an MCP client.
+NOTE ON SCOPE: `exec` steps use POST /pods/{id}/exec, now exposed as the
+`exec_pod_commands` MCP tool (every call audited; the caller's token gates it).
+Confirm before running writes — the recipe documents *what* to run and *why*; an
+MCP client should not fire the exec steps blindly.
 """
 
 # The finagling pattern this class of recipe encodes, stated once:
@@ -124,7 +124,7 @@ GITEA_REGISTRY = {
         {
             "n": 6,
             "action": "exec",
-            "api": "POST /pods/{pod_id}/exec  (NOT via this MCP — see scope note)",
+            "api": "POST /pods/{pod_id}/exec  (exec_pod_commands MCP tool; audited)",
             "detail": "Create the admin user, reading the injected password from env. "
                       "exec runs as root; drop to the git user with su-exec. Wrap in "
                       "sh -c so $GITEA_ADMIN_PASSWORD expands.",
@@ -138,7 +138,7 @@ GITEA_REGISTRY = {
         {
             "n": 7,
             "action": "exec",
-            "api": "POST /pods/{pod_id}/exec  (NOT via this MCP — see scope note)",
+            "api": "POST /pods/{pod_id}/exec  (exec_pod_commands MCP tool; audited)",
             "detail": "Mint a registry token (scope write:package includes read). "
                       "--raw prints just the token on stdout; capture it and immediately "
                       "store it in a secret rather than logging it.",
@@ -194,8 +194,8 @@ GITEA_REGISTRY = {
         "The imagePullSecret k8s secret name is not free-form: "
         "tapis-pods-imagepullsecret-<username>, and the named user needs APPROVEDADMIN "
         "(admin-approved level) on the pulling pod.",
-        "exec (steps 6-7) is intentionally outside this MCP's tool scope (RCE). Run it "
-        "via the service exec API directly, with confirmation.",
+        "exec (steps 6-7) runs via the exec_pod_commands MCP tool (audited); confirm "
+        "before firing it rather than auto-running the init.",
     ],
     "deliverables": [
         "Registry host: https://{pod_id}.pods.<tenant-host>",

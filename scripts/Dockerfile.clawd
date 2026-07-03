@@ -1,0 +1,37 @@
+# clawd — prebuilt code-server + OpenClaw image, wired to the Tapis Pods MCP *bridge*.
+#
+# Everything slow is baked at BUILD time (openclaw, the vscode extension, node, python,
+# jq/curl) so the pod starts in seconds instead of installing on every boot. Per-instance
+# work (LiteLLM creds, git identity, the MCP endpoint + Tapis token refresh) happens at
+# runtime in /usr/local/bin/clawd-init.sh.
+#
+# Build + push to your private Gitea:
+#   docker build -f scripts/Dockerfile.clawd -t gitea.pods.tacc.develop.tapis.io/cgarcia/clawd:latest .
+#   docker push gitea.pods.tacc.develop.tapis.io/cgarcia/clawd:latest
+#
+# The tag `codeserver (clawd)` runs this image; it never re-installs anything.
+
+FROM lscr.io/linuxserver/code-server:latest
+
+# --- system deps (curl/jq for token refresh, python for openclaw config, node for openclaw) ---
+RUN apt-get update -qq \
+ && apt-get install -y --no-install-recommends curl jq python3 ca-certificates \
+ && (command -v node >/dev/null 2>&1 || (curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && apt-get install -y nodejs)) \
+ && rm -rf /var/lib/apt/lists/*
+
+# --- OpenClaw (baked) ---
+RUN curl -fsSL https://openclaw.ai/install.sh | bash 2>/dev/null \
+ || npm install -g openclaw@latest \
+ || npm install -g github:openclaw-ai/openclaw
+
+# --- openclaw-vscode extension (baked into code-server), copilot removed ---
+RUN code-server --install-extension OwenLiuyuxuan.openclaw-vscode 2>/dev/null || true \
+ && code-server --uninstall-extension GitHub.copilot 2>/dev/null || true \
+ && code-server --uninstall-extension GitHub.copilot-chat 2>/dev/null || true
+
+# --- runtime init (writes openclaw config + MCP endpoint + token refresh loop) ---
+COPY scripts/clawd-init.sh /usr/local/bin/clawd-init.sh
+RUN chmod +x /usr/local/bin/clawd-init.sh
+
+# code-server default port. Startup runs our init, then hands off to the s6 init (/init).
+CMD ["/bin/bash", "-c", "/usr/local/bin/clawd-init.sh; exec /init"]
