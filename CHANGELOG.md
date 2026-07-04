@@ -116,6 +116,10 @@ The edge release. Pods learned to leave the cluster.
 - Template tag descriptions raised from 400 to 20,000 characters — long-form usage guides live with the tag.
 - MCP durable audit log with `/audit/history`: every tool call recorded with caller attribution, a heatmap of activity, call detail, and read-only replay of full untrimmed results.
 - MCP full create/read/update tool surface (exec, file readers, secret use, all-resource CRUD). Deletes stay gated behind a flag.
+- The no-ADMIN invariant accepts APPROVEDADMIN, so a sole owner can self-promote for private image pulls.
+
+### Bug fixes:
+- Permission guards return proper 4xx codes instead of bare errors that mapped to 500.
 
 
 ## 26Q2.1
