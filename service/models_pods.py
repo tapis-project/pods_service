@@ -99,6 +99,8 @@ class Networking(TapisModel):
     tapis_auth_return_path: str = Field("/", description = "Path to redirect to when accessing the pod via Tapis auth.")
     tapis_auth_excluded_paths: list[str] = Field([], description = "List of PathPrefix patterns to exclude from Tapis auth (no forwardAuth). Useful for static assets that don't need auth. ex. ['/assets', '/static', '/_app']")
     tapis_auth_excluded_path_regex: list[str] = Field([], description = "List of PathRegexp patterns to exclude from Tapis auth. ex. ['\\\\.(js|css|ico|png|jpg|jpeg|webp|gif|svg|woff2?|ttf|map)$']")
+    access_gate: bool = Field(False, description = "If true, this endpoint is gated behind a shared password/token (the 'access gate'), so a site is not reachable on the public web until a visitor supplies a secret. Independent of tapis_auth — visitors do NOT need to be Tapis users. Mint credentials via POST /pods/{pod_id}/access-tokens. Can be combined with tapis_auth (both must pass).")
+    access_gate_return_path: str = Field("/", description = "Path to redirect to after a visitor successfully redeems an access-gate secret.")
     cors_allow_origins: list[str] = Field([], description = "List of CORS allowed origins. ex. ['https://tacc.develop.tapis.io', 'https://tacc.tapis.io']")
     cors_allow_methods: list[str] = Field([], description = "List of CORS allowed methods. ex. ['GET', 'POST', 'PUT', 'DELETE']")
     cors_allow_headers: list[str] = Field([], description = "List of CORS allowed headers. ex. ['Content-Type', 'X-Tapis-Token']")

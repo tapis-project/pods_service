@@ -88,6 +88,7 @@ from models_secrets import Secret
 from models_stacks import Stack
 from models_traffic import TrafficLog
 from models_pod_log_runs import PodLogRun
+from models_pod_access_tokens import PodAccessToken
 from models_template_gallery import TemplateGallery
 
 target_metadata = SQLModel.metadata

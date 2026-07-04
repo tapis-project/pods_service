@@ -402,6 +402,20 @@ def check_k8_services():
             rm_pod(k8_service['k8_name'])
             continue
 
+def pod_matches_k8_pod(pod, k8_pod) -> bool:
+    """EXACT identity match between a DB pod and a running k8s pod dict, on
+    (pod_id, tenant, site). Must be exact: a substring test ('myapp' in
+    'myappapi') aliases a stack member onto a sibling's pod — so a member stranded
+    at REQUESTED with no pod of its own is seen as "running", never recovered to STOPPED,
+    and never re-spawned. pod_id is only unique within a tenant/site, so all three match.
+    Duck-typed on purpose (pod object OR dict-like) so it unit-tests without a DB."""
+    return (
+        pod.pod_id == k8_pod.get('pod_id')
+        and pod.tenant_id == k8_pod.get('tenant_id')
+        and pod.site_id == k8_pod.get('site_id')
+    )
+
+
 def check_db_pods(k8_pods):
     """Go through database for all tenants in this site. Delete/Create whatever is needed.
     """
@@ -458,10 +472,7 @@ def check_db_pods(k8_pods):
 
             ### DB entries without a running pod should be updated to STOPPED.
             if pod.status_requested in ['ON'] and pod.status in [AVAILABLE, DELETING, REQUESTED]:
-                k8_pod_found = False
-                for k8_pod in k8_pods:
-                    if pod.pod_id in k8_pod['pod_id']:
-                        k8_pod_found = True
+                k8_pod_found = any(pod_matches_k8_pod(pod, k8_pod) for k8_pod in k8_pods)
 
                 if not k8_pod_found:
                     # Check action_logs for proper course of action
