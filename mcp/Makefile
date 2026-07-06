@@ -1,5 +1,5 @@
 # Local-only Pods MCP audit bridge. Requires a .env (cp .env.example .env).
-.PHONY: up down restart rebuild logs ps health shell
+.PHONY: up down restart rebuild logs ps health shell suite suite-destructive
 
 up:              ## build + start the bridge on :8100
 	docker compose up -d --build
@@ -24,3 +24,9 @@ health:          ## curl the health endpoint
 
 shell:           ## shell into the running container
 	docker compose exec mcp-bridge /bin/bash
+
+suite:           ## read-only pods suite through the live bridge (safe on tacc.develop)
+	pytest experiments/tests -q -m "not destructive"
+
+suite-destructive: ## gated create/mutate suite — papertest* ids, raw-API teardown
+	PODS_DESTRUCTIVE=1 pytest experiments/tests -q

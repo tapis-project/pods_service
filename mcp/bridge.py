@@ -82,7 +82,10 @@ _via_invoke: contextvars.ContextVar[bool] = contextvars.ContextVar(
 )
 
 
-def publish(event: dict) -> None:
+def publish(event: dict) -> dict:
+    """Stamp a seq, persist, fan out. Returns the seq-stamped copy so callers
+    (invoke, /chat) can hand the SAME event — seq included — to SSE viewers;
+    the experiment runner uses that seq to slice audit.jsonl per task run."""
     global _seq
     _seq += 1
     event = {**event, "seq": _seq}
@@ -99,6 +102,7 @@ def publish(event: dict) -> None:
             q.put_nowait(event)
         except Exception:  # noqa: BLE001 — a slow/closed subscriber never blocks publish
             pass
+    return event
 
 
 def _open_audit() -> None:
@@ -352,8 +356,8 @@ async def invoke(tool: str, args: dict, intent: str = "", agent: str = "") -> tu
            "ts": time.time(),
            "http": http[-1] if http else None, "http_calls": len(http),
            "error": err, **({} if not ok else _summarize(tool, data))}
-    publish(start)
-    publish(end)
+    start = publish(start)
+    end = publish(end)
     return start, end
 
 
@@ -415,7 +419,12 @@ class ToolCall(BaseModel):
 
 
 class ChatReq(BaseModel):
+    # Optional per-request LLM override (experiment harness): {"kind":
+    # "anthropic"|"openai", "base_url", "model", "api_key"}. Localhost-only
+    # bridge, so an in-body key is acceptable — it is used for the upstream
+    # call and NEVER echoed into audit events or responses.
     question: str
+    provider: dict | None = None
 
 
 def _rest_caller(request: Request) -> str:
@@ -557,13 +566,26 @@ async def chat(req: ChatReq):
     from chat_loop import run_chat, llm_configured
 
     async def gen():
-        if not llm_configured():
+        if not llm_configured(req.provider):
             yield _sse({"type": "assessment",
                         "text": "No LLM configured. Set ANTHROPIC_API_KEY or "
                                 "LLM_BASE_URL to enable chat. Audit + overview "
                                 "work without one."})
             yield _sse({"type": "done", "calls": 0, "elapsed_ms": 0})
             return
-        async for event in run_chat(req.question, invoke):
-            yield _sse(event)
+        try:
+            async for event in run_chat(req.question, invoke,
+                                        provider=req.provider):
+                if event.get("type") == "chat_summary":
+                    # Per-chat accounting (egress/ingress bytes, turns,
+                    # provider kind) belongs in the durable audit trail;
+                    # chat_loop already redacted it (no api_key), so publish
+                    # as-is to stamp a seq.
+                    event = publish(event)
+                yield _sse(event)
+        except Exception as e:  # noqa: BLE001 — surface LLM/transport failure
+            # as a clean SSE event instead of aborting the stream mid-body
+            # (the experiment runner records this as a failed run).
+            yield _sse({"type": "error", "text": f"chat failed: {e}"})
+            yield _sse({"type": "done", "calls": 0, "elapsed_ms": 0})
     return StreamingResponse(gen(), media_type="text/event-stream")
