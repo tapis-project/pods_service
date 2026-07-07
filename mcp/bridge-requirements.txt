@@ -1,3 +1,6 @@
 fastapi>=0.110
 uvicorn>=0.29
 # no vendor LLM SDK — chat_loop.py speaks Anthropic + OpenAI-compat over httpx
+# OTel tool-call spans -> self-hosted Arize Phoenix (see PHOENIX_OTLP_ENDPOINT)
+opentelemetry-sdk>=1.25
+opentelemetry-exporter-otlp-proto-http>=1.25
