@@ -513,6 +513,129 @@ def _check_certs() -> dict:
             "counts": counts, "timings": timings, "sampled": sampled}
 
 
+def _check_metrics_backend() -> dict:
+    """
+    Status of the OPTIONAL pluggable metrics backend (metrics_backend config).
+
+    A missing/unconfigured backend or an unreachable backend is NORMAL
+    (maintenance, server changes) — status is at most 'warning', never 'error',
+    and this check never raises. On 401/403 from Grafana the 'guidance' field
+    carries the token-rotation instructions verbatim.
+    """
+    try:
+        from metrics_backend import backend_health
+        block = backend_health()
+        if not block["configured"]:
+            block["status"] = "ok"
+            block["message"] = (
+                f"Metrics backend '{block['backend']}' — no external metrics source "
+                "configured; cpu/mem usage disabled (this is fine)."
+            )
+        elif block["reachable"]:
+            block["status"] = "ok"
+            block["message"] = f"Metrics backend '{block['backend']}' reachable."
+        else:
+            block["status"] = "warning"
+            msg = (f"Metrics backend '{block['backend']}' configured but not reachable "
+                   f"({block.get('last_error') or 'unknown error'}). Metrics being down is "
+                   "normal during maintenance; pod metrics degrade to 'unavailable'.")
+            if block.get("guidance"):
+                msg += f" {block['guidance']}"
+            block["message"] = msg
+        return block
+    except Exception as e:
+        # Metrics must never take health reporting down.
+        return {"status": "warning", "backend": "unknown", "configured": False,
+                "reachable": False, "last_ok_ts": None, "last_error": str(e),
+                "guidance": None, "message": f"Metrics backend check failed: {e}"}
+
+
+def _check_volume_sizes() -> dict:
+    """
+    Freshness of the volume/snapshot size sweep (pods-health-central runs
+    `du -sm` over NFS every ~10 min and writes volume_usage_logs). This check
+    reads that DB evidence, so it catches the silent failure mode where the
+    sweep runs but measures nothing (wrong NFS mount/path layout) as well as
+    a dead health-central. Never raises; worst case 'warning'.
+    """
+    SWEEP_INTERVAL_MIN = 10          # health_central _SIZE_CHECK_INTERVAL
+    STALE_AFTER_MIN = 3 * SWEEP_INTERVAL_MIN
+    try:
+        from models_volume_usage import VolumeUsageLog
+        from models_volumes import Volume
+        from models_snapshots import Snapshot
+
+        totals = {"volume": 0, "snapshot": 0}
+        measured = {"volume": 0, "snapshot": 0}
+        latest: datetime | None = None
+        for tenant in SITE_TENANT_DICT[conf.site_id]:
+            if tenant in ("siteadmintable", "defaulttables"):
+                continue
+            try:
+                totals["volume"] += len(Volume.db_get_all(tenant=tenant, site=conf.site_id))
+                totals["snapshot"] += len(Snapshot.db_get_all(tenant=tenant, site=conf.site_id))
+                for obj_type in ("volume", "snapshot"):
+                    logs = VolumeUsageLog.get_all_recent(
+                        obj_type, tenant, conf.site_id, limit_per_object=1)
+                    measured[obj_type] += len(logs)
+                    for l in logs:
+                        if latest is None or l.measured_at > latest:
+                            latest = l.measured_at
+            except Exception:
+                continue
+
+        total_objects = totals["volume"] + totals["snapshot"]
+        total_measured = measured["volume"] + measured["snapshot"]
+        counts_str = (f"volumes {measured['volume']}/{totals['volume']}, "
+                      f"snapshots {measured['snapshot']}/{totals['snapshot']}")
+        block: dict = {
+            "volumes_total": totals["volume"],
+            "volumes_with_measurements": measured["volume"],
+            "snapshots_total": totals["snapshot"],
+            "snapshots_with_measurements": measured["snapshot"],
+            "last_measured_at": latest.isoformat() + "Z" if latest else None,
+        }
+        if total_objects == 0:
+            block["status"] = "ok"
+            block["message"] = "No volumes or snapshots to measure."
+        elif latest is None:
+            block["status"] = "warning"
+            block["message"] = (
+                f"{total_objects} volumes/snapshots exist but sizes have NEVER been "
+                "measured — the health-central du sweep is finding no paths. Check the "
+                "NFS mount and the {nfs_base_path}/{tenant}/volumes layout in the "
+                "pods-health-central pod.")
+        else:
+            age_min = (datetime.utcnow() - latest).total_seconds() / 60
+            # One object TYPE fully unmeasured while the other works deserves its
+            # own warning (e.g. snapshot dirs living at an unexpected NFS path).
+            dead_types = [t for t in ("volume", "snapshot")
+                          if totals[t] > 0 and measured[t] == 0]
+            if age_min > STALE_AFTER_MIN:
+                block["status"] = "warning"
+                block["message"] = (
+                    f"Last size measurement is {age_min:.0f} min old (sweep runs every "
+                    f"~{SWEEP_INTERVAL_MIN} min) — pods-health-central may be down or "
+                    f"the NFS paths stopped resolving. ({counts_str})")
+            elif dead_types:
+                block["status"] = "warning"
+                block["message"] = (
+                    f"Sweep is running but NO {dead_types[0]}s have measurements "
+                    f"({counts_str}) — their NFS dirs may live at an unexpected path; "
+                    "check health-central logs for 'missing' counts.")
+            else:
+                block["status"] = "ok"
+                block["message"] = (
+                    f"Size sweep healthy — {counts_str} measured, "
+                    f"last {age_min:.0f} min ago.")
+        return block
+    except Exception as e:
+        return {"status": "warning", "volumes_total": None,
+                "volumes_with_measurements": None, "snapshots_total": None,
+                "snapshots_with_measurements": None, "last_measured_at": None,
+                "message": f"Volume size check failed: {e}"}
+
+
 @router.get(
     "/pods/admin/health",
     tags=["Admin"],
@@ -522,7 +645,8 @@ def _check_certs() -> dict:
 async def admin_health():
     """
     Admin-only diagnostic endpoint. Checks database, RabbitMQ, Traefik pod
-    status, traffic ingestion state, RBAC, and TLS cert (ACME) provisioning.
+    status, traffic ingestion state, RBAC, TLS cert (ACME) provisioning, and
+    the optional metrics backend (grafana).
     Returns a structured report with per-subsystem status (ok / warning / error)
     and human-readable messages.
     """
@@ -532,8 +656,10 @@ async def admin_health():
     traffic = _check_traffic_ingestion()
     rbac = _check_rbac()
     certs = _check_certs()
+    metrics = _check_metrics_backend()
+    volume_sizes = _check_volume_sizes()
 
-    subsystems = {"database": db, "rabbitmq": rabbit, "traefik": traefik, "traffic_ingestion": traffic, "rbac": rbac, "certs": certs}
+    subsystems = {"database": db, "rabbitmq": rabbit, "traefik": traefik, "traffic_ingestion": traffic, "rbac": rbac, "certs": certs, "metrics_backend": metrics, "volume_sizes": volume_sizes}
 
     # Roll up: any error → error, any warning → warning, else ok
     statuses = [s["status"] for s in subsystems.values()]
@@ -561,15 +687,23 @@ async def admin_metrics():
     """
     Admin-only. Aggregate compute and status metrics across all pods.
 
-    Fetches live CPU/memory usage from the k8s Metrics API (requires metrics-server)
-    and merges with DB records to produce per-pod and cluster-wide summaries.
-    Returns gracefully if metrics-server is unavailable.
+    Live CPU/memory comes from the configured metrics backend (grafana —
+    ONE cached bulk query for the whole cluster), falling back to
+    the k8s Metrics API when no backend is configured. Merged with DB records
+    for per-pod and cluster-wide summaries. Degrades gracefully: pod counts
+    and allocation totals are always correct even with no usage source.
     """
     from models_pods import Pod
+    from metrics_backend import bulk_usage_dict, get_provider
 
-    # ── k8s live metrics (best-effort) ────────────────────────────────────────
-    k8s_usage = get_all_pod_k8s_metrics()   # {k8_name: {cpu_m, mem_mb}}
-    metrics_available = bool(k8s_usage)
+    # ── Live usage: metrics backend first (all tenants share the namespace,
+    #    so one pattern covers the whole cluster), metrics-server fallback ────
+    backend_bulk = bulk_usage_dict("pods-.*")
+    backend_usage = backend_bulk.get("pods", {})   # {k8_name: {cpu_m, mem_mb, ...}}
+    k8s_usage = {} if backend_usage else get_all_pod_k8s_metrics()   # {k8_name: {cpu_m, mem_mb}}
+    metrics_available = bool(backend_usage) or bool(k8s_usage)
+    metrics_source = (get_provider().name if backend_usage
+                      else "metrics-server" if k8s_usage else None)
 
     # ── DB: all pods across all tenants ───────────────────────────────────────
     status_counts: dict = {}
@@ -588,7 +722,7 @@ async def admin_metrics():
                 status_counts[s] = status_counts.get(s, 0) + 1
 
                 res = pod.resources or {}
-                usage = k8s_usage.get(pod.k8_name, {})
+                usage = backend_usage.get(pod.k8_name) or k8s_usage.get(pod.k8_name, {})
 
                 pod_rows.append({
                     "pod_id":       pod.pod_id,
@@ -617,6 +751,8 @@ async def admin_metrics():
 
     return ok(result={
         "metrics_available":  metrics_available,
+        "metrics_source":     metrics_source,
+        "metrics_unavailable_reason": backend_bulk.get("unavailable") if not metrics_available else None,
         "checked_at":         datetime.utcnow().isoformat() + "Z",
         "status_distribution": status_counts,
         "totals": {

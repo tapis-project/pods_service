@@ -314,4 +314,23 @@ async def list_volumes_usage(
     logger.info(f"GET /pods/volumes/usage - Top of list_volumes_usage.")
     from models_volume_usage import VolumeUsageLog
     logs = VolumeUsageLog.get_all_recent("volume", g.request_tenant_id, g.site_id, limit_per_object=limit_per)
-    return ok(result=[l.to_dict() for l in logs], msg="Volume usage history retrieved.")
+
+    # Freshness stanza (same metadata.warnings pattern as GET /pods): tells the
+    # UI which objects the sweep hasn't measured, without failing the request.
+    metadata: dict = {}
+    try:
+        volumes = Volume.db_get_all(tenant=g.request_tenant_id, site=g.site_id)
+        measured_ids = {l.object_id for l in logs}
+        unmeasured = [v.volume_id for v in volumes if v.volume_id not in measured_ids]
+        latest = max((l.measured_at for l in logs), default=None)
+        metadata["last_measured_at"] = latest.isoformat() + "Z" if latest else None
+        metadata["unmeasured"] = unmeasured
+        if unmeasured:
+            metadata["warnings"] = [
+                f"{len(unmeasured)} volume(s) have no size measurements yet (the du sweep "
+                f"runs every ~10 min; if this persists check admin health 'volume_sizes'): "
+                + ", ".join(unmeasured[:10]) + ("…" if len(unmeasured) > 10 else "")]
+    except Exception as e:
+        logger.warning(f"list_volumes_usage freshness metadata failed: {e}")
+
+    return ok(result=[l.to_dict() for l in logs], metadata=metadata, msg="Volume usage history retrieved.")

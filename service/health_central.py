@@ -138,62 +138,76 @@ def check_volume_sizes():
             logger.warning(f"du failed for {path}: {e}")
         return None
 
-    for tenant in SITE_TENANT_DICT[conf.site_id]:
-        # ── volumes ───────────────────────────────────────────────────────────
-        try:
-            volumes = Volume.db_get_all(tenant=tenant, site=conf.site_id)
-            for vol in volumes:
-                path = os.path.join(conf.nfs_base_path, "volumes", vol.volume_id)
-                size_mb = _measure_mb(path)
-                if size_mb is None:
-                    continue
-                vol.size = int(size_mb)
-                vol.db_update()
-                VolumeUsageLog.log_measurement(
-                    object_id=vol.volume_id,
-                    object_type="volume",
-                    tenant_id=tenant,
-                    site_id=conf.site_id,
-                    size_mb=size_mb,
-                    size_limit_mb=float(vol.size_limit) if vol.size_limit else None,
-                )
-                VolumeUsageLog.purge_old(vol.volume_id, "volume", tenant, conf.site_id)
-                if vol.size_limit and size_mb > float(vol.size_limit):
-                    logger.warning(
-                        f"Volume {vol.volume_id} ({tenant}) is OVER size limit: "
-                        f"{size_mb:.1f} MB > {vol.size_limit} MB (no enforcement yet)"
-                    )
-                else:
-                    logger.debug(f"Volume {vol.volume_id}: {size_mb:.1f} MB")
-        except Exception as e:
-            logger.warning(f"check_volume_sizes volumes error for tenant={tenant}: {e}")
+    measured = 0
+    missing = 0
+    failed = 0
 
-        # ── snapshots ─────────────────────────────────────────────────────────
+    def _measure_object(tenant: str, kind: str, obj_id: str, obj) -> str:
+        """Measure ONE volume/snapshot. Returns 'measured'|'missing'|'failed'.
+        Isolated so one bad object (db hiccup, missing table, weird path) can
+        never abort the rest of the tenant's sweep — that failure mode blanked
+        every size after the first over-limit volume when volumeusagelog was
+        missing."""
+        # NFS layout is {nfs_base_path}/{tenant}/<kind>s/{id} — the tenant
+        # segment is REQUIRED (matches volume_utils.files_*); without it every
+        # path fails os.path.exists and the sweep silently measures nothing.
+        path = os.path.join(conf.nfs_base_path, tenant, f"{kind}s", obj_id)
+        size_mb = _measure_mb(path)
+        if size_mb is None:
+            return "missing"
         try:
-            snapshots = Snapshot.db_get_all(tenant=tenant, site=conf.site_id)
-            for snap in snapshots:
-                path = os.path.join(conf.nfs_base_path, "snapshots", snap.snapshot_id)
-                size_mb = _measure_mb(path)
-                if size_mb is None:
-                    continue
-                snap.size = int(size_mb)
-                snap.db_update()
-                VolumeUsageLog.log_measurement(
-                    object_id=snap.snapshot_id,
-                    object_type="snapshot",
-                    tenant_id=tenant,
-                    site_id=conf.site_id,
-                    size_mb=size_mb,
-                    size_limit_mb=float(snap.size_limit) if snap.size_limit else None,
-                )
-                VolumeUsageLog.purge_old(snap.snapshot_id, "snapshot", tenant, conf.site_id)
-                if snap.size_limit and size_mb > float(snap.size_limit):
-                    logger.warning(
-                        f"Snapshot {snap.snapshot_id} ({tenant}) is OVER size limit: "
-                        f"{size_mb:.1f} MB > {snap.size_limit} MB (no enforcement yet)"
-                    )
+            obj.size = int(size_mb)
+            # Background measurement — don't stamp update_ts (user_update=False), or every
+            # du sweep would look like a user edit on the volume/snapshot.
+            obj.db_update(user_update=False)
+            VolumeUsageLog.log_measurement(
+                object_id=obj_id,
+                object_type=kind,
+                tenant_id=tenant,
+                site_id=conf.site_id,
+                size_mb=size_mb,
+                size_limit_mb=float(obj.size_limit) if obj.size_limit else None,
+            )
+            VolumeUsageLog.purge_old(obj_id, kind, tenant, conf.site_id)
+            if obj.size_limit and size_mb > float(obj.size_limit):
+                logger.warning(
+                    f"{kind.capitalize()} {obj_id} ({tenant}) is OVER size limit: "
+                    f"{size_mb:.1f} MB > {obj.size_limit} MB (no enforcement yet)")
+            else:
+                logger.debug(f"{kind.capitalize()} {obj_id}: {size_mb:.1f} MB")
+            return "measured"
         except Exception as e:
-            logger.warning(f"check_volume_sizes snapshots error for tenant={tenant}: {e}")
+            logger.warning(f"check_volume_sizes: recording {kind} {obj_id} ({tenant}) failed: {e}")
+            return "failed"
+
+    for tenant in SITE_TENANT_DICT[conf.site_id]:
+        for kind, model in (("volume", Volume), ("snapshot", Snapshot)):
+            try:
+                objects = model.db_get_all(tenant=tenant, site=conf.site_id)
+            except Exception as e:
+                logger.warning(f"check_volume_sizes {kind}s listing error for tenant={tenant}: {e}")
+                continue
+            for obj in objects:
+                obj_id = getattr(obj, f"{kind}_id")
+                outcome = _measure_object(tenant, kind, obj_id, obj)
+                if outcome == "measured":
+                    measured += 1
+                elif outcome == "missing":
+                    missing += 1
+                else:
+                    failed += 1
+
+    if failed:
+        logger.warning(f"check_volume_sizes: {failed} object(s) measured but FAILED to record — see warnings above.")
+    if missing and not measured:
+        # Every single path was absent — that's not "empty volumes", that's a
+        # wrong mount/layout. Shout so it can't fail silently again.
+        logger.error(
+            f"check_volume_sizes measured 0 of {missing} objects — every NFS path "
+            f"under {conf.nfs_base_path} was missing. Check the NFS mount and the "
+            f"{{base}}/{{tenant}}/volumes layout.")
+    else:
+        logger.info(f"check_volume_sizes: measured {measured}, missing {missing}, failed {failed}.")
 
 
 def check_nfs_tapis_system():

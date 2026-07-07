@@ -91,5 +91,12 @@ async def get_volume(volume_id):
     # TODO search
 
     volume = Volume.db_get_with_pk(volume_id, tenant=g.request_tenant_id, site=g.site_id)
+    if not volume:
+        # Guard: admins bypass the auth-layer 404 (check_object_id), so without
+        # this the .display() deref raises an opaque 500.
+        # ResourceError(msg, code) is a BaseTapisError the handler maps to `code`; tapipy's
+        # BadRequestError is NOT and would fall through to the opaque 500 this guard avoids.
+        from errors import ResourceError
+        raise ResourceError(f"Volume with id '{volume_id}' not found in tenant '{g.request_tenant_id}'.", 404)
 
     return ok(result=volume.display(), msg="Volume retrieved successfully.")

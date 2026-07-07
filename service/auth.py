@@ -42,12 +42,12 @@ def get_user_sk_roles():
         end_timer = timeit.default_timer()
         total = (end_timer - start_timer) * 1000
         if total > 4000:
-            logger.critical(f"t.sk.getUserRoles took {total} to run for user {g.username}, tenant: {g.request_tenant_id}")
+            logger.warning(f"t.sk.getUserRoles took {total:.0f} ms for user {g.username}, tenant: {g.request_tenant_id}")
         raise e
     end_timer = timeit.default_timer()
     total = (end_timer - start_timer) * 1000
     if total > 4000:
-        logger.critical(f"t.sk.getUserRoles took {total} to run for user {g.username}, tenant: {g.request_tenant_id}")
+        logger.warning(f"t.sk.getUserRoles took {total:.0f} ms for user {g.username}, tenant: {g.request_tenant_id}")
     roles_list = roles_obj.names
     if len(roles_list) < 10:
         logger.debug(f"Roles received: {roles_list}")
@@ -168,29 +168,35 @@ def check_route_permissions(request):
         ["/pods/volumes/{volume_id}/list", "GET", codes.READ],
         ["/pods/volumes/{volume_id}/upload/{filename}", "POST", codes.USER],
         ["/pods/volumes/{volume_id}/contents/{path:path}", "GET", codes.USER],
+        # literal /usage MUST precede /{volume_id} — [^/]+ swallows "usage"
+        ["/pods/volumes/usage", "GET", codes.NONE],
         ["/pods/volumes/{volume_id}", "GET", codes.READ],
         ["/pods/volumes/{volume_id}", "PUT", codes.USER],
         ["/pods/volumes/{volume_id}", "DELETE", codes.ADMIN],
         ["/pods/volumes", "GET", codes.NONE],
         ["/pods/volumes", "POST", codes.NONE],
         ["/pods/{pod_id}/events", "GET", codes.READ],
+        # fleet metrics — literal routes MUST precede /pods/{pod_id} ([^/]+ would
+        # swallow "metrics"); permission filtering happens in-handler like GET /pods
+        ["/pods/metrics/history", "GET", codes.NONE],
+        ["/pods/metrics", "GET", codes.NONE],
         ["/pods/{pod_id}/metrics", "GET", codes.READ],
         ["/pods/admin/metrics", "GET", codes.ADMIN],
         ["/pods/volumes/{volume_id}/usage", "GET", codes.READ],
-        ["/pods/volumes/usage", "GET", codes.READ],
         # SNAPSHOTS
         ["/pods/snapshots/{snapshot_id}/permissions", "GET", codes.USER],
         ["/pods/snapshots/{snapshot_id}/permissions/{user}", "DELETE", codes.ADMIN],
         ["/pods/snapshots/{snapshot_id}/permissions", "POST", codes.ADMIN],
         ["/pods/snapshots/{snapshot_id}/list", "GET", codes.READ],
         ["/pods/snapshots/{snapshot_id}/contents/{path:path}", "GET", codes.USER],
+        # literal /usage MUST precede /{snapshot_id} — [^/]+ swallows "usage"
+        ["/pods/snapshots/usage", "GET", codes.NONE],
         ["/pods/snapshots/{snapshot_id}", "GET", codes.READ],
         ["/pods/snapshots/{snapshot_id}", "PUT", codes.USER],
         ["/pods/snapshots/{snapshot_id}", "DELETE", codes.ADMIN],
         ["/pods/snapshots", "GET", codes.NONE],
         ["/pods/snapshots", "POST", codes.NONE],
         ["/pods/snapshots/{snapshot_id}/usage", "GET", codes.READ],
-        ["/pods/snapshots/usage", "GET", codes.READ],
         # JUPYTER
         ["/pods/jupyter/{pod_id}/upload", "POST", codes.USER],
         ["/pods/jupyter/ensure", "GET", codes.USER],
@@ -217,8 +223,6 @@ def check_route_permissions(request):
         ["/pods/clusters/{cluster_id}/pods", "GET", codes.USER],
          #["/pods/clusters/{cluster_id}/add_pod/{pod_id}", "POST", codes.ADMIN],
          #["/pods/clusters/{cluster_id}/remove_pod/{pod_id}", "POST", codes.ADMIN],
-         # GRAPHQL
-         ["/pods/graphql", "POST", codes.NONE],  # GraphQL endpoint, no auth needed yet
         # STACKS — MUST be registered before the /pods/{pod_id} routes below; the {pod_id}
         # regex ([^/]+) would otherwise swallow "stacks".
         ["/pods/stacks/{stack_id}/permissions", "GET", codes.USER],

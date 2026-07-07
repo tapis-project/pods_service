@@ -415,12 +415,11 @@ def combine_pod_and_template_recursively(input_obj, template_name, seen_template
                                 merged_resources[resource_key] = resource_val
                     
                     setattr(input_obj, mod_key, merged_resources)
-                    logger.critical(f'DEBUG: end of resources merge {getattr(input_obj, mod_key, {})}')
+                    logger.debug(f'end of resources merge {getattr(input_obj, mod_key, {})}')
                 elif mod_key.startswith("resources."):
-                    logger.critical('hey')
+                    logger.debug(f'merging dotted resources field {mod_key}')
                     outer_arg, inner_arg = resources.split('.') # resources.gpus
                     outer_obj = getattr(input_obj, outer_arg) # resources
-                    logger.critical('oh no!')
                     new_obj_value = template_pod_def[outer_arg][inner_arg]
                     setattr(outer_obj, inner_arg, new_obj_value)
                 elif mod_key == "networking":
@@ -433,7 +432,7 @@ def combine_pod_and_template_recursively(input_obj, template_name, seen_template
                         # Start with template's network definition
                         merged_network = network_def.copy()
                         # If pod modified this field, overwrite template
-                        logger.critical(f"network_name: {network_name}, input_obj_modified_fields: {input_obj_modified_fields}")
+                        logger.debug(f"network_name: {network_name}, input_obj_modified_fields: {input_obj_modified_fields}")
                         if network_name in final_network_obj and "networking" in input_obj_modified_fields:
                             merged_network.update(final_network_obj[network_name])
                         # Get tenant_id from input_obj or use default from context

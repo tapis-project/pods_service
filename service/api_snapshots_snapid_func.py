@@ -276,4 +276,22 @@ async def list_snapshots_usage(
     logger.info(f"GET /pods/snapshots/usage - Top of list_snapshots_usage.")
     from models_volume_usage import VolumeUsageLog
     logs = VolumeUsageLog.get_all_recent("snapshot", g.request_tenant_id, g.site_id, limit_per_object=limit_per)
-    return ok(result=[l.to_dict() for l in logs], msg="Snapshot usage history retrieved.")
+
+    # Freshness stanza (same metadata.warnings pattern as GET /pods).
+    metadata: dict = {}
+    try:
+        snapshots = Snapshot.db_get_all(tenant=g.request_tenant_id, site=g.site_id)
+        measured_ids = {l.object_id for l in logs}
+        unmeasured = [s.snapshot_id for s in snapshots if s.snapshot_id not in measured_ids]
+        latest = max((l.measured_at for l in logs), default=None)
+        metadata["last_measured_at"] = latest.isoformat() + "Z" if latest else None
+        metadata["unmeasured"] = unmeasured
+        if unmeasured:
+            metadata["warnings"] = [
+                f"{len(unmeasured)} snapshot(s) have no size measurements yet (the du sweep "
+                f"runs every ~10 min; if this persists check admin health 'volume_sizes'): "
+                + ", ".join(unmeasured[:10]) + ("…" if len(unmeasured) > 10 else "")]
+    except Exception as e:
+        logger.warning(f"list_snapshots_usage freshness metadata failed: {e}")
+
+    return ok(result=[l.to_dict() for l in logs], metadata=metadata, msg="Snapshot usage history retrieved.")

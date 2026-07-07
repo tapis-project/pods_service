@@ -164,14 +164,16 @@ api.include_router(router_templates_templateid_gallery)
 # images
 api.include_router(router_images)
 api.include_router(router_images_imageid)
-# snapshots
+# snapshots — func router MUST register before the /{snapshot_id} router: it
+# holds the literal /pods/snapshots/usage route, which /{snapshot_id} would
+# otherwise swallow (snapshot_id="usage" → None → 500)
 api.include_router(router_snapshots)
-api.include_router(router_snapshots_snapshotid)
 api.include_router(router_snapshots_snapshotid_func)
-# volumes
+api.include_router(router_snapshots_snapshotid)
+# volumes — same ordering requirement for /pods/volumes/usage
 api.include_router(router_volumes)
-api.include_router(router_volumes_volumeid)
 api.include_router(router_volumes_volumeid_func)
+api.include_router(router_volumes_volumeid)
 # jupyter
 api.include_router(router_pods_podsid_jupyter)
 # clusters
