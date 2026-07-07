@@ -222,6 +222,10 @@ tcpServersTransport:
 
 {% if tcp_proxy_info or postgres_proxy_info -%}
 tcp:
+{#- only emit middlewares: when at least one entry renders — a bare
+    "middlewares:" is YAML null, and traefik rejects the WHOLE dynamic
+    config file over it (every router 404s, http included) -#}
+{%- if tcp_proxy_info.values() | selectattr('ip_allow_list') | list %}
   middlewares:
     {% for pname, pdata in tcp_proxy_info.items() -%}
     {% if pdata.ip_allow_list -%}
@@ -233,6 +237,7 @@ tcp:
           {% endfor %}
     {% endif -%}
     {% endfor %}
+{%- endif %}
 
 
   routers:{% endif %}
