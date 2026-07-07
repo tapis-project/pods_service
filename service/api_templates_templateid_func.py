@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from errors import PermissionsException
+from errors import PermissionsException, ResourceError
 from models_misc import SetPermission
 from models_templates import Template, TemplatePermissionsResponse
 from models_templates_tags import TemplateTagsResponse, TemplateTagResponse, NewTemplateTag, TemplateTag
@@ -81,7 +81,7 @@ async def set_template_permission(template_id, set_permission: SetPermission):
 
     # Ensure there's still one ADMIN role before finishing.
     if "ADMIN" not in curr_perms.values():
-        raise KeyError(f"Operation would result in pod with no users in ADMIN role. Rolling back.")
+        raise ResourceError("Operation would leave the template with no ADMIN-capable user. Rolling back.", 400)
 
     # Convert back to db format
     perm_list = []
@@ -115,14 +115,14 @@ async def delete_template_permission(template_id, user):
     curr_perms = template.get_permissions()
 
     if user not in curr_perms.keys():
-        raise KeyError(f"Could not find permission for template with username {user} when deleting permission")
+        raise ResourceError(f"Could not find permission for template with username {user} when deleting permission.", 404)
 
     # Delete permission
     del curr_perms[user]
 
     # Ensure there's still one ADMIN role before finishing.
     if "ADMIN" not in curr_perms.values():
-        raise KeyError(f"Operation would result in template with no users in ADMIN role. Rolling back.")
+        raise ResourceError("Operation would leave the template with no ADMIN-capable user. Rolling back.", 400)
 
     # Convert back to db format
     perm_list = []

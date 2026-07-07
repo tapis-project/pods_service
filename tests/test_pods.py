@@ -148,6 +148,13 @@ def test_delete_set_permissions(headers):
     result = basic_response_checks(rsp)
     assert "Pod permission deleted successfully" in rsp.json()['message']
 
+def test_delete_nonexistent_permission_400(headers):
+    # Removing a permission that isn't set is a clean client error (400), not a 500 —
+    # the handler used to raise a bare KeyError which surfaced as a server error.
+    rsp = client.delete(f"/pods/{test_pod_1}/permissions/nosuchuser", headers=headers)
+    assert rsp.status_code == 400
+    assert "No permission found" in str(response_format(rsp)['message'])
+
 def test_update_pod(headers):
     # Definition
     pod_def = {

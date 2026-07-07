@@ -275,15 +275,15 @@ async def get_pod_log_run(pod_id, run_index: int):
 
     run = PodLogRun.get_run_by_index(pod_id, run_index, g.request_tenant_id, g.site_id)
     if not run:
-        raise BadRequestError(msg=f"Log run #{run_index} not found for pod '{pod_id}'.")
+        raise ResourceError(f"Log run #{run_index} not found for pod '{pod_id}'.", 404)
 
     result = run.display()
     if run.is_archived and not run.logs:
         if not run.archive_path:
-            raise BadRequestError(msg=f"Log run #{run_index} is archived but archive_path is not set.")
+            raise ResourceError(f"Log run #{run_index} is archived but archive_path is not set.", 400)
         import os
         if not os.path.exists(run.archive_path):
-            raise BadRequestError(msg=f"Archive file for run #{run_index} not found on disk: {run.archive_path}")
+            raise ResourceError(f"Archive file for run #{run_index} not found on disk: {run.archive_path}", 404)
         result['logs'] = read_archive(run.archive_path)
 
     return ok(result=result, msg=f"Pod log run #{run_index} retrieved successfully.")
@@ -993,14 +993,18 @@ async def delete_pod_permission(pod_id, user):
     curr_perms = pod.get_permissions()
 
     if user not in curr_perms.keys():
-        raise KeyError(f"Could not find permission for pod with username {user} when deleting permission")
+        # Client asked to remove a permission that isn't set — a clean 400, not a server
+        # error (bare KeyError surfaced as an opaque 500). NOTE: ResourceError(msg, code) is
+        # a BaseTapisError the handler maps to `code`; tapipy's BadRequestError is NOT a
+        # BaseTapisError and falls through to 500 — do not use it to signal a 4xx here.
+        raise ResourceError(f"No permission found for user '{user}' on pod '{pod_id}'.", 400)
 
     # Delete permission
     del curr_perms[user]
 
     # Ensure there's still an admin-capable user before finishing (APPROVEDADMIN is ADMIN+).
     if not any(level in ("ADMIN", "APPROVEDADMIN") for level in curr_perms.values()):
-        raise KeyError(f"Operation would result in pod with no users in ADMIN role. Rolling back.")
+        raise ResourceError("Operation would leave the pod with no ADMIN-capable user. Rolling back.", 400)
 
     # Convert back to db format
     perm_list = []
@@ -1035,6 +1039,10 @@ async def stop_pod(pod_id, force: bool = False):
     logger.info(f"GET /pods/{pod_id}/stop - Top of stop_pod. force={force}")
 
     pod = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
+    if not pod:
+        # Guard: admins bypass the auth-layer 404 (check_object_id), so a bad/nonexistent
+        # pod_id would otherwise 500 on the .status_requested deref below.
+        raise ResourceError(f"Pod with id '{pod_id}' not found in tenant '{g.request_tenant_id}', site '{g.site_id}'.", 404)
     pod.status_requested = OFF
     pod.force_stop = force
     pod.db_update(f"'{g.username}' ran stop_pod, set to OFF{' (force, bypassing stack order)' if force else ''}")
@@ -1060,6 +1068,10 @@ async def start_pod(pod_id):
     logger.info(f"GET /pods/{pod_id}/start - Top of start_pod.")
 
     pod = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
+    if not pod:
+        # Guard: admins bypass the auth-layer 404 (check_object_id), so a bad/nonexistent
+        # pod_id would otherwise 500 on the .status deref below.
+        raise ResourceError(f"Pod with id '{pod_id}' not found in tenant '{g.request_tenant_id}', site '{g.site_id}'.", 404)
 
     # Only run start_pod from status=STOPPED
     if not pod.status in [STOPPED]:
@@ -1154,6 +1166,11 @@ async def restart_pod(pod_id, grab_latest_template_tag: bool = False):
     logger.info(f"GET /pods/{pod_id}/restart - Top of restart_pod.")
 
     pod = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
+    if not pod:
+        # Guard: admins bypass the auth-layer 404 (check_object_id), so a bad/nonexistent
+        # pod_id (e.g. a malformed MCP arg serialized into the path) would otherwise 500
+        # on the .status_requested deref below.
+        raise ResourceError(f"Pod with id '{pod_id}' not found in tenant '{g.request_tenant_id}', site '{g.site_id}'.", 404)
 
     if grab_latest_template_tag:
         if pod.template:
@@ -1254,7 +1271,7 @@ async def save_pod_as_template_tag(pod_id_net, new_template_tag_from_pod: NewTem
     if not pod:
         # Guard: without this, the .get_pod_definition_for_template_tag() call below raises an
         # opaque 500 ('NoneType' object has no attribute ...). Return a clear 400 instead.
-        raise BadRequestError(f"Pod with id '{pod_id_net}' not found in tenant '{g.request_tenant_id}', site '{g.site_id}'.")
+        raise ResourceError(f"Pod with id '{pod_id_net}' not found in tenant '{g.request_tenant_id}', site '{g.site_id}'.", 404)
 
     # Auth already checks permissions for pod_id. We must also check permissions for template.
     template = Template.db_get_with_pk(new_template_tag_from_pod.template_id, tenant="siteadmintable", site=g.site_id)
@@ -1443,7 +1460,12 @@ async def pod_auth(pod_id_net, request: Request):
             if token_str:
                 token_tenant = get_token_tenant_id(token_str)
                 if token_tenant and not check_tapis_auth_tenant_allowed(token_tenant, g.request_tenant_id, tapis_auth_allowed_tenants):
-                    raise Exception(f"Token tenant '{token_tenant}' not in allowed tenants for pod_id: {pod_id_net}. Pod tenant: '{g.request_tenant_id}'. Allowed extra tenants (via permissions): {tapis_auth_allowed_tenants}.")
+                    # Explicit 403 (a raise here would be swallowed by the except below and
+                    # the user would fall into the OAuth redirect path with no explanation).
+                    logger.info(f"Cross-tenant token rejected for {pod_id_net}. token_tenant: {token_tenant}, pod_tenant: {g.request_tenant_id}, allowed: {tapis_auth_allowed_tenants}")
+                    return JSONResponse(
+                        content=f"Pods: token tenant '{token_tenant}' is not allowed for this pod. Pod tenant: '{g.request_tenant_id}'; extra tenants allowed via permissions: {tapis_auth_allowed_tenants}.",
+                        status_code=403)
 
             tapis_auth_headers = get_pod_networking_objects(
                 net_info=net_info,
@@ -1453,7 +1475,14 @@ async def pod_auth(pod_id_net, request: Request):
             )
             if tapis_auth_allowed_users:
                 if not check_tapis_auth_allowed(username, tapis_auth_allowed_users, pod_permissions):
-                    raise Exception(f"User {username} not in networking.tapis_auth_allowed_users for pod_id: {pod_id_net}.")
+                    # Explicit 403 for allowlist rejection — previously a raise that the
+                    # except below logged and swallowed, so denied users were re-sent
+                    # through the OAuth flow / told "not authenticated" instead of
+                    # "authenticated but not allowed".
+                    logger.info(f"User '{username}' rejected by tapis_auth_allowed_users for {pod_id_net}.")
+                    return JSONResponse(
+                        content=f"Pods: user '{username}' is authenticated but not in this pod's tapis_auth_allowed_users.",
+                        status_code=403)
             return JSONResponse(content=ok("Already authenticated"), status_code=200, headers=tapis_auth_headers)
     except Exception as e:
         logger.debug(f"Authentication failed: {getattr(e, 'detail', None) or e}")
@@ -1638,7 +1667,12 @@ def callback(pod_id_net, request: Request):
         tapis_auth_allowed_users = net_info.get("tapis_auth_allowed_users", [])
         if tapis_auth_allowed_users:
             if not check_tapis_auth_allowed(username, tapis_auth_allowed_users, pod_permissions):
-                raise Exception(f"User {username} not in networking.tapis_auth_allowed_users for pod_id: {pod_id_net}.")
+                # Explicit 403 — a raise here lands in the outer except and resurfaces
+                # as a misleading "Error setting cookies" exception.
+                logger.info(f"User '{username}' rejected by tapis_auth_allowed_users for {pod_id_net} (callback flow).")
+                return JSONResponse(
+                    content=f"Pods: user '{username}' is authenticated but not in this pod's tapis_auth_allowed_users.",
+                    status_code=403)
 
         response = RedirectResponse(url=f"https://{net_info['url']}{net_info['tapis_auth_return_path']}", status_code=302)
 
@@ -2100,6 +2134,10 @@ async def get_pod_events(
     """
     logger.info(f"GET /pods/{pod_id}/events - Top of get_pod_events.")
     pod = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
+    if not pod:
+        # Guard: admins bypass the auth-layer 404 (check_object_id), so without this the
+        # .k8_name deref below raises an opaque 500 ('NoneType' object has no attribute ...).
+        raise ResourceError(f"Pod with id '{pod_id}' not found in tenant '{g.request_tenant_id}', site '{g.site_id}'.", 404)
 
     # ── k8s events ────────────────────────────────────────────────────────────
     events = []
@@ -2178,6 +2216,10 @@ async def get_pod_metrics(pod_id):
     """
     logger.info(f"GET /pods/{pod_id}/metrics - Top of get_pod_metrics.")
     pod = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
+    if not pod:
+        # Guard: admins bypass the auth-layer 404 (check_object_id), so without this the
+        # .k8_name deref below raises an opaque 500 ('NoneType' object has no attribute ...).
+        raise ResourceError(f"Pod with id '{pod_id}' not found in tenant '{g.request_tenant_id}', site '{g.site_id}'.", 404)
 
     # ── k8s live usage ─────────────────────────────────────────────────────────
     k8s_data = get_pod_k8s_metrics(pod.k8_name)
@@ -2188,6 +2230,7 @@ async def get_pod_metrics(pod_id):
         from sqlmodel import select, func as sqlfunc
         from models_traffic import TrafficLog
         from datetime import timedelta
+        from stores import pg_store
 
         store = pg_store[g.site_id][g.request_tenant_id]
         since = datetime.utcnow() - timedelta(hours=24)
