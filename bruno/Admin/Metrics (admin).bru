@@ -1,0 +1,17 @@
+meta {
+  name: Metrics (admin)
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{base_url}}/pods/admin/metrics
+  body: none
+  auth: none
+}
+
+headers {
+  X-Tapis-Token: {{X-Tapis-Token}}
+  Content-Type: application/json
+  X-Pods-Admin: true
+}

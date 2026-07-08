@@ -1,0 +1,20 @@
+meta {
+  name: Upload to pod
+  type: http
+  seq: 24
+}
+
+post {
+  url: {{base_url}}/pods/{{pod_id}}/upload/path/to/destination.txt
+  body: multipartForm
+  auth: none
+}
+
+headers {
+  Accept: */*
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+body:multipart-form {
+  file: @file()
+}

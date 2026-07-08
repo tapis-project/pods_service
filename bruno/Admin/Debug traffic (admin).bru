@@ -1,0 +1,17 @@
+meta {
+  name: Debug traffic (admin)
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{base_url}}/pods/admin/debug-traffic
+  body: none
+  auth: none
+}
+
+headers {
+  X-Tapis-Token: {{X-Tapis-Token}}
+  Content-Type: application/json
+  X-Pods-Admin: true
+}

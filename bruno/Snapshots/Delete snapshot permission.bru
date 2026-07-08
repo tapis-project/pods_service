@@ -1,0 +1,16 @@
+meta {
+  name: Delete snapshot permission
+  type: http
+  seq: 9
+}
+
+delete {
+  url: {{base_url}}/pods/snapshots/{{snapshot_id}}/permissions/someuser
+  body: none
+  auth: none
+}
+
+headers {
+  X-Tapis-Token: {{X-Tapis-Token}}
+  Content-Type: application/json
+}

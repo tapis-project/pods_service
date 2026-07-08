@@ -1,0 +1,16 @@
+meta {
+  name: List template tags
+  type: http
+  seq: 7
+}
+
+get {
+  url: {{base_url}}/pods/templates/{{template_id}}/tags
+  body: none
+  auth: none
+}
+
+headers {
+  X-Tapis-Token: {{X-Tapis-Token}}
+  Content-Type: application/json
+}

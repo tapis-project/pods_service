@@ -1,0 +1,16 @@
+meta {
+  name: Get template permissions
+  type: http
+  seq: 11
+}
+
+get {
+  url: {{base_url}}/pods/templates/{{template_id}}/permissions
+  body: none
+  auth: none
+}
+
+headers {
+  X-Tapis-Token: {{X-Tapis-Token}}
+  Content-Type: application/json
+}

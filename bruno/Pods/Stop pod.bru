@@ -1,0 +1,16 @@
+meta {
+  name: Stop pod
+  type: http
+  seq: 15
+}
+
+post {
+  url: {{base_url}}/pods/{{pod_id}}/stop
+  body: none
+  auth: none
+}
+
+headers {
+  X-Tapis-Token: {{X-Tapis-Token}}
+  Content-Type: application/json
+}

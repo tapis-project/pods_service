@@ -1,0 +1,16 @@
+meta {
+  name: Get pod status
+  type: http
+  seq: 9
+}
+
+get {
+  url: {{base_url}}/pods/{{pod_id}}/status
+  body: none
+  auth: none
+}
+
+headers {
+  X-Tapis-Token: {{X-Tapis-Token}}
+  Content-Type: application/json
+}

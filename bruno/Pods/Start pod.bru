@@ -1,0 +1,16 @@
+meta {
+  name: Start pod
+  type: http
+  seq: 14
+}
+
+post {
+  url: {{base_url}}/pods/{{pod_id}}/start
+  body: none
+  auth: none
+}
+
+headers {
+  X-Tapis-Token: {{X-Tapis-Token}}
+  Content-Type: application/json
+}

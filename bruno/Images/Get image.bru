@@ -1,0 +1,15 @@
+meta {
+  name: Get image
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{base_url}}/pods/images/postgres:15
+  body: none
+  auth: none
+}
+
+headers {
+  X-Tapis-Token: {{X-Tapis-Token}}
+}

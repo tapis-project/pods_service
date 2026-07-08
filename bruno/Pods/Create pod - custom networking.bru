@@ -1,0 +1,31 @@
+meta {
+  name: pods: custom networking
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{base_url}}/pods
+  body: json
+  auth: none
+}
+
+headers {
+  X-Tapis-Token: {{X-Tapis-Token}}
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "pod_id": "{{pod_id}}",
+    "image": "postgres:15",
+    "description": "Postgres database pod",
+    "time_to_stop_default": -1,
+    "networking": {
+      "default": {
+        "port": 5432,
+        "protocol": "postgres"
+      }
+    }
+  }
+}

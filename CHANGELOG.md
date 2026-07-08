@@ -110,6 +110,7 @@ The edge release. Pods learned to leave the cluster.
 ### New features:
 - Traffic observability: Traefik JSON access logs ingested per pod. Tokens, cookies, and sensitive query-param values are redacted at the source, before anything is stored.
 - Pod log runs are persisted and downloadable — each start/stop cycle is archived with its own metadata instead of being lost on restart.
+- A bruno API request collection now lives in the repo (Admin/Pods/Volumes/Snapshots/Templates + per-tenant environments), so the API is explorable without hand-writing curl.
 
 
 ## 26Q1.0

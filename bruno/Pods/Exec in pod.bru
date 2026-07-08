@@ -1,0 +1,28 @@
+meta {
+  name: Exec in pod
+  type: http
+  seq: 25
+}
+
+post {
+  url: {{base_url}}/pods/{{pod_id}}/exec
+  body: json
+  auth: none
+}
+
+headers {
+  X-Tapis-Token: {{X-Tapis-Token}}
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "commands": [
+      ["ls", "-lah", "/"],
+      ["hostname"]
+    ],
+    "command_timeout": 30,
+    "total_timeout": 60,
+    "fail_on_non_success": "False"
+  }
+}

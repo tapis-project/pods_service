@@ -1,0 +1,33 @@
+meta {
+  name: tag: create (generic)
+  type: http
+  seq: 9
+}
+
+post {
+  url: {{base_url}}/pods/templates/{{template_id}}/tags
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+body:json {
+  {
+    "pod_definition": {
+      "description": "Tag description",
+      "image": "myimage:latest",
+      "networking": {
+        "default": {
+          "port": 8080,
+          "protocol": "http"
+        }
+      }
+    },
+    "tag": "v1",
+    "commit_message": "Initial tag"
+  }
+}

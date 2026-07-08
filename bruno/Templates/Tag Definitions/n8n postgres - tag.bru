@@ -1,0 +1,55 @@
+meta {
+  name: tag: n8n postgres
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{base_url}}/pods/templates/postgres/tags
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+body:json {
+  {
+    "pod_definition": {
+      "description": "PostGIS 17 database backend for n8n - local-only networking",
+      "image": "postgis/postgis:17-3.5",
+      "command": ["docker-entrypoint.sh"],
+      "arguments": [
+        "-c", "ssl=on",
+        "-c", "ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem",
+        "-c", "ssl_key_file=/etc/ssl/private/ssl-cert-snakeoil.key"
+      ],
+      "secret_map": {
+        "POSTGRES_PASSWORD": "${:?Postgres password - REQUIRED}"
+      },
+      "environment_variables": {
+        "POSTGRES_USER": "${n8n:?Postgres username - defaults to n8n}",
+        "POSTGRES_PASSWORD": "${pods:secrets:POSTGRES_PASSWORD}",
+        "POSTGRES_DB": "${n8n:?Postgres database name - defaults to n8n}"
+      },
+      "networking": {
+        "default": {
+          "protocol": "postgres",
+          "port": 5432,
+          "tapis_auth": false
+        }
+      },
+      "resources": {
+        "cpu_request": 250,
+        "cpu_limit": 2000,
+        "mem_request": 256,
+        "mem_limit": 3072
+      },
+      "time_to_stop_default": -1
+    },
+    "tag": "17postgis3.5",
+    "commit_message": "PostGIS 17-3.5 for n8n - SSL enabled, volume mount for persistence"
+  }
+}

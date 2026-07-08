@@ -1,0 +1,16 @@
+meta {
+  name: Delete template tag
+  type: http
+  seq: 10
+}
+
+delete {
+  url: {{base_url}}/pods/templates/{{template_id}}/tags/v1@2025-01-01-00:00:00
+  body: none
+  auth: none
+}
+
+headers {
+  X-Tapis-Token: {{X-Tapis-Token}}
+  Content-Type: application/json
+}

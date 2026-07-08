@@ -1,0 +1,40 @@
+meta {
+  name: Create images - bulk
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{base_url}}/pods/images/bulk
+  body: json
+  auth: none
+}
+
+params:query {
+  skip_duplicates: True
+}
+
+headers {
+  Content-Type: application/json
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+body:json {
+  [
+    {
+      "image": "postgres:15",
+      "tenants": ["**"],
+      "description": "Official Postgres 15 image"
+    },
+    {
+      "image": "mongo:7",
+      "tenants": ["**"],
+      "description": "Official MongoDB 7 image"
+    },
+    {
+      "image": "redis:7-alpine",
+      "tenants": ["tacc", "icicleai"],
+      "description": "Redis 7 slim image"
+    }
+  ]
+}

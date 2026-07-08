@@ -1,0 +1,16 @@
+meta {
+  name: Get snapshot
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{base_url}}/pods/snapshots/{{snapshot_id}}
+  body: none
+  auth: none
+}
+
+headers {
+  X-Tapis-Token: {{X-Tapis-Token}}
+  Content-Type: application/json
+}

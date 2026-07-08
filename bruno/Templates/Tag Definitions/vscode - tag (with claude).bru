@@ -1,0 +1,64 @@
+meta {
+  name: tag: vscode (with claude)
+  type: http
+  seq: 7
+}
+
+post {
+  url: {{base_url}}/pods/templates/codeserver/tags
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+body:json {
+  {
+    "pod_definition": {
+      "description": "VS Code with Claude Code CLI + Continue.continue extension (Claude API). Dark theme, auto-open terminal. ANTHROPIC_API_KEY required; GitHub auth and repo clone optional.",
+      "image": "lscr.io/linuxserver/code-server",
+      "command": [
+        "/bin/bash",
+        "-c",
+        "npm install -g @anthropic-ai/claude-code 2>/dev/null || true; mkdir -p /config/data/User; [ ! -f /config/data/User/settings.json ] && printf '{\"workbench.colorTheme\":\"Default Dark+\",\"workbench.startupEditor\":\"terminal\",\"terminal.integrated.defaultProfile.linux\":\"bash\"}' > /config/data/User/settings.json; code-server --install-extension Continue.continue 2>/dev/null || true; if [ -n \"$GITHUB_TOKEN\" ] && [ \"$GITHUB_TOKEN\" != \"none\" ]; then git config --global credential.helper store && echo \"https://oauth2:$GITHUB_TOKEN@github.com\" > /root/.git-credentials; fi; [ -n \"$GIT_USER_NAME\" ] && git config --global user.name \"$GIT_USER_NAME\"; [ -n \"$GIT_USER_EMAIL\" ] && git config --global user.email \"$GIT_USER_EMAIL\"; if [ -n \"$GIT_REPO\" ] && [ \"$GIT_REPO\" != \"none\" ]; then REPO_DIR=/config/workspace/$(basename \"$GIT_REPO\" .git); [ ! -d \"$REPO_DIR\" ] && git clone \"$GIT_REPO\" \"$REPO_DIR\"; fi; exec /init"
+      ],
+      "secret_map": {
+        "ANTHROPIC_API_KEY": "${pods:default:none:?Anthropic API key - get from console.anthropic.com/settings/keys}",
+        "GITHUB_TOKEN": "${pods:default:none:?GitHub personal access token - skip for public repos, enter token for private repos}",
+        "GIT_REPO": "${pods:default:none:?Git repo URL to clone on first start - skip or enter e.g. https://github.com/org/repo}",
+        "TZ": "${pods:default:Etc/UTC:?Timezone - e.g. America/Chicago}"
+      },
+      "environment_variables": {
+        "PUID": "1000",
+        "PGID": "1000",
+        "TZ": "${pods:secrets:TZ}",
+        "DEFAULT_WORKSPACE": "/config/workspace",
+        "ANTHROPIC_API_KEY": "${pods:secrets:ANTHROPIC_API_KEY}",
+        "GITHUB_TOKEN": "${pods:secrets:GITHUB_TOKEN}",
+        "GIT_REPO": "${pods:secrets:GIT_REPO}",
+        "GIT_USER_NAME": "",
+        "GIT_USER_EMAIL": ""
+      },
+      "networking": {
+        "default": {
+          "protocol": "http",
+          "port": 8443,
+          "tapis_auth": true,
+          "tapis_auth_allowed_users": ["*"]
+        }
+      },
+      "resources": {
+        "cpu_request": 500,
+        "cpu_limit": 4000,
+        "mem_request": 1024,
+        "mem_limit": 8192
+      },
+      "time_to_stop_default": 7200
+    },
+    "tag": "claude",
+    "commit_message": "VS Code + Claude Code CLI + Continue.continue — dark theme, auto-terminal, ANTHROPIC_API_KEY optional, GitHub/repo optional"
+  }
+}

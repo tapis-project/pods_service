@@ -1,0 +1,64 @@
+meta {
+  name: tag: vscode (codespace)
+  type: http
+  seq: 8
+}
+
+post {
+  url: {{base_url}}/pods/templates/codeserver/tags
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+body:json {
+  {
+    "pod_definition": {
+      "description": "GitHub Codespace-style dev environment - clones repo at startup, 2-hour auto-stop",
+      "image": "lscr.io/linuxserver/code-server",
+      "command": [
+        "/bin/bash",
+        "-c",
+        "if [ -n \"$GITHUB_TOKEN\" ] && [ \"$GITHUB_TOKEN\" != \"none\" ]; then git config --global credential.helper store && echo \"https://oauth2:$GITHUB_TOKEN@github.com\" > /root/.git-credentials; fi; [ -n \"$GIT_USER_NAME\" ] && git config --global user.name \"$GIT_USER_NAME\"; [ -n \"$GIT_USER_EMAIL\" ] && git config --global user.email \"$GIT_USER_EMAIL\"; if [ -n \"$GIT_REPO\" ]; then REPO_DIR=/config/workspace/$(basename \"$GIT_REPO\" .git); if [ ! -d \"$REPO_DIR\" ]; then git clone ${GIT_BRANCH:+-b $GIT_BRANCH} \"$GIT_REPO\" \"$REPO_DIR\" && echo \"Cloned into $REPO_DIR\"; fi; fi; if [ -n \"$DOTFILES_REPO\" ] && [ ! -d /config/dotfiles ]; then git clone \"$DOTFILES_REPO\" /config/dotfiles && [ -f /config/dotfiles/install.sh ] && bash /config/dotfiles/install.sh; fi; exec /init"
+      ],
+      "secret_map": {
+        "GIT_REPO": "${:?Git repo URL to clone - e.g. https://github.com/org/repo}",
+        "GITHUB_TOKEN": "${pods:default:none:?GitHub personal access token - skip for public repos, enter token for private repos}",
+        "TZ": "${pods:default:Etc/UTC:?Timezone - e.g. America/Chicago}"
+      },
+      "environment_variables": {
+        "PUID": "1000",
+        "PGID": "1000",
+        "TZ": "${pods:secrets:TZ}",
+        "DEFAULT_WORKSPACE": "/config/workspace",
+        "GIT_REPO": "${pods:secrets:GIT_REPO}",
+        "GITHUB_TOKEN": "${pods:secrets:GITHUB_TOKEN}",
+        "GIT_BRANCH": "",
+        "GIT_USER_NAME": "",
+        "GIT_USER_EMAIL": "",
+        "DOTFILES_REPO": ""
+      },
+      "networking": {
+        "default": {
+          "protocol": "http",
+          "port": 8443,
+          "tapis_auth": true,
+          "tapis_auth_allowed_users": ["*"]
+        }
+      },
+      "resources": {
+        "cpu_request": 500,
+        "cpu_limit": 4000,
+        "mem_request": 1024,
+        "mem_limit": 8192
+      },
+      "time_to_stop_default": 7200
+    },
+    "tag": "claude",
+    "commit_message": "Fix: GIT_REPO required via secret_map (server-enforced), GITHUB_TOKEN optional with none sentinel, correct env_var syntax"
+  }
+}

@@ -1,0 +1,24 @@
+meta {
+  name: vscode - create template
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{base_url}}/pods/templates
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+body:json {
+  {
+    "template_id": "vscode",
+    "description": "VS Code in browser via linuxserver/code-server — full Microsoft marketplace, port 8443",
+    "metatags": ["vscode", "ide", "code-server", "development", "http"]
+  }
+}

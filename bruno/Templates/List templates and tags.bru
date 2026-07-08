@@ -1,0 +1,21 @@
+meta {
+  name: List templates and tags
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{base_url}}/pods/templates/tags
+  body: none
+  auth: none
+}
+
+params:query {
+  include_dependencies: true
+  full: false
+}
+
+headers {
+  X-Tapis-Token: {{X-Tapis-Token}}
+  Content-Type: application/json
+}

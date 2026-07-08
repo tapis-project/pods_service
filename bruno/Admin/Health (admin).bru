@@ -1,0 +1,17 @@
+meta {
+  name: Health (admin)
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{base_url}}/pods/admin/health
+  body: none
+  auth: none
+}
+
+headers {
+  X-Tapis-Token: {{X-Tapis-Token}}
+  Content-Type: application/json
+  X-Pods-Admin: true
+}

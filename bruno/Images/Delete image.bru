@@ -1,0 +1,15 @@
+meta {
+  name: Delete image
+  type: http
+  seq: 6
+}
+
+delete {
+  url: {{base_url}}/pods/images/myregistry/myimage:latest
+  body: none
+  auth: none
+}
+
+headers {
+  X-Tapis-Token: {{X-Tapis-Token}}
+}

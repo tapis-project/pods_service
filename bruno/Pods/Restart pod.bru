@@ -1,0 +1,16 @@
+meta {
+  name: Restart pod
+  type: http
+  seq: 16
+}
+
+post {
+  url: {{base_url}}/pods/{{pod_id}}/restart
+  body: none
+  auth: none
+}
+
+headers {
+  X-Tapis-Token: {{X-Tapis-Token}}
+  Content-Type: application/json
+}

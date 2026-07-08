@@ -1,0 +1,15 @@
+meta {
+  name: Get volume file contents
+  type: http
+  seq: 11
+}
+
+get {
+  url: {{base_url}}/pods/volumes/{{volume_id}}/contents/path/to/file.txt
+  body: none
+  auth: none
+}
+
+headers {
+  X-Tapis-Token: {{X-Tapis-Token}}
+}

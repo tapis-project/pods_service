@@ -1,0 +1,3 @@
+# Bruno stores secret variable values outside the project — but just in case:
+environments/*.secret.bru
+.env

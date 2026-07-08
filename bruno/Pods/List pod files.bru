@@ -1,0 +1,16 @@
+meta {
+  name: List pod files
+  type: http
+  seq: 21
+}
+
+get {
+  url: {{base_url}}/pods/{{pod_id}}/list
+  body: none
+  auth: none
+}
+
+headers {
+  X-Tapis-Token: {{X-Tapis-Token}}
+  Content-Type: application/json
+}

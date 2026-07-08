@@ -1,0 +1,24 @@
+meta {
+  name: Create template
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{base_url}}/pods/templates
+  body: json
+  auth: none
+}
+
+headers {
+  X-Tapis-Token: {{X-Tapis-Token}}
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "template_id": "{{template_id}}",
+    "description": "My template description",
+    "metatags": ["database", "http"]
+  }
+}
