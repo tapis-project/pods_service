@@ -1,0 +1,15 @@
+meta {
+  name: Get stack permissions
+  type: http
+  seq: 8
+}
+
+get {
+  url: {{base_url}}/pods/stacks/{{stack_id}}/permissions
+  body: none
+  auth: none
+}
+
+headers {
+  X-Tapis-Token: {{X-Tapis-Token}}
+}

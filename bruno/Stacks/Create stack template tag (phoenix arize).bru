@@ -1,0 +1,147 @@
+meta {
+  name: tag: phoenix arize (stack)
+  type: http
+  seq: 20
+}
+
+post {
+  url: {{base_url}}/pods/templates/phoenix/tags
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+body:json {
+  {
+    "kind": "stack",
+    "stack_definition": {
+      "restart_policy": "ordered",
+      "secret_map": {
+        "PG_PASSWORD": "${pods:random:32}"
+      },
+      "members": [
+        {
+          "name": "db",
+          "image": "postgres:16",
+          "description": "Postgres 16 backing store for Arize Phoenix (traces, datasets, experiments). local_only - never exposed outside the cluster.",
+          "ready_condition": "ready",
+          "time_to_stop_default": -1,
+          "networking": {
+            "default": { "protocol": "local_only", "port": 5432, "tapis_auth": false }
+          },
+          "healthchecks": {
+            "readiness": {
+              "exec_command": ["pg_isready", "-U", "phoenix", "-d", "phoenix"],
+              "initial_delay_seconds": 5,
+              "period_seconds": 5
+            },
+            "networking_requires_ready": false
+          },
+          "environment_variables": {
+            "POSTGRES_USER": "phoenix",
+            "POSTGRES_DB": "phoenix",
+            "POSTGRES_PASSWORD": "${stack:secrets:PG_PASSWORD}",
+            "PGDATA": "/var/lib/postgresql/data/pgdata"
+          },
+          "resources": { "cpu_request": 250, "cpu_limit": 2000, "mem_request": 256, "mem_limit": 2048 }
+        },
+        {
+          "name": "phoenix",
+          "image": "arizephoenix/phoenix:latest",
+          "description": "Arize Phoenix - open-source LLM observability (OTEL trace collector + UI). Persists to the in-stack postgres so traces survive restarts.",
+          "depends_on": ["db"],
+          "ready_condition": "ready",
+          "time_to_stop_default": -1,
+          "environment_variables": {
+            "PHOENIX_SQL_DATABASE_URL": "postgresql://phoenix:${stack:secrets:PG_PASSWORD}@${stack:db:host}:5432/phoenix",
+            "PHOENIX_WORKING_DIR": "/mnt/data",
+            "PHOENIX_PORT": "6006",
+            "PHOENIX_GRPC_PORT": "4317"
+          },
+          "networking": {
+            "default": {
+              "protocol": "http",
+              "port": 6006,
+              "tapis_auth": true,
+              "tapis_auth_allowed_users": ["*"],
+              "tapis_auth_return_path": "/",
+              "tapis_ui_uri_redirect": true,
+              "tapis_ui_uri_description": "Arize Phoenix UI (traces, datasets, experiments). OTLP-HTTP collector is on the same port at /v1/traces."
+            },
+            "otlp-grpc": {
+              "protocol": "tcp",
+              "port": 4317,
+              "tapis_auth": false
+            }
+          },
+          "healthchecks": {
+            "readiness": {
+              "http_get_path": "/healthz",
+              "http_get_port": 6006,
+              "initial_delay_seconds": 10,
+              "period_seconds": 10
+            }
+          },
+          "resources": { "cpu_request": 500, "cpu_limit": 2000, "mem_request": 512, "mem_limit": 4096 },
+          "compute_queue": "default"
+        }
+      ]
+    },
+    "tag": "latest-pg-stack",
+    "commit_message": "Arize Phoenix + postgres stack: Phoenix persists traces/datasets to an in-stack postgres over a shared random password. UI + OTLP-HTTP on 6006 (tapis-auth gated), OTLP-gRPC on 4317 for in-cluster instrumented apps."
+  }
+}
+
+docs {
+  ## Arize Phoenix as a self-hosted stack
+
+  **Yes, Phoenix self-hosts cleanly.** It is the open-source core of Arize - an OTEL-native
+  collector + web UI for LLM tracing, evals, datasets and experiments. (This is *Phoenix*, the
+  free OSS project - distinct from Arize AX, the paid SaaS platform.)
+
+  ### How many containers?
+  - **1 container** is the minimum - `arizephoenix/phoenix` alone stores everything in an internal
+    SQLite file at `PHOENIX_WORKING_DIR`. Fine for a quick look, lost if the pod's disk is wiped.
+  - **2 containers (this stack)** is the "feature complete" shape: Phoenix + a dedicated
+    **postgres** so traces/datasets/experiments persist and survive restarts. Point Phoenix at PG
+    by setting `PHOENIX_SQL_DATABASE_URL` - that single env var is the whole switch.
+
+  ### Members
+  | member  | image                      | role |
+  |---------|----------------------------|------|
+  | db      | `postgres:16`              | persistent store, `ready_condition: ready` (Phoenix runs migrations on boot) |
+  | phoenix | `arizephoenix/phoenix`     | collector + UI, `depends_on: [db]` |
+
+  ### Ports
+  - **6006** (`default`, http, tapis-auth) - the **UI** *and* the **OTLP-HTTP** collector
+    (`POST .../v1/traces`). Same port for both.
+  - **4317** (`otlp-grpc`, tcp) - the **OTLP-gRPC** collector for in-cluster apps that prefer gRPC.
+
+  ### Wiring
+  - `${stack:secrets:PG_PASSWORD}` - one random password, generated once, shared by db (sets it)
+    and phoenix (connects with it). Never written into a pod row - stays a reference.
+  - `${stack:db:host}` - compiled at instantiation to the db's in-cluster DNS
+    (`pods-<site>-<tenant>-<dbPodId>`), so `PHOENIX_SQL_DATABASE_URL` resolves to the real host.
+
+  ### Instantiate
+  No required secrets (the password is random), so:
+  `POST /pods/stacks/from-template` with
+  `{ "template": "phoenix:latest-pg-stack", "stack_id": "myphoenix",
+     "pod_ids": { "phoenix": "myphoenix" } }`
+  -> public Phoenix at `myphoenix.pods.<base>`, db derives `myphoenixdb`. See `Create stack from template`.
+
+  ### Hardening (optional)
+  - **Pin the image** - swap `arizephoenix/phoenix:latest` for a concrete `version-X.Y.Z`.
+  - **Phoenix's own auth** - add `PHOENIX_ENABLE_AUTH: "True"` and a `PHOENIX_SECRET`
+    (`${pods:random:32}`) to the phoenix member if you want API-key login *in addition to* the
+    tapis-auth gate on the UI. Then instrumented apps authenticate to the collector with a Phoenix
+    API key. Left off here because tapis-auth already gates the UI and the gRPC collector is
+    in-cluster only.
+
+  > To connect a workload that *emits* traces to this Phoenix, see the companion pod tag
+  > `phoenix-client - tag (jupyter otel)` in Templates -> Tag Definitions.
+}

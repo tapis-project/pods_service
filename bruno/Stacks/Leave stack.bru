@@ -1,0 +1,20 @@
+meta {
+  name: Leave stack
+  type: http
+  seq: 11
+}
+
+delete {
+  url: {{base_url}}/pods/{{pod_id}}/stack
+  body: none
+  auth: none
+}
+
+headers {
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+docs {
+  Removes the pod from its stack — clears both `stack_id` and `depends_on` (so it no longer waits
+  on, or is waited on as, a dependency).
+}

@@ -1,0 +1,138 @@
+meta {
+  name: tag: litellm (stack)
+  type: http
+  seq: 17
+}
+
+post {
+  url: {{base_url}}/pods/templates/litellm/tags
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+body:json {
+  {
+    "kind": "stack",
+    "stack_definition": {
+      "restart_policy": "ordered",
+      "secret_map": {
+        "PG_PASSWORD": "${pods:random:32}"
+      },
+      "members": [
+        {
+          "name": "db",
+          "image": "postgres:16",
+          "ready_condition": "ready",
+          "networking": {
+            "default": { "protocol": "postgres", "port": 5432, "tapis_auth": false }
+          },
+          "healthchecks": {
+            "readiness": { "exec_command": ["pg_isready", "-U", "litellm"] }
+          },
+          "environment_variables": {
+            "POSTGRES_USER": "litellm",
+            "POSTGRES_DB": "litellm",
+            "POSTGRES_PASSWORD": "${stack:secrets:PG_PASSWORD}"
+          },
+          "resources": { "cpu_request": 250, "cpu_limit": 1000, "mem_request": 256, "mem_limit": 1024 }
+        },
+        {
+          "name": "litellm",
+          "image": "ghcr.io/berriai/litellm:v1.81.3-stable",
+          "arguments": ["--detailed_debug"],
+          "depends_on": ["db"],
+          "environment_variables": {
+            "STORE_MODEL_IN_DB": "True",
+            "DATABASE_URL": "postgresql://litellm:${stack:secrets:PG_PASSWORD}@${stack:db:host}:5432/litellm?sslmode=disable",
+            "CONFIG_FILE_PATH": "/app/litellm.config.yaml"
+          },
+          "secret_map": {
+            "ADMIN_KEY_SUFFIX": "${pods:random:32}"
+          },
+          "volume_mounts": {
+            "/app/litellm.config.yaml": {
+              "type": "ephemeral",
+              "sub_path": "",
+              "read_only": true,
+              "config_content": "model_list: []\nlitellm_settings:\n  drop_params: true\ngeneral_settings:\n  store_model_in_db: true\n",
+              "config_permissions": "0644",
+              "config_filename": "litellm.config.yaml",
+              "config_update_mode": "always"
+            }
+          },
+          "networking": {
+            "default": {
+              "protocol": "http",
+              "port": 4000,
+              "tapis_auth": true,
+              "tapis_auth_allowed_users": [
+                "cgarcia",
+                "snehaparthe37",
+                "swathivm",
+                "jstubbs",
+                "ajamthe",
+                "nathandf",
+                "maytal",
+                "sclevey",
+                "mpackard",
+                "wzhang217",
+                "thevyasamit",
+                "cguz107"
+              ],
+              "tapis_auth_return_path": "/",
+              "tapis_ui_uri_redirect": true,
+              "tapis_ui_uri_description": "litellm swagger ui for API docs",
+              "proxy_compression": true,
+              "proxy_compression_encodings": ["zstd", "br", "gzip"],
+              "proxy_compression_min_response_body_bytes": 1024
+            }
+          },
+          "compute_queue": "default"
+        }
+      ]
+    },
+    "tag": "v1.81.3-debug-stack",
+    "commit_message": "litellm + postgres stack: litellm connects to an in-stack postgres over a shared random password; --detailed_debug; models stored in DB"
+  }
+}
+
+docs {
+  ## litellm + postgres as one stack template (PROPOSED — Part D, not yet implemented)
+  
+  Turns the single-pod `litellm` template (which required you to BYO a `DATABASE_URL`) into a
+  `kind="stack"` tag that **bundles its own postgres**. Two members:
+  
+  - **db** — `postgres:16`, `ready_condition: "ready"` (litellm runs DB migrations on boot, so it
+    must wait for postgres to actually accept connections, not just be "available"). Uses the shared
+    `${stack:secrets:PG_PASSWORD}` as `POSTGRES_PASSWORD`.
+  - **litellm** — `depends_on: ["db"]`. Its `DATABASE_URL` is built from the shared password and the
+    db's in-cluster address:
+    `postgresql://litellm:${stack:secrets:PG_PASSWORD}@${stack:db:host}:5432/litellm`
+    (`sslmode=disable` — the hop is internal pod-to-pod). Keeps the original litellm bits: the
+    ephemeral `litellm.config.yaml`, `STORE_MODEL_IN_DB`, `--detailed_debug`, and the tapis-auth /
+    allowed-users / swagger-UI / compression networking.
+  
+  ### How the wiring resolves
+  - `${stack:secrets:PG_PASSWORD}` — declared once at `stack_definition.secret_map`, generated as a
+    random **once** at instantiation and shared by both members (db sets it, litellm connects with
+    it). It stays a *reference* on each pod — the value is never written into a pod row.
+  - `${stack:db:host}` — compiled at instantiation to the db member's in-cluster DNS name
+    (`pods-<site>-<tenant>-<dbPodId>`).
+  - `ADMIN_KEY_SUFFIX` is a per-pod random local to litellm (not shared).
+  
+  ### Instantiate it
+  No required secrets to fill (everything is random), so:
+  `POST /pods/stacks/from-template` with `{ "template": "litellm:v1.81.3-debug-stack",
+  "stack_id": "mylitellm", "pod_ids": { "litellm": "mylitellm" } }` — gives the public litellm pod
+  the clean id/URL `mylitellm.pods.<base>` while the db derives `mylitellmdb`. See
+  `Create stack from template`.
+  
+  > The db member could instead `template` an existing postgres tag (e.g. `"template":
+  > "postgres:17postgis3.5"`) rather than define `postgres:16` inline — same result, one less image
+  > to pin here. Set the `litellm` template_id in the URL to wherever you want this tag stored.
+}

@@ -1,0 +1,22 @@
+meta {
+  name: Delete stack - cascade pods
+  type: http
+  seq: 13
+}
+
+delete {
+  url: {{base_url}}/pods/stacks/{{stack_id}}?delete_pods=true&confirm={{stack_id}}
+  body: none
+  auth: none
+}
+
+headers {
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+docs {
+  ## DESTRUCTIVE
+  Deletes the stack **and every member pod**. The `confirm` query param must **exactly equal** the
+  `stack_id`, or the request is refused — a typed-confirmation guard the UI mirrors. There is no
+  undo.
+}

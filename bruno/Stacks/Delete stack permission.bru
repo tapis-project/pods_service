@@ -1,0 +1,19 @@
+meta {
+  name: Delete stack permission
+  type: http
+  seq: 9
+}
+
+delete {
+  url: {{base_url}}/pods/stacks/{{stack_id}}/permissions/someuser
+  body: none
+  auth: none
+}
+
+headers {
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+docs {
+  Revoking on the stack removes inherited access from every member pod at once.
+}

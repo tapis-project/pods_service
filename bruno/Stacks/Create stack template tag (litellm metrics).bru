@@ -1,0 +1,153 @@
+meta {
+  name: tag: litellm metrics (stack)
+  type: http
+  seq: 26
+}
+
+post {
+  url: {{base_url}}/pods/templates/litellm/tags
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+body:json {
+  {
+    "kind": "stack",
+    "stack_definition": {
+      "restart_policy": "ordered",
+      "secret_map": {
+        "PG_PASSWORD": "${pods:random:32}",
+        "MASTER_KEY": "${pods:random:32}"
+      },
+      "members": [
+        {
+          "name": "db",
+          "image": "postgres:16",
+          "description": "Postgres 16 - litellm spend/usage store. Every request's tokens + cost are written here per key/user/team/model; this is what the spend APIs and per-user accounting read. local_only.",
+          "ready_condition": "ready",
+          "time_to_stop_default": -1,
+          "networking": {
+            "default": { "protocol": "postgres", "port": 5432, "tapis_auth": false }
+          },
+          "healthchecks": {
+            "readiness": { "exec_command": ["pg_isready", "-U", "litellm"] }
+          },
+          "environment_variables": {
+            "POSTGRES_USER": "litellm",
+            "POSTGRES_DB": "litellm",
+            "POSTGRES_PASSWORD": "${stack:secrets:PG_PASSWORD}"
+          },
+          "resources": { "cpu_request": 250, "cpu_limit": 1000, "mem_request": 256, "mem_limit": 1024 }
+        },
+        {
+          "name": "litellm",
+          "image": "ghcr.io/berriai/litellm:v1.81.3-stable",
+          "description": "litellm proxy with usage tracking ON: Prometheus /metrics (callbacks: prometheus) + DB-backed spend per key/user/team/model. Set LITELLM_MASTER_KEY to manage keys and call the spend APIs. Poll /metrics (port 4000) or query /global/spend/report.",
+          "depends_on": ["db"],
+          "ready_condition": "ready",
+          "time_to_stop_default": -1,
+          "environment_variables": {
+            "STORE_MODEL_IN_DB": "True",
+            "DATABASE_URL": "postgresql://litellm:${stack:secrets:PG_PASSWORD}@${stack:db:host}:5432/litellm?sslmode=disable",
+            "CONFIG_FILE_PATH": "/app/litellm.config.yaml",
+            "LITELLM_MASTER_KEY": "sk-${stack:secrets:MASTER_KEY}"
+          },
+          "volume_mounts": {
+            "/app/litellm.config.yaml": {
+              "type": "ephemeral",
+              "sub_path": "",
+              "read_only": true,
+              "config_content": "model_list: []\nlitellm_settings:\n  drop_params: true\n  # turns on the Prometheus /metrics endpoint (free, no enterprise license)\n  callbacks: [\"prometheus\"]\n  # add end_user label to the prometheus token/spend metrics (off by default for cardinality)\n  enable_end_user_cost_tracking_prometheus_only: true\ngeneral_settings:\n  store_model_in_db: true\n  # require a litellm key (not just tapis-auth) to read /metrics; comment out to scrape in-cluster without a key\n  # require_auth_for_metrics_endpoint: true\n",
+              "config_permissions": "0644",
+              "config_filename": "litellm.config.yaml",
+              "config_update_mode": "always"
+            }
+          },
+          "networking": {
+            "default": {
+              "protocol": "http",
+              "port": 4000,
+              "tapis_auth": true,
+              "tapis_auth_allowed_users": ["*"],
+              "tapis_auth_return_path": "/",
+              "tapis_ui_uri_redirect": true,
+              "tapis_ui_uri_description": "litellm proxy - swagger at /, metrics at /metrics, spend APIs under /global/spend",
+              "proxy_compression": true,
+              "proxy_compression_encodings": ["zstd", "br", "gzip"],
+              "proxy_compression_min_response_body_bytes": 1024
+            }
+          },
+          "healthchecks": {
+            "readiness": {
+              "http_get_path": "/health/readiness",
+              "http_get_port": 4000,
+              "initial_delay_seconds": 15,
+              "period_seconds": 10,
+              "failure_threshold": 6
+            }
+          },
+          "resources": { "cpu_request": 250, "cpu_limit": 1000, "mem_request": 256, "mem_limit": 1024 },
+          "compute_queue": "default"
+        }
+      ]
+    },
+    "tag": "v1.81.3-metrics-stack",
+    "commit_message": "litellm + postgres with usage tracking enabled: Prometheus /metrics (per model/user/team/key token + spend), end_user labels on, LITELLM_MASTER_KEY for key mgmt + spend APIs. Random shared PG + master key."
+  }
+}
+
+docs {
+  ## litellm with usage polling - per user / model / token / spend
+  
+  Same litellm + postgres pairing as `tag: litellm (stack)`, but with **usage tracking turned on**.
+  The DB is what makes per-user/key/team accounting possible (already here); this tag adds the
+  Prometheus endpoint + a master key.
+  
+  ### Two ways to grab usage
+  **1) Prometheus `/metrics` (poll/scrape this)** - enabled via `callbacks: ["prometheus"]`.
+  - `https://<litellm>.pods.<base>/metrics` (port 4000, same as the proxy).
+  - Metrics: `litellm_total_tokens_metric`, `litellm_input_tokens_metric`,
+    `litellm_output_tokens_metric`, `litellm_spend_metric` - each labeled
+    `model, user, team, team_alias, api_key_alias, hashed_api_key, end_user, requested_model`.
+  - **Free** - no enterprise license.
+  
+  **2) DB-backed spend APIs (query JSON)** - need the master key:
+  - `GET /global/spend/report?...` - spend/tokens grouped by team / customer / internal user.
+  - `GET /spend/logs` - per-request log rows.
+  - `GET /user/info?user_id=...` - one user's totals + keys.
+  Call with `Authorization: Bearer sk-<MASTER_KEY>` (read the `MASTER_KEY` stack secret).
+  
+  ### How litellm knows "who" (this is the header question)
+  - **Virtual keys = the reliable way.** Issue a key per user/team:
+    `POST /key/generate { "user_id": "alice", "team_id": "...", "models": [...] }`. Spend is tracked
+    against that hashed key -> `user` / `team` / `api_key_alias` labels populate. Users call with
+    *their* `sk-...` key.
+  - **`user` body field** = the OpenAI `user` param, tracked as `end_user`. Convenient but
+    **self-declared / spoofable** - fine for "which customer", not for trust.
+  - **Headers do NOT set identity.** There's no `x-user` header. You can only *capture* arbitrary
+    request headers as spend tags via `litellm_settings: extra_spend_tag_headers: ["x-team", ...]`
+    for filtering - not for attribution. So: parse users via **keys**, not headers.
+  
+  ### Polling /metrics in practice (the tapis-auth wrinkle)
+  `/metrics` shares port 4000, which is tapis-auth gated. So either:
+  - **curl it with a Tapis JWT** through the public URL, or
+  - **scrape it in-cluster** at `http://pods-<site>-<tenant>-<litellmPodId>:4000/metrics` (internal
+    DNS bypasses Traefik/tapis-auth). Leave `require_auth_for_metrics_endpoint` commented so the
+    in-cluster scrape needs no litellm key; uncomment it to force a key.
+  
+  ### Instantiate
+  `POST /pods/stacks/from-template` with
+  `{ "template": "litellm:v1.81.3-metrics-stack", "stack_id": "myllm",
+     "pod_ids": { "litellm": "myllm" } }`
+  then `POST /key/generate` (with the master key) to mint per-user keys and watch the labels fill.
+  
+  > Want it visualized? I can add **prometheus + grafana** members that scrape this and ship a
+  > per-user/model token dashboard. One caveat: `${stack:litellm:host}` does NOT compile inside
+  > `config_content` (only env/secret_map get stack-ref compilation), so the Prometheus scrape
+  > target would be a placeholder you fill at instantiation (the litellm in-cluster host:port).
+}

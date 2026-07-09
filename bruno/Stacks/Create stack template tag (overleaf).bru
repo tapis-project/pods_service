@@ -1,0 +1,150 @@
+meta {
+  name: tag: overleaf (stack)
+  type: http
+  seq: 22
+}
+
+post {
+  url: {{base_url}}/pods/templates/overleaf/tags
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+body:json {
+  {
+    "kind": "stack",
+    "stack_definition": {
+      "restart_policy": "ordered",
+      "members": [
+        {
+          "name": "mongo",
+          "image": "mongo:6",
+          "description": "MongoDB 6 for Overleaf CE. MUST run as a single-node replica set (Overleaf >= 4 requires it). Replica set needs a one-time rs.initiate() - see docs.",
+          "arguments": ["mongod", "--replSet", "overleaf", "--bind_ip_all"],
+          "ready_condition": "ready",
+          "time_to_stop_default": -1,
+          "networking": {
+            "default": { "protocol": "local_only", "port": 27017, "tapis_auth": false }
+          },
+          "healthchecks": {
+            "readiness": {
+              "exec_command": ["mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"],
+              "initial_delay_seconds": 10,
+              "period_seconds": 10
+            },
+            "networking_requires_ready": false
+          },
+          "resources": { "cpu_request": 250, "cpu_limit": 2000, "mem_request": 512, "mem_limit": 2048 }
+        },
+        {
+          "name": "redis",
+          "image": "redis:7-alpine",
+          "description": "Redis 7 for Overleaf real-time/session state. local_only.",
+          "ready_condition": "ready",
+          "time_to_stop_default": -1,
+          "networking": {
+            "default": { "protocol": "local_only", "port": 6379, "tapis_auth": false }
+          },
+          "healthchecks": {
+            "readiness": {
+              "exec_command": ["redis-cli", "ping"],
+              "initial_delay_seconds": 3,
+              "period_seconds": 5
+            },
+            "networking_requires_ready": false
+          },
+          "resources": { "cpu_request": 100, "cpu_limit": 1000, "mem_request": 128, "mem_limit": 1024 }
+        },
+        {
+          "name": "sharelatex",
+          "image": "sharelatex/sharelatex:latest",
+          "description": "Overleaf Community Edition web app + compiler. Connects to the in-stack mongo (directConnection - single-node RS) and redis.",
+          "depends_on": ["mongo", "redis"],
+          "ready_condition": "available",
+          "time_to_stop_default": -1,
+          "environment_variables": {
+            "SHARELATEX_MONGO_URL": "mongodb://${stack:mongo:host}/sharelatex?directConnection=true",
+            "SHARELATEX_REDIS_HOST": "${stack:redis:host}",
+            "REDIS_HOST": "${stack:redis:host}",
+            "SHARELATEX_APP_NAME": "Overleaf (self-hosted)",
+            "SHARELATEX_SITE_URL": "${:?Public site URL, e.g. https://myoverleaf.pods.<base> - Overleaf bakes this into links/PDF downloads}",
+            "ENABLED_LINKED_FILE_TYPES": "project_file,project_output_file",
+            "ENABLE_CONVERSIONS": "true"
+          },
+          "networking": {
+            "default": {
+              "protocol": "http",
+              "port": 80,
+              "tapis_auth": true,
+              "tapis_auth_allowed_users": ["*"],
+              "tapis_auth_return_path": "/launchpad",
+              "tapis_ui_uri_redirect": true,
+              "tapis_ui_uri_description": "Overleaf CE - first visit /launchpad to create the admin user"
+            }
+          },
+          "healthchecks": {
+            "readiness": {
+              "http_get_path": "/status",
+              "http_get_port": 80,
+              "initial_delay_seconds": 30,
+              "period_seconds": 15,
+              "failure_threshold": 8
+            }
+          },
+          "resources": { "cpu_request": 1000, "cpu_limit": 4000, "mem_request": 2048, "mem_limit": 8192 },
+          "compute_queue": "default"
+        }
+      ]
+    },
+    "tag": "ce-stack-experimental",
+    "commit_message": "Overleaf Community Edition stack: sharelatex + mongo (single-node replSet) + redis. EXPERIMENTAL - requires a one-time mongo rs.initiate() and TeX Live install; see docs."
+  }
+}
+
+docs {
+  ## Overleaf / self-hosted LaTeX - yes, with caveats
+
+  **Can you self-host Overleaf? Yes** - Overleaf **Community Edition** (`sharelatex/sharelatex`) is
+  the open-source release of overleaf.com and is the standard way to self-host a collaborative
+  LaTeX editor. It is **not single-container**: it needs **3 containers** - the app + **MongoDB** +
+  **Redis**. This stack wires those together.
+
+  ### LaTeX editors "in general"
+  Overleaf CE is the only mature, browser-based, multi-user LaTeX editor you can self-host. Lighter
+  options exist but trade features: TeXLive + a generic IDE pod (code-server with a LaTeX
+  extension - see the `codeserver` tags) for single-user editing, or a plain JupyterLab pod for
+  quick `.tex` compiles. If you want the real Overleaf collaborative experience, this stack is it.
+
+  ### Why "EXPERIMENTAL" - two things this stack can't fully automate
+  1. **Mongo must be a single-node replica set** (Overleaf >= 4 requirement). The member starts
+     `mongod --replSet overleaf`, but a replica set needs a **one-time** init that can't be
+     expressed declaratively. After the stack is up, exec into the mongo pod once:
+     ```
+     mongosh --eval 'rs.initiate({_id:"overleaf",members:[{_id:0,host:"127.0.0.1:27017"}]})'
+     ```
+     (Use the Pods exec tab, or `kubectl exec`.) The `?directConnection=true` on the app's
+     `SHARELATEX_MONGO_URL` is what lets it talk to that single-node RS. Until you initiate,
+     sharelatex's readiness probe (`/status`) will keep failing - that's expected.
+  2. **TeX Live** - the base `sharelatex/sharelatex` image ships a *minimal* TeX Live. Real
+     documents need more packages: exec in and run `tlmgr install scheme-full` (large, slow) or
+     install the specific packages your docs use. Without this, compiles fail with "package not
+     found".
+
+  ### First run
+  `POST /pods/stacks/from-template` with
+  `{ "template": "overleaf:ce-stack-experimental", "stack_id": "myoverleaf",
+     "pod_ids": { "sharelatex": "myoverleaf" },
+     "overrides": { "sharelatex": { "environment_variables": {
+       "SHARELATEX_SITE_URL": "https://myoverleaf.pods.<base>" } } } }`
+  then: (1) `rs.initiate()` on mongo, (2) open `myoverleaf.pods.<base>/launchpad` to create the
+  admin user, (3) `tlmgr install ...` as needed.
+
+  > CE omits some overleaf.com Pro features (Git integration, SAML/LDAP, track-changes, advanced
+  > collab limits). Give the app real memory (8 GB limit here) - LaTeX compiles are hungry. Pin
+  > `sharelatex/sharelatex:latest` to a concrete version for anything you care about.
+}

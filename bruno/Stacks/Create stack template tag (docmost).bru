@@ -1,0 +1,164 @@
+meta {
+  name: tag: docmost (stack)
+  type: http
+  seq: 23
+}
+
+post {
+  url: {{base_url}}/pods/templates/docmost/tags
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+body:json {
+  {
+    "kind": "stack",
+    "stack_definition": {
+      "restart_policy": "ordered",
+      "secret_map": {
+        "PG_PASSWORD": "${pods:random:32}",
+        "APP_SECRET": "${pods:random:48}"
+      },
+      "members": [
+        {
+          "name": "db",
+          "image": "postgres:16",
+          "description": "Postgres 16 - Docmost stores all page/wiki content here (the critical durable store). local_only.",
+          "ready_condition": "ready",
+          "time_to_stop_default": -1,
+          "networking": {
+            "default": { "protocol": "local_only", "port": 5432, "tapis_auth": false }
+          },
+          "healthchecks": {
+            "readiness": {
+              "exec_command": ["pg_isready", "-U", "docmost", "-d", "docmost"],
+              "initial_delay_seconds": 5,
+              "period_seconds": 5
+            },
+            "networking_requires_ready": false
+          },
+          "environment_variables": {
+            "POSTGRES_USER": "docmost",
+            "POSTGRES_DB": "docmost",
+            "POSTGRES_PASSWORD": "${stack:secrets:PG_PASSWORD}",
+            "PGDATA": "/var/lib/postgresql/data/pgdata"
+          },
+          "resources": { "cpu_request": 250, "cpu_limit": 2000, "mem_request": 256, "mem_limit": 2048 }
+        },
+        {
+          "name": "redis",
+          "image": "redis:7-alpine",
+          "description": "Redis 7 - Docmost real-time collaboration / queues. local_only.",
+          "ready_condition": "ready",
+          "time_to_stop_default": -1,
+          "networking": {
+            "default": { "protocol": "local_only", "port": 6379, "tapis_auth": false }
+          },
+          "healthchecks": {
+            "readiness": {
+              "exec_command": ["redis-cli", "ping"],
+              "initial_delay_seconds": 3,
+              "period_seconds": 5
+            },
+            "networking_requires_ready": false
+          },
+          "resources": { "cpu_request": 100, "cpu_limit": 1000, "mem_request": 128, "mem_limit": 1024 }
+        },
+        {
+          "name": "docmost",
+          "image": "docmost/docmost:latest",
+          "description": "Docmost - open-source collaborative wiki/docs (own TipTap editor, real-time via Yjs). NOT an Office-file editor - no docx/pptx/xlsx, no slides.",
+          "depends_on": ["db", "redis"],
+          "ready_condition": "ready",
+          "time_to_stop_default": -1,
+          "environment_variables": {
+            "APP_URL": "${:?Public URL Docmost is served at, e.g. https://mydocmost.pods.<base> - it bakes this into invite links}",
+            "APP_SECRET": "${stack:secrets:APP_SECRET}",
+            "DATABASE_URL": "postgresql://docmost:${stack:secrets:PG_PASSWORD}@${stack:db:host}:5432/docmost?schema=public",
+            "REDIS_URL": "redis://${stack:redis:host}:6379"
+          },
+          "networking": {
+            "default": {
+              "protocol": "http",
+              "port": 3000,
+              "tapis_auth": true,
+              "tapis_auth_allowed_users": ["*"],
+              "tapis_auth_return_path": "/",
+              "tapis_ui_uri_redirect": true,
+              "tapis_ui_uri_description": "Docmost - first visit creates the admin account, then it's your wiki/docs workspace"
+            }
+          },
+          "healthchecks": {
+            "readiness": {
+              "tcp_socket_port": 3000,
+              "initial_delay_seconds": 15,
+              "period_seconds": 10,
+              "failure_threshold": 6
+            }
+          },
+          "resources": { "cpu_request": 500, "cpu_limit": 2000, "mem_request": 512, "mem_limit": 3072 },
+          "compute_queue": "default"
+        }
+      ]
+    },
+    "tag": "latest-stack",
+    "commit_message": "Docmost collaborative wiki/docs stack: docmost + postgres + redis. Own editor (TipTap/Yjs), env-driven, near-turnkey. Shared random PG password + APP_SECRET."
+  }
+}
+
+docs {
+  ## Docmost - the low-wizard "docs interface" (own UI, no OnlyOffice)
+
+  Docmost is a self-hosted collaborative **wiki / knowledge base** (think Notion/Confluence). Unlike
+  ONLYOFFICE Document Server, it ships its **own full frontend** - page tree, search, accounts,
+  spaces, sharing - and its **own editor** (TipTap/ProseMirror + Yjs real-time). It does **not**
+  embed OnlyOffice or Collabora.
+
+  ### What it is / isn't
+  - ✅ Collaborative rich-text pages, wikis, docs, comments, real-time co-editing, permissions.
+  - ❌ **Not** an Office-file editor - no `.docx`/`.pptx`/`.xlsx`, **no slides, no spreadsheets**.
+    If you need PowerPoint-style slides, that's the OnlyOffice/Collabora-engine path (heavier,
+    wizardy), not Docmost.
+
+  ### How many containers? Three.
+  | member  | image                 | role |
+  |---------|-----------------------|------|
+  | db      | `postgres:16`         | **all page content lives here** - the store that must persist |
+  | redis   | `redis:7-alpine`      | real-time collab / queues |
+  | docmost | `docmost/docmost`     | the app + its own frontend, `depends_on` both |
+
+  ### Why so little wizardry
+  Everything is env-driven and resolves at instantiation:
+  - `${stack:secrets:PG_PASSWORD}` / `${stack:secrets:APP_SECRET}` - random, shared by reference.
+  - `DATABASE_URL` / `REDIS_URL` - built from `${stack:db:host}` / `${stack:redis:host}`.
+  - The only manual step is filling `APP_URL` (the public URL) and creating the admin account on
+    first visit. No connector app, no admin-panel pasting, no replica-set init.
+
+  ### Instantiate
+  `POST /pods/stacks/from-template` with
+  `{ "template": "docmost:latest-stack", "stack_id": "mydocmost",
+     "pod_ids": { "docmost": "mydocmost" },
+     "overrides": { "docmost": { "environment_variables": {
+       "APP_URL": "https://mydocmost.pods.<base>" } } } }`
+  -> open `mydocmost.pods.<base>`, create the first user, done.
+
+  ### Persistence (recommended before real use)
+  Both stores are on ephemeral pod disk here (frictionless first run). **Page content is in
+  postgres** - that's the one to protect. Add a tapisvolume to the db member (prompts for a volume
+  id at instantiation):
+  ```json
+  "volume_mounts": {
+    "/var/lib/postgresql/data": { "type": "tapisvolume", "source_id": "${:?Tapis volume for Docmost postgres data}" }
+  }
+  ```
+  File **attachments** (images/uploads) live on the docmost member at `/app/data/storage` - add a
+  second tapisvolume there if you upload files you care about (or set `STORAGE_DRIVER=s3` + S3 env).
+
+  > `tcp_socket` readiness on 3000 (connection-succeeds = up) is used instead of an HTTP path to
+  > avoid pinning a health route. Pin `docmost/docmost:latest` to a concrete version for production.
+}

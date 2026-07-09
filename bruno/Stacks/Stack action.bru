@@ -1,0 +1,32 @@
+meta {
+  name: Stack action
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{base_url}}/pods/stacks/{{stack_id}}/action
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+body:json {
+  {
+    "action": "restart",
+    "force": false
+  }
+}
+
+docs {
+  `action`: `start` | `stop` | `restart`. **Non-blocking** — records intent on each member; the
+  health-loop runner then orders startup (dependencies first) and teardown (reverse order) over
+  ticks. Watch `action_logs` via `Get stack`.
+
+  `force: true` (stop/restart only) bypasses reverse-order teardown and stops members immediately —
+  use when ordering doesn't matter. Startup ordering is always honored.
+}

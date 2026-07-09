@@ -1,0 +1,29 @@
+meta {
+  name: Set stack permission
+  type: http
+  seq: 7
+}
+
+post {
+  url: {{base_url}}/pods/stacks/{{stack_id}}/permissions
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+body:json {
+  {
+    "user": "someuser",
+    "level": "USER"
+  }
+}
+
+docs {
+  **One atomic write** grants `someuser` access to the whole stack. Every member pod inherits
+  `max(pod, stack)` — including pods added to the stack *after* this grant. No per-pod looping,
+  no partial-grant failures. `level`: `READ` | `USER` | `ADMIN`.
+}
