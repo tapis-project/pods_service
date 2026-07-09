@@ -1,0 +1,142 @@
+meta {
+  name: tag: gatus (abaco no-client suite)
+  type: http
+  seq: 27
+}
+
+post {
+  url: {{base_url}}/pods/templates/gatus/tags
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+body:json {
+  {
+    "kind": "pod",
+    "pod_definition": {
+      "image": "twinproduction/gatus:v5.36.0",
+      "description": "Clientless Tapis Abaco watch - mints an X-Tapis-Token with NO OAuth client (username/password only), then exercises the /v3/actors list + first-actor drill-down every 3 minutes. Works only if your tenant allows the clientless password grant.",
+      "time_to_stop_default": -1,
+      "environment_variables": {
+        "GATUS_LOG_LEVEL": "DEBUG",
+        "TAPIS_BASE_URL": "https://tacc.tapis.io",
+        "TAPIS_USERNAME": "${pods:secrets:TAPIS_USERNAME}",
+        "TAPIS_PASSWORD": "${pods:secrets:TAPIS_PASSWORD}"
+      },
+      "secret_map": {
+        "TAPIS_USERNAME": "${:?Tapis username for the clientless password grant}",
+        "TAPIS_PASSWORD": "${:?Tapis password for the clientless password grant}"
+      },
+      "volume_mounts": {
+        "/config/config.yaml": {
+          "type": "ephemeral",
+          "read_only": false,
+          "config_permissions": "0644",
+          "config_update_mode": "always",
+          "config_content": "# ============================================================================\n# Tapis Abaco watch \u2014 CLIENTLESS token mint, then exercise the /v3/actors GET\n# surface (list, paged, aliases) plus a first-actor drill-down (detail,\n# executions, workers, messages) every 3 minutes.\n#\n# CLIENTLESS: the mint step sends NO Authorization header \u2014 just username /\n# password / grant_type. This works ONLY if your tenant permits the password\n# grant without a registered OAuth client. If it returns 400, your tenant needs\n# a client \u2014 use the `tapis-actors-suite` tag (TAPIS_CLIENT_BASIC) or paste a\n# pre-minted X-Tapis-Token instead.\n#\n# Credentials come from the pod env (TAPIS_USERNAME / TAPIS_PASSWORD via\n# secret_map); gatus expands ${VAR} before parsing, so the values live only in\n# the pod's k8s secret, never in the rendered config file.\n# ============================================================================\n\nmetrics: true\n\nstorage:\n  type: memory            # transient watch; nothing to persist\n\nui:\n  title: \"Tapis Abaco Watch (no client)\"\n  header: \"Abaco /v3/actors \u2014 clientless token suite\"\n\nconcurrency: 3\n\n# ---- BASELINE HEALTHCHECK ---------------------------------------------------\n# A check that needs NO token and NO client: GET the public Tapis Tenants API.\n# It proves gatus itself, the pod's outbound networking, and Tapis reachability\n# all work \u2014 so even when the clientless mint below fails (e.g. your tenant\n# requires a client), you still get a green signal that the page is functioning.\nendpoints:\n  - name: tapis-reachable\n    group: health\n    url: \"${TAPIS_BASE_URL}/v3/tenants\"\n    interval: 1m\n    conditions:\n      - \"[STATUS] == 200\"\n      - \"[RESPONSE_TIME] < 3000\"\n\nsuites:\n  # ---- LIST surface: rapid-change watch. Green with valid creds even if you own\n  #      zero actors. This is the suite to watch for flaps in the actors GETs. ----\n  - name: abaco-actors-list\n    group: tapis\n    interval: 3m\n    timeout: 30s\n    endpoints:\n      - name: mint-tapis-token\n        url: \"${TAPIS_BASE_URL}/v3/oauth2/tokens\"\n        method: POST\n        headers:\n          Content-Type: \"application/json\"\n        body: |\n          {\n            \"username\": \"${TAPIS_USERNAME}\",\n            \"password\": \"${TAPIS_PASSWORD}\",\n            \"grant_type\": \"password\"\n          }\n        conditions:\n          # DIAGNOSTIC (temp): always-fails so gatus prints the 400 response body in the UI; remove once the cause is confirmed\n          - \"[BODY].message == __show__\"\n          - \"[STATUS] == 200\"\n          - \"len([BODY].result.access_token.access_token) > 0\"\n        store:\n          tapis_token: \"[BODY].result.access_token.access_token\"\n\n      - name: list-actors\n        url: \"${TAPIS_BASE_URL}/v3/actors\"\n        method: GET\n        headers:\n          X-Tapis-Token: \"[CONTEXT].tapis_token\"\n        conditions:\n          - \"[STATUS] == 200\"\n          - \"[BODY].status == success\"\n          - \"[RESPONSE_TIME] < 2000\"\n\n      - name: list-actors-paged\n        url: \"${TAPIS_BASE_URL}/v3/actors?limit=5\"\n        method: GET\n        headers:\n          X-Tapis-Token: \"[CONTEXT].tapis_token\"\n        conditions:\n          - \"[STATUS] == 200\"\n          - \"[BODY].status == success\"\n          # NOTE: asserts ?limit=5 is actually honored. Currently RED on TACC — the deployed\n          #       actors build ignores limit/sort and returns the full list (saw 2348). A fresh\n          #       deploy with the newer pagination should make this pass. Red HERE = pagination,\n          #       NOT a dropout; the dropout-watch suite below is the one to trust for outages.\n          - \"len([BODY].result) <= 5\"\n\n      - name: list-actors-offset\n        url: \"${TAPIS_BASE_URL}/v3/actors?limit=100&offset=0\"\n        method: GET\n        headers:\n          X-Tapis-Token: \"[CONTEXT].tapis_token\"\n        conditions:\n          - \"[STATUS] == 200\"\n          - \"[BODY].status == success\"\n\n      - name: list-aliases\n        url: \"${TAPIS_BASE_URL}/v3/actors/aliases\"\n        method: GET\n        headers:\n          X-Tapis-Token: \"[CONTEXT].tapis_token\"\n        conditions:\n          - \"[STATUS] == 200\"\n          - \"[BODY].status == success\"\n\n      - name: list-utilization\n        url: \"${TAPIS_BASE_URL}/v3/actors/utilization\"\n        method: GET\n        headers:\n          X-Tapis-Token: \"[CONTEXT].tapis_token\"\n        conditions:\n          - \"[STATUS] == 200\"\n          - \"[BODY].status == success\"\n          - \"[BODY].result.commandQueue >= 0\"\n\n      - name: search-actors\n        url: \"${TAPIS_BASE_URL}/v3/actors/search/actors\"\n        method: GET\n        headers:\n          X-Tapis-Token: \"[CONTEXT].tapis_token\"\n        conditions:\n          - \"[STATUS] == 200\"\n          - \"[BODY].status == success\"\n\n      - name: search-executions\n        url: \"${TAPIS_BASE_URL}/v3/actors/search/executions\"\n        method: GET\n        headers:\n          X-Tapis-Token: \"[CONTEXT].tapis_token\"\n        conditions:\n          - \"[STATUS] == 200\"\n          - \"[BODY].status == success\"\n\n  # ---- DRILL-DOWN over the FIRST actor. Needs >= 1 actor in the tenant; if you\n  #      own none, this suite goes red on find-first-actor while the list suite\n  #      above stays green. Mints its own token (suite contexts are independent). ----\n  - name: abaco-actor-drilldown\n    group: tapis\n    interval: 3m\n    timeout: 30s\n    endpoints:\n      - name: mint-tapis-token-drill\n        url: \"${TAPIS_BASE_URL}/v3/oauth2/tokens\"\n        method: POST\n        headers:\n          Content-Type: \"application/json\"\n        body: |\n          {\n            \"username\": \"${TAPIS_USERNAME}\",\n            \"password\": \"${TAPIS_PASSWORD}\",\n            \"grant_type\": \"password\"\n          }\n        conditions:\n          - \"[STATUS] == 200\"\n        store:\n          tapis_token: \"[BODY].result.access_token.access_token\"\n\n      - name: find-first-actor\n        url: \"${TAPIS_BASE_URL}/v3/actors\"\n        method: GET\n        headers:\n          X-Tapis-Token: \"[CONTEXT].tapis_token\"\n        conditions:\n          - \"[STATUS] == 200\"\n          - \"len([BODY].result) > 0\"\n        store:\n          actor_id: \"[BODY].result[0].id\"\n\n      - name: actor-detail\n        url: \"${TAPIS_BASE_URL}/v3/actors/[CONTEXT].actor_id\"\n        method: GET\n        headers:\n          X-Tapis-Token: \"[CONTEXT].tapis_token\"\n        conditions:\n          - \"[STATUS] == 200\"\n          - \"[BODY].status == success\"\n          - \"[BODY].result.id == [CONTEXT].actor_id\"\n\n      - name: actor-executions\n        url: \"${TAPIS_BASE_URL}/v3/actors/[CONTEXT].actor_id/executions\"\n        method: GET\n        headers:\n          X-Tapis-Token: \"[CONTEXT].tapis_token\"\n        conditions:\n          - \"[STATUS] == 200\"\n          - \"[BODY].status == success\"\n\n      - name: actor-workers\n        url: \"${TAPIS_BASE_URL}/v3/actors/[CONTEXT].actor_id/workers\"\n        method: GET\n        headers:\n          X-Tapis-Token: \"[CONTEXT].tapis_token\"\n        conditions:\n          - \"[STATUS] == 200\"\n          - \"[BODY].status == success\"\n\n      - name: actor-messages\n        url: \"${TAPIS_BASE_URL}/v3/actors/[CONTEXT].actor_id/messages\"\n        method: GET\n        headers:\n          X-Tapis-Token: \"[CONTEXT].tapis_token\"\n        conditions:\n          - \"[STATUS] == 200\"\n          - \"[BODY].status == success\"\n\n  # ---- DROPOUT WATCH: rapid 1-minute canary for the intermittent actors no-response issue.\n  #      Tight timeout (15s) + low [RESPONSE_TIME] thresholds so a hung or slow actors reply\n  #      registers as a RED blip with response-time history (gatus keeps the timeline, so you\n  #      can correlate the dropout windows). Hits the cheapest cross-cutting GETs:\n  #        * actors-list-canary  - the main list path (Mongo pipeline)\n  #        * actors-utilization  - touches actors_store + workers_store + the RabbitMQ command\n  #                                queue; watch result.commandQueue (backlog) and result.workers\n  #                                (dead/zero workers) for the likely dropout cause\n  #        * actors-workers-search - workers view via the search path\n  #      If all three flap together at the same timestamps -> whole-service stall (token/gateway\n  #      /broker). If only utilization/workers flap -> worker pool or command queue. ----\n  - name: abaco-dropout-watch\n    group: tapis\n    interval: 1m\n    timeout: 15s\n    endpoints:\n      - name: mint-tapis-token-dropwatch\n        url: \"${TAPIS_BASE_URL}/v3/oauth2/tokens\"\n        method: POST\n        headers:\n          Content-Type: \"application/json\"\n        body: |\n          {\n            \"username\": \"${TAPIS_USERNAME}\",\n            \"password\": \"${TAPIS_PASSWORD}\",\n            \"grant_type\": \"password\"\n          }\n        conditions:\n          - \"[STATUS] == 200\"\n        store:\n          tapis_token: \"[BODY].result.access_token.access_token\"\n\n      - name: actors-list-canary\n        url: \"${TAPIS_BASE_URL}/v3/actors\"\n        method: GET\n        headers:\n          X-Tapis-Token: \"[CONTEXT].tapis_token\"\n        conditions:\n          - \"[STATUS] == 200\"\n          - \"[BODY].status == success\"\n          - \"[RESPONSE_TIME] < 2000\"\n\n      - name: actors-utilization\n        url: \"${TAPIS_BASE_URL}/v3/actors/utilization\"\n        method: GET\n        headers:\n          X-Tapis-Token: \"[CONTEXT].tapis_token\"\n        conditions:\n          - \"[STATUS] == 200\"\n          - \"[BODY].status == success\"\n          - \"[RESPONSE_TIME] < 1500\"\n          - \"[BODY].result.commandQueue >= 0\"\n\n      - name: actors-workers-search\n        url: \"${TAPIS_BASE_URL}/v3/actors/search/workers\"\n        method: GET\n        headers:\n          X-Tapis-Token: \"[CONTEXT].tapis_token\"\n        conditions:\n          - \"[STATUS] == 200\"\n          - \"[BODY].status == success\"\n          - \"[RESPONSE_TIME] < 2500\"\n"
+        }
+      },
+      "networking": {
+        "default": {
+          "protocol": "http",
+          "port": 8080,
+          "tapis_auth": true,
+          "tapis_auth_allowed_users": [
+            "*"
+          ],
+          "tapis_auth_return_path": "/"
+        }
+      },
+      "healthchecks": {
+        "readiness": {
+          "http_get_path": "/health",
+          "http_get_port": 8080,
+          "initial_delay_seconds": 5,
+          "period_seconds": 10
+        },
+        "liveness": {
+          "http_get_path": "/health",
+          "http_get_port": 8080,
+          "initial_delay_seconds": 30,
+          "period_seconds": 15
+        },
+        "networking_requires_ready": true
+      }
+    },
+    "tag": "abaco-noclient-suite",
+    "commit_message": "Gatus abaco-noclient-suite - clientless X-Tapis-Token mint + expanded /v3/actors list & drill-down watch."
+  }
+}
+
+docs {
+  ## Abaco Watch (no client) — `abaco-noclient-suite`
+  
+  A **clientless** answer to "can the abaco suite mint a token without an OAuth client?" —
+  the mint step posts only `username` / `password` / `grant_type` with **no Authorization
+  header**.
+  
+  > ⚠️ **Clientless only works if your tenant allows it.** The Tapis password grant normally
+  > requires a registered OAuth client. Some dev tenants permit the grant without one; **TACC
+  > does not** — there, `mint-tapis-token` returns **400** and both mint suites stay red. That's
+  > expected, not a config bug. To actually mint on such a tenant, switch to the
+  > `tapis-actors-suite` tag (which carries `TAPIS_CLIENT_BASIC`), or paste a pre-minted
+  > `X-Tapis-Token` as a secret and drop the mint step entirely.
+  
+  ### Baseline healthcheck (always green)
+  `tapis-reachable` (group **health**) does a token-free, client-free `GET /v3/tenants` against the
+  public Tapis Tenants API. It proves gatus, the pod's networking, and Tapis reachability all work —
+  so the dashboard shows a green signal **even when the clientless mint can't get a token**. This is
+  the "is the page working at all?" check.
+  
+  ### What it checks (two suites)
+  **`abaco-actors-list`** — the rapid-change watch (green with valid creds even if you own no actors):
+  1. `mint-tapis-token` → stores `tapis_token`
+  2. `list-actors` — `GET /v3/actors` (status success + latency < 2s)
+  3. `list-actors-paged` — `GET /v3/actors?limit=5` (asserts ≤ 5 returned)
+  4. `list-actors-offset` — `GET /v3/actors?limit=100&offset=0`
+  5. `list-aliases` — `GET /v3/actors/aliases`
+  
+  **`abaco-actor-drilldown`** — exercises the FIRST actor (needs ≥ 1 actor; else this suite goes
+  red on `find-first-actor` while the list suite stays green):
+  1. `mint-tapis-token-drill` — distinct name from the list suite's mint (gatus requires
+     globally-unique `group_name` endpoint keys across suites)
+  2. `find-first-actor` — `GET /v3/actors`, stores `result[0].id` as `actor_id`
+  3. `actor-detail` — `GET /v3/actors/{id}` (asserts the returned id matches)
+  4. `actor-executions` — `GET /v3/actors/{id}/executions`
+  5. `actor-workers` — `GET /v3/actors/{id}/workers`
+  6. `actor-messages` — `GET /v3/actors/{id}/messages`
+  
+  **`abaco-dropout-watch`** — a rapid **1-minute** canary for the intermittent "actors stops
+  responding" issue. Tight `timeout: 15s` + per-endpoint `[RESPONSE_TIME]` thresholds so a hung or
+  slow reply records as a RED blip with response-time history you can correlate to the outage window:
+  1. `actors-list-canary` — `GET /v3/actors` (latency < 2s) — the main list path (Mongo pipeline)
+  2. `actors-utilization` — `GET /v3/actors/utilization` (latency < 1.5s) — touches actors_store +
+     workers_store + the RabbitMQ command queue; watch `result.commandQueue` (backlog) and
+     `result.workers` (dead/zero workers) for the likely dropout cause
+  3. `actors-workers-search` — `GET /v3/actors/search/workers` (latency < 2.5s)
+  
+  Reading it: all three flap at the same timestamps → whole-service stall (token / gateway / broker).
+  Only utilization + workers flap → worker pool or command-queue problem.
+  
+  > The list suite also gained `list-utilization`, `search-actors`, `search-executions` for coverage.
+  > `list-actors-paged` (the `?limit=5` check) is **expected red on TACC** until a newer actors build
+  > with enforced limit/sort is deployed — that's a pagination bug, not a dropout.
+  
+  ### 3-minute cadence
+  Both suites run `interval: 3m` to surface rapid changes in the actors GETs. Drop to `1m` for a
+  hot loop, or raise to spare the tenant.
+  
+  ### Secrets
+  Only `TAPIS_USERNAME` / `TAPIS_PASSWORD` (no client) — declared as `secret_map` placeholders,
+  surfaced into pod env, read by gatus via `${VAR}`. They never appear in the rendered config.
+  
+  ### gatus syntax note
+  Uses suite `store` + `[CONTEXT]` reuse, array indexing (`[BODY].result[0].id`), and `[CONTEXT]`
+  interpolation inside URLs — all gatus v5 suite features. If your gatus build rejects the array
+  index or in-URL context, simplify the drill-down suite (it's independent of the list watch).
+}

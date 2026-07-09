@@ -1,0 +1,111 @@
+meta {
+  name: tag: gatus (tapis actors suite)
+  type: http
+  seq: 22
+}
+
+post {
+  url: {{base_url}}/pods/templates/gatus/tags
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+body:json {
+  {
+    "kind": "pod",
+    "pod_definition": {
+      "image": "twinproduction/gatus:v5.36.0",
+      "description": "Tapis Abaco actors watch - mints an X-Tapis-Token in-suite, then polls /v3/actors every 3 minutes to catch rapid GET changes. Credentials from secret_map; token reused via suite context.",
+      "time_to_stop_default": -1,
+      "environment_variables": {
+        "TAPIS_BASE_URL": "https://tacc.tapis.io",
+        "TAPIS_USERNAME": "${pods:secrets:TAPIS_USERNAME}",
+        "TAPIS_PASSWORD": "${pods:secrets:TAPIS_PASSWORD}",
+        "TAPIS_CLIENT_BASIC": "${pods:secrets:TAPIS_CLIENT_BASIC}"
+      },
+      "secret_map": {
+        "TAPIS_USERNAME": "${:?Tapis username for minting the X-Tapis-Token}",
+        "TAPIS_PASSWORD": "${:?Tapis password for the password grant}",
+        "TAPIS_CLIENT_BASIC": "${:?base64 of 'client_id:client_key' for the password grant. The Tapis password grant REQUIRES a registered OAuth client; create one with POST /v3/oauth2/clients, then base64-encode client_id:client_key. A gatus config cannot omit the Basic auth header conditionally, so this is required here.}"
+      },
+      "volume_mounts": {
+        "/config/config.yaml": {
+          "type": "ephemeral",
+          "read_only": false,
+          "config_permissions": "0644",
+          "config_update_mode": "always",
+          "config_content": "# ============================================================================\n# Tapis Abaco actors watch \u2014 mint an X-Tapis-Token, then poll /v3/actors GETs\n# every 3 minutes to catch rapid changes.\n#\n# The token is minted IN-SUITE (the gatus equivalent of `curl ... /v3/oauth2/tokens`)\n# and reused on every later step via [CONTEXT].tapis_token. Credentials come from the\n# pod's env (TAPIS_USERNAME / TAPIS_PASSWORD, sourced from secret_map); gatus expands\n# ${VAR} from env before parsing, so secret values live only in the pod env (k8s secret),\n# never in the rendered config file.\n#\n# Token endpoint note: the Tapis password grant REQUIRES a registered OAuth client, sent as a\n# Basic auth header. Set TAPIS_CLIENT_BASIC = base64(\"client_id:client_key\"). Create a client\n# with POST /v3/oauth2/clients first. (A gatus config can't omit the header conditionally, so\n# an empty value sends a malformed `Basic ` header and the endpoint returns 400.)\n# ============================================================================\n\nmetrics: true\n\nstorage:\n  type: memory            # transient watch; nothing to persist\n\nui:\n  title: \"Tapis Actors Watch\"\n  header: \"Abaco /v3/actors \u2014 token-minted suite\"\n\nconcurrency: 3\n\nsuites:\n  - name: abaco-actors-watch\n    group: tapis\n    interval: 3m          # default 3-minute cadence to surface rapid GET changes\n    timeout: 30s\n    endpoints:\n      # 1) Mint an X-Tapis-Token (password grant). Stored as `tapis_token`.\n      - name: mint-tapis-token\n        url: \"${TAPIS_BASE_URL}/v3/oauth2/tokens\"\n        method: POST\n        headers:\n          Content-Type: \"application/json\"\n          Authorization: \"Basic ${TAPIS_CLIENT_BASIC}\"\n        body: |\n          {\n            \"username\": \"${TAPIS_USERNAME}\",\n            \"password\": \"${TAPIS_PASSWORD}\",\n            \"grant_type\": \"password\"\n          }\n        conditions:\n          - \"[STATUS] == 200\"\n          - \"len([BODY].result.access_token.access_token) > 0\"\n        store:\n          tapis_token: \"[BODY].result.access_token.access_token\"\n\n      # 2) List actors with the minted token. Asserts shape + latency.\n      - name: list-actors\n        url: \"${TAPIS_BASE_URL}/v3/actors\"\n        method: GET\n        headers:\n          X-Tapis-Token: \"[CONTEXT].tapis_token\"\n        conditions:\n          - \"[STATUS] == 200\"\n          - \"[BODY].status == success\"\n          - \"[RESPONSE_TIME] < 2000\"\n\n      # 3) Paginated probe \u2014 a second GET to catch rapid list churn between runs.\n      - name: list-actors-paged\n        url: \"${TAPIS_BASE_URL}/v3/actors?limit=5\"\n        method: GET\n        headers:\n          X-Tapis-Token: \"[CONTEXT].tapis_token\"\n        conditions:\n          - \"[STATUS] == 200\"\n          - \"[BODY].status == success\"\n"
+        }
+      },
+      "networking": {
+        "default": {
+          "protocol": "http",
+          "port": 8080,
+          "tapis_auth": true,
+          "tapis_auth_allowed_users": [
+            "*"
+          ],
+          "tapis_auth_return_path": "/"
+        }
+      },
+      "healthchecks": {
+        "readiness": {
+          "http_get_path": "/health",
+          "http_get_port": 8080,
+          "initial_delay_seconds": 5,
+          "period_seconds": 10
+        },
+        "liveness": {
+          "http_get_path": "/health",
+          "http_get_port": 8080,
+          "initial_delay_seconds": 30,
+          "period_seconds": 15
+        },
+        "networking_requires_ready": true
+      }
+    },
+    "tag": "tapis-actors-suite",
+    "commit_message": "Gatus tapis-actors-suite - in-suite X-Tapis-Token mint + 3-minute /v3/actors GET watch."
+  }
+}
+
+docs {
+  ## Tapis Actors Watch — `tapis-actors-suite`
+  
+  A token-minting **suite** that does, in gatus, what you'd otherwise `curl` by hand:
+  
+  1. **mint-tapis-token** — `POST ${TAPIS_BASE_URL}/v3/oauth2/tokens` (password grant), stores
+     `result.access_token.access_token` as `tapis_token`.
+  2. **list-actors** — `GET /v3/actors` with `X-Tapis-Token: [CONTEXT].tapis_token`, asserts
+     `[BODY].status == success` + latency.
+  3. **list-actors-paged** — a second `GET /v3/actors?limit=5` to catch list churn between runs.
+  
+  ### 3-minute cadence
+  `interval: 3m` on the suite is the default — we're watching for *rapid changes* to the actors
+  GETs, so a tight cadence surfaces flaps quickly. Drop it to `1m` for a hot loop, or raise it to
+  spare the tenant.
+  
+  ### Where the secrets live
+  `TAPIS_USERNAME` / `TAPIS_PASSWORD` / `TAPIS_CLIENT_BASIC` are declared as `secret_map`
+  placeholders, surfaced into pod **env**, and read by gatus via `${VAR}` expansion. They never
+  appear in the rendered config file — only in the pod's k8s secret.
+
+  ### Token endpoint caveat — client is required
+  The Tapis password grant **requires a registered OAuth client**, sent as a Basic auth header.
+  This is why the earlier run returned **400**: with an empty `TAPIS_CLIENT_BASIC`, gatus sent a
+  malformed `Authorization: Basic ` header (a gatus config can't omit a header conditionally).
+  Fix: create a client and set `TAPIS_CLIENT_BASIC = base64("client_id:client_key")`:
+  ```bash
+  # one-time: make a client (needs an existing token), then base64 its id:key
+  curl -H "X-Tapis-Token: $TOK" -d '{"client_id":"gatus-suite"}' \
+    https://tacc.tapis.io/v3/oauth2/clients
+  printf '%s' "gatus-suite:$CLIENT_KEY" | base64 -w0   # → TAPIS_CLIENT_BASIC
+  ```
+  (The xyops `tapis-workflow` tag keeps `TAPIS_CLIENT_BASIC` optional because its shell step adds
+  the header only when the value is non-empty — gatus has no equivalent conditional.)
+}

@@ -1,0 +1,104 @@
+meta {
+  name: tag: phoenix-client (jupyter otel)
+  type: http
+  seq: 15
+}
+
+post {
+  url: {{base_url}}/pods/templates/phoenix-client/tags
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+body:json {
+  {
+    "pod_definition": {
+      "description": "JupyterLab pre-wired to send OpenTelemetry/OpenInference traces to a self-hosted Arize Phoenix. Set PHOENIX_COLLECTOR_ENDPOINT to your Phoenix pod, then instrument your LLM code in a notebook.",
+      "image": "quay.io/jupyter/scipy-notebook:latest",
+      "arguments": ["--IdentityProvider.token="],
+      "secret_map": {
+        "PHOENIX_API_KEY": "${pods:default::?Phoenix API key - only needed if the Phoenix pod has PHOENIX_ENABLE_AUTH=True. Leave blank otherwise.}"
+      },
+      "environment_variables": {
+        "PHOENIX_COLLECTOR_ENDPOINT": "${:?Phoenix collector base URL. In-cluster: http://pods-<site>-<tenant>-<phoenixPodId>:6006  |  External (needs a Tapis JWT): https://<phoenixPodId>.pods.<base>}",
+        "PHOENIX_CLIENT_HEADERS": "authorization=Bearer ${pods:secrets:PHOENIX_API_KEY}",
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "${:?Same Phoenix host with the OTLP path, e.g. http://pods-<site>-<tenant>-<phoenixPodId>:6006/v1/traces}"
+      },
+      "networking": {
+        "default": {
+          "protocol": "http",
+          "port": 8888,
+          "tapis_auth": true,
+          "tapis_auth_allowed_users": ["*"],
+          "tapis_auth_return_path": "/lab",
+          "tapis_ui_uri_redirect": true,
+          "tapis_ui_uri_description": "JupyterLab - instrument LLM code and watch traces land in Phoenix"
+        }
+      },
+      "resources": { "cpu_request": 500, "cpu_limit": 2000, "mem_request": 512, "mem_limit": 4096 },
+      "time_to_stop_default": -1
+    },
+    "tag": "jupyter-otel",
+    "commit_message": "JupyterLab client preset with PHOENIX_COLLECTOR_ENDPOINT for sending OpenInference traces to a self-hosted Phoenix; jupyter token disabled (tapis-auth gates the UI)."
+  }
+}
+
+docs {
+  ## A pod that *sends* traces to your self-hosted Phoenix
+
+  This is the consumer side of `Create stack template tag (phoenix arize)`. It's a JupyterLab pod
+  with the Phoenix collector env vars pre-declared, so you only fill in *where your Phoenix lives*
+  and start instrumenting.
+
+  ### Connecting to Phoenix - the one decision: which endpoint?
+  Phoenix listens on **6006** (OTLP-HTTP + UI) and **4317** (OTLP-gRPC). Two ways to reach it:
+
+  | From | Endpoint to use | Auth |
+  |------|-----------------|------|
+  | **Same cluster** (recommended) | `http://pods-<site>-<tenant>-<phoenixPodId>:6006` | none - in-cluster traffic |
+  | **External / cross-tenant** | `https://<phoenixPodId>.pods.<base>` | the request must carry a **Tapis JWT** (tapis-auth gates it), which OTEL exporters don't send by default - prefer the in-cluster URL |
+
+  Fill `PHOENIX_COLLECTOR_ENDPOINT` (Phoenix client lib) and `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`
+  (raw OTEL exporters) with the same host - the former wants the **base** URL, the latter wants the
+  base + `/v1/traces`.
+
+  ### Instrument in a notebook
+  ```python
+  # one-time install in the notebook
+  %pip install arize-phoenix-otel openinference-instrumentation-openai openai
+
+  from phoenix.otel import register
+  # reads PHOENIX_COLLECTOR_ENDPOINT (and PHOENIX_CLIENT_HEADERS if auth is on) from the env
+  tracer_provider = register(project_name="my-llm-app", auto_instrument=True)
+
+  # now any instrumented client is traced automatically:
+  from openai import OpenAI
+  client = OpenAI()
+  client.chat.completions.create(
+      model="gpt-4o-mini",
+      messages=[{"role": "user", "content": "hello phoenix"}],
+  )
+  # -> open the Phoenix UI; the span shows up under project "my-llm-app"
+  ```
+  `auto_instrument=True` picks up every `openinference-instrumentation-*` package you've installed
+  (OpenAI, LangChain, LlamaIndex, Anthropic, Bedrock, ...). Install the ones matching your stack.
+
+  ### If your Phoenix has auth on (`PHOENIX_ENABLE_AUTH=True`)
+  Create an API key in the Phoenix UI and pass it as the `PHOENIX_API_KEY` secret when you
+  instantiate this pod. `PHOENIX_CLIENT_HEADERS` is already templated to
+  `authorization=Bearer <key>`; if auth is **off**, leave the key blank and the header is harmless.
+
+  ### Instantiate
+  `POST /pods` with `{ "template": "phoenix-client:jupyter-otel", "pod_id": "myphoenixclient",
+  "template_overrides": { "secret_map": { ... }, "environment_variables": {
+  "PHOENIX_COLLECTOR_ENDPOINT": "http://pods-<site>-<tenant>-myphoenix:6006",
+  "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "http://pods-<site>-<tenant>-myphoenix:6006/v1/traces" } } }`.
+
+  > Jupyter's own token is disabled (`--IdentityProvider.token=`) because tapis-auth already gates
+  > the pod URL. Don't expose this pod with `tapis_auth: false`.
+}

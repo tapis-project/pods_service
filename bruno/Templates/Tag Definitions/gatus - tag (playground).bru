@@ -1,0 +1,93 @@
+meta {
+  name: tag: gatus (playground)
+  type: http
+  seq: 21
+}
+
+post {
+  url: {{base_url}}/pods/templates/gatus/tags
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+body:json {
+  {
+    "kind": "pod",
+    "pod_definition": {
+      "image": "twinproduction/gatus:v5.36.0",
+      "description": "Gatus playground - regular endpoints + a working httpbin token-reuse suite for collaborative experimentation. SQLite history on an ephemeral /data mount (wiped on restart); use the gatus playground-postgres stack tag for durable history.",
+      "time_to_stop_default": -1,
+      "environment_variables": {},
+      "volume_mounts": {
+        "/config/config.yaml": {
+          "type": "ephemeral",
+          "read_only": false,
+          "config_permissions": "0644",
+          "config_update_mode": "always",
+          "config_content": "# ============================================================================\n# Gatus playground \u2014 regular endpoints + a working token-passing suite.\n# Requires Gatus >= v5.24.0 for suites (this image is v5.36.0).\n# Gatus hot-reloads this file on save (config_update_mode=always -> applies on restart).\n# ============================================================================\n\nmetrics: true               # Prometheus metrics at /metrics\n\nstorage:\n  type: sqlite              # persists uptime history to the mounted /data volume\n  path: /data/data.db       # /data is an ephemeral mount here (wiped on restart);\n                            # use the playground-postgres STACK tag for durable history.\n\nui:\n  title: \"Gatus Lab\"\n  header: \"Gatus Lab\"\n\nconcurrency: 3              # bump if you add many short-interval endpoints\n\n# --- Regular endpoints (green out of the box) ------------------------------\nendpoints:\n  - name: twin-health\n    group: examples\n    url: \"https://twin.sh/health\"\n    interval: 1m\n    conditions:\n      - \"[STATUS] == 200\"\n      - \"[BODY].status == UP\"\n\n  - name: github-api\n    group: examples\n    url: \"https://api.github.com\"\n    interval: 5m\n    conditions:\n      - \"[STATUS] == 200\"\n      - \"[RESPONSE_TIME] < 1500\"\n\n  - name: example-dot-com\n    group: examples\n    url: \"https://example.com/\"\n    interval: 5m\n    conditions:\n      - \"[STATUS] == 200\"\n\n# --- Suite (ALPHA): mint a value, store it, reuse it in a later request -----\n# Runs against httpbin.org and passes end to end so you can watch the flow:\n#   1. mint-token : GET /uuid -> store the uuid as `token`\n#   2. use-token  : GET /bearer with Authorization: Bearer [CONTEXT].token\n# Swap the URLs for a real login + protected endpoint; the pattern is identical.\nsuites:\n  - name: token-reuse-demo\n    group: api-tests\n    interval: 2m\n    timeout: 30s\n    endpoints:\n      - name: mint-token\n        url: \"https://httpbin.org/uuid\"\n        method: GET\n        conditions:\n          - \"[STATUS] == 200\"\n          - \"len([BODY].uuid) > 0\"\n        store:\n          token: \"[BODY].uuid\"\n\n      - name: use-token\n        url: \"https://httpbin.org/bearer\"\n        method: GET\n        headers:\n          Authorization: \"Bearer [CONTEXT].token\"\n        conditions:\n          - \"[STATUS] == 200\"\n          - \"[BODY].authenticated == true\"\n          - \"[BODY].token == [CONTEXT].token\"\n"
+        },
+        "/data": {
+          "type": "ephemeral",
+          "read_only": false
+        }
+      },
+      "networking": {
+        "default": {
+          "protocol": "http",
+          "port": 8080,
+          "tapis_auth": true,
+          "tapis_auth_allowed_users": [
+            "*"
+          ],
+          "tapis_auth_return_path": "/"
+        }
+      },
+      "healthchecks": {
+        "readiness": {
+          "http_get_path": "/health",
+          "http_get_port": 8080,
+          "initial_delay_seconds": 5,
+          "period_seconds": 10
+        },
+        "liveness": {
+          "http_get_path": "/health",
+          "http_get_port": 8080,
+          "initial_delay_seconds": 30,
+          "period_seconds": 15
+        },
+        "networking_requires_ready": true
+      }
+    },
+    "tag": "playground",
+    "commit_message": "Gatus playground - regular endpoints + httpbin token-reuse suite (sqlite on ephemeral /data).",
+    "description": "Collaborative gatus research tag: copy/paste-friendly config with example endpoints and an alpha suite that mints + reuses a token end to end."
+  }
+}
+
+docs {
+  ## Gatus playground — `playground`
+  
+  A testy, collaborative single-pod gatus for experimenting with **suites** (the alpha
+  mint-token-then-reuse-it flow) alongside ordinary endpoints. Everything goes green out of
+  the box against `twin.sh` / `api.github.com` / `example.com` / `httpbin.org`.
+  
+  ### Suites in one paragraph
+  A suite runs its member endpoints **in order**, sharing a context. `store:` saves a value
+  from one step (`token: "[BODY].uuid"`); later steps read it with `[CONTEXT].token`. That's
+  the whole "log in once, reuse the token" pattern — swap the httpbin URLs for a real
+  login + protected endpoint.
+  
+  ### Storage
+  `type: sqlite` at `/data/data.db`, with `/data` mounted **ephemeral** (writable emptyDir) so
+  sqlite has a real directory to open. History is wiped on pod restart. For durable history use
+  the **gatus playground-postgres** stack tag.
+  
+  ### Two interpolation layers (they stack)
+  1. **Pods service** replaces `${pods:secrets:KEY}` in `config_content` before mount.
+  2. **Gatus** expands `${ENV_VAR}` from `environment_variables` at startup.
+}

@@ -1,0 +1,49 @@
+meta {
+  name: xyops - create template
+  type: http
+  seq: 24
+}
+
+post {
+  url: {{base_url}}/pods/templates
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+body:json {
+  {
+    "template_id": "xyops",
+    "description": "xyOps - workflow automation + server monitoring (pixlcore/xyops). Self-contained (SQLite + filesystem, no external DB).",
+    "metatags": [
+      "xyops",
+      "workflow",
+      "automation",
+      "monitoring",
+      "ops",
+      "http"
+    ]
+  }
+}
+
+docs {
+  ## Create the `xyops` template
+  
+  Run this once before the tags below. xyOps (https://github.com/pixlcore/xyops) is a Node-based
+  "workflow automation and server monitoring system" from PixlCore (the Cronicle authors).
+  
+  > ⚠️ **No published image yet.** As of authoring, xyOps has **no official container image**
+  > (GitHub Packages: 0; not on Docker Hub). You must **build it from the repo Dockerfile**, push
+  > it to a registry the Pods service can pull, and **add it to the Pods image allowlist**. The tags
+  > below use `pixlcore/xyops:latest` as a placeholder — change it to your built image.
+  >
+  > ```bash
+  > git clone https://github.com/pixlcore/xyops && cd xyops
+  > docker build -t <your-registry>/xyops:latest .
+  > docker push <your-registry>/xyops:latest
+  > ```
+}

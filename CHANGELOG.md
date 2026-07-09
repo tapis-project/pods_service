@@ -121,6 +121,7 @@ The edge release. Pods learned to leave the cluster.
 - MCP tool spans export to Phoenix over OTLP, so agent activity is traceable alongside everything else.
 - Fleet metrics endpoints with cached PromQL and an availability stanza.
 - `scripts/smoke.sh` — one command that tells you which layer of a deployment is broken (nginx, api, traefik-config, or client) from the shape of the response.
+- bruno: stacks and stack-template-tag requests, plus example template-tag definitions (codeserver, gatus monitoring suites, onlyoffice, peekaping, phoenix, uptimekuma) to crib from.
 
 ### Bug fixes:
 - Permission guards return proper 4xx codes instead of bare errors that mapped to 500.

@@ -1,0 +1,72 @@
+meta {
+  name: tag: uptimekuma (2.4.0)
+  type: http
+  seq: 12
+}
+
+post {
+  url: {{base_url}}/pods/templates/uptimekuma/tags
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+body:json {
+  {
+    "kind": "pod",
+    "pod_definition": {
+      "image": "louislam/uptime-kuma:2.4.0",
+      "description": "Single-pod Uptime Kuma with embedded SQLite. No secrets required - the app manages its own login via a first-visit setup wizard. Tapis auth fronts the pod; Kuma's own login is a second layer.",
+      "time_to_stop_default": -1,
+      "networking": {
+        "default": {
+          "protocol": "http",
+          "port": 3001,
+          "tapis_auth": true,
+          "tapis_auth_allowed_users": ["*"],
+          "tapis_auth_return_path": "/"
+        }
+      },
+      "healthchecks": {
+        "readiness": {
+          "http_get_path": "/",
+          "http_get_port": 3001,
+          "initial_delay_seconds": 10,
+          "period_seconds": 10
+        },
+        "liveness": {
+          "http_get_path": "/",
+          "http_get_port": 3001,
+          "initial_delay_seconds": 60,
+          "period_seconds": 15
+        },
+        "networking_requires_ready": true
+      }
+    },
+    "tag": "2.4.0",
+    "commit_message": "2.4.0 - health probes, descriptions. Data is ephemeral; see 2.4.0-mariadb stack tag for persistence.",
+    "description": "Uptime Kuma 2.4.0 - self-hosted uptime/status monitoring. First visit runs a setup wizard to create the admin account. All state (monitors, users, history) lives in SQLite at /app/data, which is wiped on pod restart - use the 2.4.0-mariadb stack tag if you need durability."
+  }
+}
+
+docs {
+  ## Uptime Kuma 2.4.0 — single pod
+  
+  Self-hosted uptime/status monitoring. Bumps the old `2.1.1` tag and adds:
+  
+  - **Health probes** — readiness gates the Tapis URL behind the "service starting" splash
+    (`networking_requires_ready: true`); liveness restarts a wedged node process. Kuma returns
+    a 3xx redirect on `/` which k8s httpGet probes treat as success.
+  - **No secret_map** — there is genuinely nothing to parameterize: Kuma creates its admin
+    account through the first-visit setup wizard and stores everything itself.
+  
+  ### Persistence caveat
+  All state is SQLite under `/app/data` on the container filesystem — a restart resets
+  monitors, users, and history. For durability use the `2.4.0-mariadb` **stack** tag
+  (Stacks → "Create stack template tag (uptimekuma mariadb)"), which moves state into a
+  MariaDB member (Kuma 2.x native external-DB support via `UPTIME_KUMA_DB_*` env vars).
+}

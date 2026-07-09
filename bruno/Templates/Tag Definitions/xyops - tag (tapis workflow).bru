@@ -1,0 +1,130 @@
+meta {
+  name: tag: xyops (tapis workflow)
+  type: http
+  seq: 26
+}
+
+post {
+  url: {{base_url}}/pods/templates/xyops/tags
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+body:json {
+  {
+    "kind": "pod",
+    "pod_definition": {
+      "image": "pixlcore/xyops:latest",
+      "description": "xyOps server pre-wired for Tapis: TAPIS_BASE_URL/USERNAME/PASSWORD are in the pod env, so a workflow's shell steps can mint an X-Tapis-Token and call the Tapis API. See docs for the ready-to-paste 2-step workflow.",
+      "time_to_stop_default": -1,
+      "environment_variables": {
+        "XYOPS_secret_key": "${pods:secrets:XYOPS_SECRET_KEY}",
+        "TAPIS_BASE_URL": "https://tacc.tapis.io",
+        "TAPIS_USERNAME": "${pods:secrets:TAPIS_USERNAME}",
+        "TAPIS_PASSWORD": "${pods:secrets:TAPIS_PASSWORD}",
+        "TAPIS_CLIENT_BASIC": "${pods:secrets:TAPIS_CLIENT_BASIC}"
+      },
+      "secret_map": {
+        "XYOPS_SECRET_KEY": "${pods:random:32}",
+        "TAPIS_USERNAME": "${:?Tapis username for minting the X-Tapis-Token}",
+        "TAPIS_PASSWORD": "${:?Tapis password for the password grant}",
+        "TAPIS_CLIENT_BASIC": "${pods:default::?Optional base64 of 'client_id:client_key' if your tenant's password grant needs a client. Leave empty otherwise.}"
+      },
+      "volume_mounts": {
+        "/opt/xyops/data": {
+          "type": "ephemeral",
+          "read_only": false
+        }
+      },
+      "networking": {
+        "default": {
+          "protocol": "http",
+          "port": 5522,
+          "tapis_auth": true,
+          "tapis_auth_allowed_users": [
+            "*"
+          ],
+          "tapis_auth_return_path": "/"
+        }
+      },
+      "healthchecks": {
+        "readiness": {
+          "http_get_path": "/",
+          "http_get_port": 5522,
+          "initial_delay_seconds": 15,
+          "period_seconds": 10
+        },
+        "liveness": {
+          "http_get_path": "/",
+          "http_get_port": 5522,
+          "initial_delay_seconds": 45,
+          "period_seconds": 15
+        },
+        "networking_requires_ready": true
+      },
+      "resources": {
+        "cpu_request": 500,
+        "cpu_limit": 2000,
+        "mem_request": 512,
+        "mem_limit": 2048
+      }
+    },
+    "tag": "tapis-workflow",
+    "commit_message": "xyOps + Tapis creds in env - 2-step token-mint -> /v3/actors workflow (docs recipe).",
+    "description": "xyOps with Tapis credentials in the pod env. The docs give a ready-to-paste workflow: mint an X-Tapis-Token, then call /v3/actors with it (chained), on a 3-minute schedule."
+  }
+}
+
+docs {
+  ## xyOps — `tapis-workflow` (complicated)
+  
+  The Tapis analog of the gatus `tapis-actors-suite`: an xyOps **Workflow** that mints an X-Tapis-Token
+  and drives the Tapis API. Credentials live in the **pod env** (`TAPIS_*`, sourced from `secret_map`),
+  and xyOps jobs are child processes of the server, so a shell step reads `$TAPIS_*` directly — the
+  secret values never need to be typed into a job.
+  
+  ### ⚠️ Same caveat: created in the UI/API, not seeded
+  xyOps can't embed jobs in config, so paste the two events below (**Events → add → "Shell Script"**),
+  then chain them into a **Workflow** with a `*/3 * * * *` (every-3-minutes) schedule.
+  
+  **Event 1 — `mint-tapis-token`** (Shell Script plugin):
+  ```bash
+  set -euo pipefail
+  AUTH=()
+  [ -n "${TAPIS_CLIENT_BASIC:-}" ] && AUTH=(-H "Authorization: Basic ${TAPIS_CLIENT_BASIC}")
+  TOKEN=$(curl -fsS -X POST "$TAPIS_BASE_URL/v3/oauth2/tokens" \
+    -H 'Content-Type: application/json' "${AUTH[@]}" \
+    -d "{\"username\":\"$TAPIS_USERNAME\",\"password\":\"$TAPIS_PASSWORD\",\"grant_type\":\"password\"}" \
+    | jq -r '.result.access_token.access_token')
+  [ -n "$TOKEN" ] && [ "$TOKEN" != null ] || { echo "token mint failed"; exit 1; }
+  echo "$TOKEN" > /opt/xyops/temp/tapis_token
+  echo "minted X-Tapis-Token (len ${#TOKEN})"
+  ```
+  
+  **Event 2 — `list-actors`** (Shell Script plugin):
+  ```bash
+  set -euo pipefail
+  TOKEN=$(cat /opt/xyops/temp/tapis_token)
+  RESP=$(curl -fsS "$TAPIS_BASE_URL/v3/actors" -H "X-Tapis-Token: $TOKEN")
+  echo "$RESP" | jq -e '.status == "success"' >/dev/null || { echo "actors call not success"; exit 1; }
+  echo "actors ok: $(echo "$RESP" | jq '.result | length') actors"
+  ```
+  
+  **Chain into a Workflow:** new Workflow → step 1 `mint-tapis-token` → step 2 `list-actors` (runs only
+  if step 1 succeeds) → schedule `*/3 * * * *`. The 3-minute cadence surfaces rapid changes to the
+  actors GETs; xyOps's run history + alerts flag failures.
+  
+  ### Token-endpoint caveat
+  Most Tapis tenants require an OAuth client for the password grant. If so, set `TAPIS_CLIENT_BASIC`
+  to `base64("client_id:client_key")` at instantiation (sent as `Authorization: Basic …` on the mint
+  step). Tenants allowing a clientless grant can leave it empty.
+  
+  ### Why creds via env (not a job field)
+  `TAPIS_USERNAME` / `TAPIS_PASSWORD` are `secret_map` placeholders surfaced into the pod env; xyOps
+  jobs inherit that env. The values live only in the pod's k8s secret, never in a saved job definition.
+}

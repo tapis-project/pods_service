@@ -1,0 +1,73 @@
+meta {
+  name: tag: codeserver (hermes)
+  type: http
+  seq: 9
+}
+
+post {
+  url: {{base_url}}/pods/templates/codeserver/tags
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+body:json {
+  {
+    "pod_definition": {
+      "description": "VS Code + Hermes (NousResearch agent), PREBUILT image (gitea.pods.tacc.develop.tapis.io/cgarcia/hermes) - hermes + hermes-ai-agent extension + xz-utils/python baked in, so it starts in seconds. LiteLLM/OpenWebUI backend via env; custom provider uses api_mode:chat_completions to avoid the Ollama-probe hang (#26489). Terminal auto-launches hermes. Image is PRIVATE - pulled via TAPIS_PODS_IMAGEPULLSECRET.",
+      "image": "gitea.pods.tacc.develop.tapis.io/cgarcia/hermes:latest",
+      "secret_map": {
+        "LITELLM_API_KEY":  "${:?LiteLLM or OpenWebUI API key}",
+        "LITELLM_BASE_URL": "${:?LiteLLM or OpenWebUI base URL - e.g. https://litellm.your-host.tapis.io/v1}",
+        "AI_MODEL":         "${pods:default:gpt-4o:?Model name as defined in LiteLLM or OpenWebUI}",
+        "IMAGE_PULL_USER":  "${pods:default:cgarcia:?Tapis username whose k8s image-pull secret pulls the private hermes image - needs APPROVEDADMIN}",
+        "GITHUB_TOKEN":     "${pods:default:none:?GitHub personal access token - skip for public repos}",
+        "GIT_REPO":         "${pods:default:none:?Git repo URL to clone on first start}",
+        "GIT_USER_NAME":    "${pods:default:none:?Full name for git commits}",
+        "GIT_USER_EMAIL":   "${pods:default:none:?Email for git commits}",
+        "TZ":               "${pods:default:Etc/UTC:?Timezone - e.g. America/Chicago}"
+      },
+      "environment_variables": {
+        "PUID":              "1000",
+        "PGID":              "1000",
+        "TZ":                "${pods:secrets:TZ}",
+        "DEFAULT_WORKSPACE": "/config/workspace",
+        "LITELLM_API_KEY":   "${pods:secrets:LITELLM_API_KEY}",
+        "LITELLM_BASE_URL":  "${pods:secrets:LITELLM_BASE_URL}",
+        "OPENAI_API_KEY":    "${pods:secrets:LITELLM_API_KEY}",
+        "OPENAI_BASE_URL":   "${pods:secrets:LITELLM_BASE_URL}",
+        "AI_MODEL":          "${pods:secrets:AI_MODEL}",
+        "GITHUB_TOKEN":      "${pods:secrets:GITHUB_TOKEN}",
+        "GIT_REPO":          "${pods:secrets:GIT_REPO}",
+        "GIT_USER_NAME":     "${pods:secrets:GIT_USER_NAME}",
+        "GIT_USER_EMAIL":    "${pods:secrets:GIT_USER_EMAIL}",
+        "TAPIS_PODS_IMAGEPULLSECRET": "${pods:secrets:IMAGE_PULL_USER}"
+      },
+      "networking": {
+        "default": { "protocol": "http", "port": 8443, "tapis_auth": true, "tapis_auth_allowed_users": ["*"] }
+      },
+      "resources": { "cpu_request": 500, "cpu_limit": 4000, "mem_request": 2048, "mem_limit": 8192 },
+      "time_to_stop_default": 7200
+    },
+    "tag": "hermes",
+    "commit_message": "hermes -> prebuilt Gitea image (fast start); hermes + hermes-ai-agent baked; private image via TAPIS_PODS_IMAGEPULLSECRET"
+  }
+}
+
+docs {
+  ## codeserver `hermes` — prebuilt (fast start)
+
+  Slow installs (hermes agent, hermes-ai-agent extension, xz-utils, python) are baked into
+  `scripts/Dockerfile.hermes`; boot only runs per-instance config (`scripts/hermes-init.sh`):
+  LiteLLM model discovery, hermes config.yaml, git identity, gateway. Build + push once:
+  ```
+  docker build -f scripts/Dockerfile.hermes -t gitea.pods.tacc.develop.tapis.io/cgarcia/hermes:latest .
+  docker push  gitea.pods.tacc.develop.tapis.io/cgarcia/hermes:latest
+  ```
+  Private image → pulled via `TAPIS_PODS_IMAGEPULLSECRET` (= `IMAGE_PULL_USER`, needs the
+  `tapis-pods-imagepullsecret-<user>` k8s secret + APPROVEDADMIN). No MCP here — that's clawd.
+}
