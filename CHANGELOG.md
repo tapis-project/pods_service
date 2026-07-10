@@ -114,6 +114,7 @@ The edge release. Pods learned to leave the cluster.
 ### New features:
 - **MCP server for the Pods API** — an agent-facing tool surface generated from the OpenAPI spec, so an LLM can drive pods with typed tools instead of guessing at HTTP.
 - Template tag descriptions raised from 400 to 20,000 characters — long-form usage guides live with the tag.
+- MCP durable audit log with `/audit/history`: every tool call recorded with caller attribution, a heatmap of activity, call detail, and read-only replay of full untrimmed results.
 
 
 ## 26Q2.1
