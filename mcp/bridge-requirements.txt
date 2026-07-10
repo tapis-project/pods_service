@@ -1,0 +1,3 @@
+fastapi>=0.110
+uvicorn>=0.29
+# no vendor LLM SDK — chat_loop.py speaks Anthropic + OpenAI-compat over httpx

@@ -1,0 +1,18 @@
+# Local-only audit bridge for the Pods MCP. `make up` builds + runs it on :8100;
+# the tapis-ui "Assistant" tab (localhost) talks to it there.
+services:
+  mcp-bridge:
+    build: .
+    container_name: pods-mcp-bridge
+    ports:
+      # loopback only — never expose the unauthenticated bridge on the LAN
+      - '127.0.0.1:8100:8100'
+    env_file:
+      - .env
+    environment:
+      # Read the committed spec dump from the repo (mounted below) — the public
+      # gateway doesn't serve /openapi.json. Refresh the file, restart, done.
+      - PODS_SPEC=/app/pods-openapi.yml
+    volumes:
+      - ../docs/openapi_v3-pods.yml:/app/pods-openapi.yml:ro
+    restart: unless-stopped

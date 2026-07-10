@@ -105,6 +105,16 @@ The edge release. Pods learned to leave the cluster.
 - `SetPermission` re-enforces the tenant-level guard — `tenant.*` and `**` grants are READ-only.
 
 
+## 26Q3.0-alpha
+> Not released yet. Entries are added as features land; the `-alpha` suffix comes
+> off when the release is tagged.
+
+The edge release. Pods learned to leave the cluster.
+
+### New features:
+- **MCP server for the Pods API** — an agent-facing tool surface generated from the OpenAPI spec, so an LLM can drive pods with typed tools instead of guessing at HTTP.
+
+
 ## 26Q2.1
 
 ### New features:
