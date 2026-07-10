@@ -1,0 +1,27 @@
+# hermes — prebuilt code-server + Hermes (NousResearch) agent image.
+# Bakes the slow installs (hermes, hermes-ai-agent extension, xz-utils, python) so the pod
+# starts in seconds instead of installing every boot. Per-instance config (LiteLLM creds,
+# git identity, model discovery) runs at boot in /usr/local/bin/hermes-init.sh.
+#
+# Build + push to private Gitea:
+#   docker build -f scripts/Dockerfile.hermes -t gitea.pods.tacc.develop.tapis.io/cgarcia/hermes:latest .
+#   docker push  gitea.pods.tacc.develop.tapis.io/cgarcia/hermes:latest
+
+FROM lscr.io/linuxserver/code-server:latest
+
+RUN apt-get update -qq \
+ && apt-get install -y --no-install-recommends curl xz-utils python3 ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+# Hermes agent (baked)
+RUN curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash 2>/dev/null || true
+
+# hermes-ai-agent extension baked, copilot removed
+RUN code-server --install-extension joaompfp.hermes-ai-agent 2>/dev/null || true \
+ && code-server --uninstall-extension GitHub.copilot 2>/dev/null || true \
+ && code-server --uninstall-extension GitHub.copilot-chat 2>/dev/null || true
+
+COPY scripts/hermes-init.sh /usr/local/bin/hermes-init.sh
+RUN chmod +x /usr/local/bin/hermes-init.sh
+
+CMD ["/bin/bash", "-c", "/usr/local/bin/hermes-init.sh; exec /init"]

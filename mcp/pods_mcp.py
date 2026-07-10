@@ -54,8 +54,12 @@ SPEC_SRC = os.environ.get("PODS_SPEC", _DEFAULT_SPEC)
 API_BASE = f"{BASE}/v3"  # reflected paths are "/pods..." (no /v3) -> "{BASE}/v3/pods..."
 
 def _is_write(name: str) -> bool:
-    """Classify a tool as write vs read for the catalog TOC (get_* / list_* are reads)."""
-    return name.startswith(("set_", "delete_", "deploy_", "update_")) or name == "stack_action"
+    """Classify a tool as write vs read for the catalog TOC + audit read/write kind.
+    get_*/list_*/download_* are reads; creates/edits/exec are writes."""
+    return name.startswith((
+        "set_", "delete_", "deploy_", "update_",
+        "create_", "add_", "save_", "exec_",
+    )) or name == "stack_action"
 
 
 def _headers() -> dict:
@@ -192,9 +196,9 @@ async def recipes() -> list:
     name="recipe",
     description="Full playbook for one deploy recipe: prereqs, ordered steps (each with "
                 "the concrete API call + a copy-pasteable example body), gotchas, and "
-                "deliverables. Get ids from recipes(). NOTE: steps marked 'exec' use "
-                "POST /pods/{id}/exec, which is intentionally NOT an MCP tool (RCE) — run "
-                "those via the service API directly, with confirmation.",
+                "deliverables. Get ids from recipes(). Steps marked 'exec' map to the "
+                "exec_pod_commands tool (POST /pods/{id}/exec) — now an audited MCP tool; "
+                "confirm before running writes.",
     tags={"meta"},
 )
 async def recipe(recipe_id: str) -> dict:
@@ -309,6 +313,47 @@ async def deploy_from_template(
         r = await client.post("/pods/stacks/from-template", json=body)
     r.raise_for_status()
     return r.json()
+
+
+# ---------------------------------------------------------------------------
+# Ergonomic in-pod file readers. The raw reflected list_files_in_pod /
+# download_from_pod take the path as an awkward URL *segment* (`{url_path}` with
+# no leading slash) and 400 if a ?path= query is also sent — an easy footgun for
+# an LLM. These take a normal absolute path and use the query form; the raw
+# versions are excluded in route_maps.py so there's one obvious tool each.
+# ---------------------------------------------------------------------------
+_MAX_FILE_BYTES = 256_000
+
+
+@mcp.tool(
+    name="list_pod_files",
+    description="List files/directories at an absolute path inside a RUNNING pod "
+                "(e.g. path='/etc' or '/var/lib'). Pod needs /bin/sh + ls (most "
+                "standard images have them; distroless won't).",
+    tags={"Pods"},
+)
+async def list_pod_files(pod_id: str, path: str = "/") -> dict:
+    r = await client.get(f"/pods/{pod_id}/list_files", params={"path": path})
+    r.raise_for_status()
+    return _result(r.json())
+
+
+@mcp.tool(
+    name="read_pod_file",
+    description="Read the contents of a single file at an absolute path inside a "
+                "RUNNING pod (e.g. path='/app/config.yml') — the fast way to inspect "
+                "a live pod's real config. Returns text; large files are truncated "
+                "(see 'truncated'/'bytes'). Pod needs /bin/sh + base64.",
+    tags={"Pods"},
+)
+async def read_pod_file(pod_id: str, path: str) -> dict:
+    r = await client.get(f"/pods/{pod_id}/download_from_pod", params={"path": path})
+    r.raise_for_status()
+    data = r.content
+    truncated = len(data) > _MAX_FILE_BYTES
+    text = data[:_MAX_FILE_BYTES].decode("utf-8", errors="replace")
+    return {"pod_id": pod_id, "path": path, "bytes": len(data),
+            "truncated": truncated, "content": text}
 
 
 @mcp.tool(
