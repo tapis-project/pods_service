@@ -32,6 +32,11 @@ from models_volume_mounts_utils import is_volume_placeholder
 from models_volume_mounts_utils import VolumeMount, validate_and_convert_volume_mounts, VALID_VOLUME_MOUNT_TYPES
 from typing import Optional
 
+# Max length for a template tag's `description` — the markdown usage notes / `<!--guide-->`
+# tutorial rendered in the gallery. Bumped from 400 so a real guide fits; still bounded so
+# it can't bloat tag-list responses (embed screenshots via TemplateGallery, not inline base64).
+TAG_DESCRIPTION_MAX_LEN = 20000
+
 
 def derive_template_info(input_template_name, update_template_tag: bool = False, tenant: str = g.request_tenant_id, site: str = g.site_id):
     # template is in the format template_id:template_tag@2024-06-10-17:20:27
@@ -822,10 +827,12 @@ class TemplateTag(TapisTemplateTagBaseFull, table=True, validate=True):
     def check_description(cls, v):
         # ensure description is all ascii
         if not v.isascii():
-            raise ValueError(f"description field may only contain ASCII characters.")            
-        # make sure description < 400 characters
-        if len(v) > 400:
-            raise ValueError(f"description field must be less than 400 characters. Inputted length: {len(v)}")
+            raise ValueError(f"description field may only contain ASCII characters.")
+        # Roomy enough for a real usage guide (markdown + a `<!--guide-->` section rendered
+        # in the gallery), while still bounded so it can't bloat tag-list responses. Embed
+        # screenshots via TemplateGallery photos, not inline base64.
+        if len(v) > TAG_DESCRIPTION_MAX_LEN:
+            raise ValueError(f"description field must be less than {TAG_DESCRIPTION_MAX_LEN} characters. Inputted length: {len(v)}")
         # I kind of want this to be markdown compatible, for that we should clean to ensure no bad stuff?
         # from bleach import clean
         # v = clean(v, tags=[], attributes={}, protocols=[], strip=True)
