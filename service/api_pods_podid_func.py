@@ -336,7 +336,7 @@ async def set_pod_permission(pod_id, set_permission: SetPermission):
 
     # Admin-only check for tenant-wide 'tenant.*' permissions
     if inp_user.startswith("tenant.") and not g.admin:
-        raise KeyError("Only admins can set cross-tenant 'tenant.*' permissions on pods.")
+        raise PermissionsException("Only admins can set cross-tenant 'tenant.*' permissions on pods.")
 
     pod = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
 
@@ -361,9 +361,12 @@ async def set_pod_permission(pod_id, set_permission: SetPermission):
     # Update variable
     curr_perms[inp_user] = inp_level
 
-    # Ensure there's still one ADMIN role before finishing.
-    if "ADMIN" not in curr_perms.values():
-        raise KeyError(f"Operation would result in pod with no users in ADMIN role. Rolling back.")
+    # Ensure there's still an admin-capable user before finishing. APPROVEDADMIN is ADMIN+
+    # (see tapis_auth_allowed_users AUTHORIZED_ADMINS), so it satisfies the invariant too —
+    # otherwise a sole owner could never promote themselves to APPROVEDADMIN (needed to set
+    # TAPIS_PODS_IMAGEPULLSECRET for private images).
+    if not any(level in ("ADMIN", "APPROVEDADMIN") for level in curr_perms.values()):
+        raise ResourceError("Operation would leave the pod with no ADMIN-capable user. Rolling back.", 400)
 
     # Convert back to db format
     perm_list = []
@@ -990,8 +993,8 @@ async def delete_pod_permission(pod_id, user):
     # Delete permission
     del curr_perms[user]
 
-    # Ensure there's still one ADMIN role before finishing.
-    if "ADMIN" not in curr_perms.values():
+    # Ensure there's still an admin-capable user before finishing (APPROVEDADMIN is ADMIN+).
+    if not any(level in ("ADMIN", "APPROVEDADMIN") for level in curr_perms.values()):
         raise KeyError(f"Operation would result in pod with no users in ADMIN role. Rolling back.")
 
     # Convert back to db format
