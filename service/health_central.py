@@ -544,6 +544,13 @@ def set_traefik_proxy():
                 "tapis_auth_excluded_paths": net_info.get('tapis_auth_excluded_paths', []),
                 "tapis_auth_excluded_path_regex": net_info.get('tapis_auth_excluded_path_regex', []),
             }
+            ## access gate (shared password/token) — separate forwardAuth to the pod's /gate endpoint
+            gate_info = {
+                "access_gate": net_info.get('access_gate', False),
+                # full pod_id_section (pod_id or pod_id-<network>) — /gate splits it to
+                # evaluate the RIGHT networking entry; bare pod_id would always gate 'default'
+                "gate_url": f"https://{tapis_domain}/v3/pods/{pod_id_section}/gate",
+            }
             ## ip allow list
             ip_allow_list_info = {
                 "ip_allow_list": net_info.get('ip_allow_list', [])
@@ -592,6 +599,9 @@ def set_traefik_proxy():
                     # tapis auth — skip in splash mode (splash page is publicly accessible)
                     if forward_auth_info['tapis_auth'] and not splash_mode:
                         template_info.update(forward_auth_info)
+                    # access gate (shared password/token) — also skipped in splash mode
+                    if gate_info['access_gate'] and not splash_mode:
+                        template_info.update(gate_info)
                     # cors settings
                     if cors_info['cors_allow_origins']:
                         template_info.update(cors_info)

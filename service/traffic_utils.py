@@ -150,12 +150,18 @@ def entry_to_traffic_record(entry: dict) -> Optional[dict]:
     client_host = entry.get('ClientHost', '')
     source_ip = client_host.rsplit(':', 1)[0] if ':' in client_host else client_host
 
-    # User identity: X-Tapis-User header injected by forwardAuth, or None
+    # User identity: X-Tapis-User header injected by tapis_auth forwardAuth, or None.
     username = entry.get('request_X-Tapis-User') or None
 
-    # Collect remaining headers as raw_headers when no tapis_auth user present.
-    # Deny-list credential-bearing headers rather than allow-all — the access gate
-    # puts a live session cookie on anonymous requests (see _SENSITIVE_HEADERS).
+    # Access-gate visitors aren't Tapis users, so they have no X-Tapis-User. The gate
+    # forwardAuth stamps X-Tapis-Gate-Code with the code's label; surface it as a
+    # namespaced "gate:<label>" username so gated traffic is attributable in the table.
+    if not username:
+        gate_code = entry.get('request_X-Tapis-Gate-Code')
+        if gate_code:
+            username = f"gate:{gate_code}"
+
+    # Collect remaining headers as raw_headers when no tapis_auth user present
     raw_headers: Optional[dict] = None
     if not username:
         collected = {}

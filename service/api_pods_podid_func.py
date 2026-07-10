@@ -1,8 +1,11 @@
 from fastapi import APIRouter, Request, UploadFile, File, Form, Body, Path, Query
-from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse, HTMLResponse
 from models_pods import Pod, Password, PodResponse, PodPermissionsResponse, PodCredentialsResponse, PodLogsResponse, ExecutePodCommands, PodBaseFull
 from models_traffic import TrafficLog, TrafficLogsResponse
 from models_pod_log_runs import PodLogRun, PodLogRunsResponse, PodLogRunResponse
+from models_pod_access_tokens import (
+    PodAccessToken, PodAccessTokensResponse, PodAccessTokenMintResponse, AccessTokenMintRequest,
+)
 from log_archive_utils import read_archive
 from models_templates_tags import Template, TemplateTag, TemplateTagResponse, NewTemplateTagFromPod, Networking as TemplateTagNetworking
 from models_templates_utils import combine_pod_and_template_recursively
@@ -20,9 +23,11 @@ from utils import check_permissions
 from errors import ResourceError, PermissionsException
 from models_volume_mounts_utils import validate_volume_mounts_on_start
 from stack_template_utils import sanitize_member_networking, placeholderize_secret_value
-from datetime import datetime
+from datetime import datetime, timedelta
+from urllib.parse import urlparse, parse_qs, quote
 import time
 import re
+import html as _html
 import asyncio
 import io
 import jwt
@@ -1663,6 +1668,417 @@ def callback(pod_id_net, request: Request):
 
     #return JSONResponse(content = f"Callback for pod_id_net: {pod_id_net}, tapis_domain: {tapis_domain}, username: {username}, token: {token}", status_code = 200)
     #return response
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Access gate — shared password/token ingress auth (complements tapis_auth)
+#
+# When a networking entry sets access_gate=true, Traefik forwardAuth calls /gate.
+# Visitors are NOT Tapis users; they present a shared secret (typed password or a
+# ?access= link) which is validated against the pod's access tokens. On success a
+# cookie carrying the secret is set (Domain=<tenant base>, so it reaches the pod
+# host), and later gate checks re-validate it live.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _gate_cookie_name(pod_id: str) -> str:
+    return f"tapis_pod_gate_{pod_id}"
+
+
+def _gate_split_pod_id(pod_id_net: str):
+    parts = pod_id_net.split('-', 1)
+    return parts[0], (parts[1] if len(parts) > 1 else 'default')
+
+
+def _gate_load_net_info(pod_id: str, network_key: str):
+    """Return (pod, net_info dict) with template merged, or raise."""
+    pod_init = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
+    if pod_init.template:
+        pod = combine_pod_and_template_recursively(pod_init, pod_init.template, tenant=g.request_tenant_id, site=g.site_id)
+    else:
+        pod = pod_init
+    net_info = pod.networking.get(network_key, None)
+    if net_info is not None and type(net_info) is not dict:
+        net_info = net_info.dict()
+    return pod, net_info
+
+
+def _safe_header_val(v: str, maxlen: int = 80) -> str:
+    """Sanitize a value for use as an HTTP header (latin-1, no CR/LF, bounded)."""
+    v = (v or "").replace("\r", " ").replace("\n", " ").strip()
+    v = v.encode("latin-1", "ignore").decode("latin-1")
+    return v[:maxlen]
+
+
+def _client_ip(request: Request) -> str:
+    """Rate-limit key: the socket peer, NOT client-controlled X-Forwarded-For.
+
+    XFF's leftmost hop is attacker-supplied, so keying the brute-force window on it let a
+    caller rotate the header to reset the per-(pod,ip) throttle. The socket peer can't be
+    spoofed; behind the shared ingress proxy this makes the redeem throttle effectively
+    per-pod, which is the correct bound for a shared-password gate.
+    """
+    return (request.client.host if request.client else "") or "unknown"
+
+
+# ── redeem rate limiting (brute-force protection) ────────────────────────────
+# In-memory sliding window of FAILED redeem attempts per (pod_id, ip). pods-api runs a
+# single replica, so this process-local map is effectively global; if that ever changes,
+# move this to a shared store (redis). Only failures count — a correct code is never
+# throttled. After _GATE_RL_MAX failures inside _GATE_RL_WINDOW seconds, further attempts
+# are refused until the oldest failure ages out of the window.
+_GATE_ATTEMPTS: dict = {}
+_GATE_RL_WINDOW = 300   # seconds
+_GATE_RL_MAX = 10       # failed attempts allowed per window
+
+
+def _gate_rl_locked_seconds(pod_id: str, ip: str) -> int:
+    """Return seconds until the caller may try again (0 = not locked). Prunes stale entries."""
+    # pod_id is only unique within a tenant/site — key the bucket accordingly
+    key = (g.request_tenant_id, g.site_id, pod_id, ip)
+    now = time.time()
+    fails = [t for t in _GATE_ATTEMPTS.get(key, []) if now - t < _GATE_RL_WINDOW]
+    if fails:
+        _GATE_ATTEMPTS[key] = fails
+    else:
+        _GATE_ATTEMPTS.pop(key, None)
+    if len(fails) >= _GATE_RL_MAX:
+        return max(1, int(_GATE_RL_WINDOW - (now - fails[0])))
+    return 0
+
+
+def _gate_rl_record_fail(pod_id: str, ip: str) -> None:
+    _GATE_ATTEMPTS.setdefault((g.request_tenant_id, g.site_id, pod_id, ip), []).append(time.time())
+
+
+def _gate_rl_clear(pod_id: str, ip: str) -> None:
+    # MUST use the same 4-part key as _gate_rl_locked_seconds/_gate_rl_record_fail.
+    # Keyed on (pod_id, ip) alone this silently matched nothing, so a visitor who
+    # mistyped and then succeeded stayed counted and could still be locked out for
+    # the rest of the window.
+    _GATE_ATTEMPTS.pop((g.request_tenant_id, g.site_id, pod_id, ip), None)
+
+
+# Redeem-failure messages: (message, owner_fault). owner_fault=True means "nothing the
+# visitor did" (the code itself is dead) → shown in a calm amber note; False means "check
+# your code" → shown as a red retry error.
+_GATE_REDEEM_MESSAGES = {
+    "empty":     ("Enter the access code above to continue.", False),
+    "not_found": ("We don’t recognize that code. Check it for typos and try again.", False),
+    "revoked":   ("This code has been turned off by the pod owner. Ask them for a new one — nothing’s wrong on your end.", True),
+    "expired":   ("This code has expired. Ask the pod owner for a fresh one — nothing’s wrong on your end.", True),
+    "exhausted": ("This code has reached its sign-in limit. Ask the pod owner for a new one — nothing’s wrong on your end.", True),
+}
+
+
+def _gate_login_html(pod_id: str, tapis_domain: str, network_key: str, return_path: str,
+                     error: str = "", owner_fault: bool = False) -> str:
+    """Minimal, self-contained login page shown when a gated pod has no valid session.
+    `owner_fault` renders the message as a calm note (the code is dead — not the visitor's
+    fault) rather than a red retry error."""
+    action = f"https://{tapis_domain}/v3/pods/{pod_id}-{network_key}/gate/redeem" if network_key != "default" \
+        else f"https://{tapis_domain}/v3/pods/{pod_id}/gate/redeem"
+    if error:
+        cls = "note" if owner_fault else "err"
+        icon = "ⓘ " if owner_fault else ""
+        err_html = f'<p class="{cls}">{icon}{_html.escape(error)}</p>'
+    else:
+        err_html = ''
+    # game-loading-screen style quip
+    quip = "Tip: a one-click access link signs you in without this screen — ask the owner to share one."
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{_html.escape(pod_id)} — access</title>
+<style>
+  :root {{ color-scheme: light dark; }}
+  * {{ box-sizing: border-box; }}
+  body {{ margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+         font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+         background:#0f1117; color:#e6e6e6; padding:1.5rem; }}
+  .card {{ width:100%; max-width:360px; background:#171a23; border:1px solid #262a36;
+          border-radius:12px; padding:1.6rem 1.5rem; box-shadow:0 8px 30px rgba(0,0,0,.35); }}
+  h1 {{ font-size:1.05rem; margin:0 0 .2rem; font-weight:650; }}
+  .sub {{ font-size:.8rem; color:#9aa0ad; margin:0 0 1.1rem; }}
+  label {{ display:block; font-size:.72rem; letter-spacing:.03em; text-transform:uppercase;
+          color:#9aa0ad; margin:0 0 .35rem; }}
+  input[type=password] {{ width:100%; padding:.65rem .7rem; border-radius:8px; border:1px solid #2d323f;
+          background:#0f1117; color:#e6e6e6; font-size:.95rem; }}
+  input[type=password]:focus {{ outline:none; border-color:#8b7ec7; box-shadow:0 0 0 3px rgba(139,126,199,.25); }}
+  button {{ margin-top:1rem; width:100%; padding:.65rem; border:none; border-radius:8px; cursor:pointer;
+          background:#8b7ec7; color:#fff; font-weight:650; font-size:.9rem; }}
+  button:hover {{ filter:brightness(1.07); }}
+  .err {{ color:#ff8080; font-size:.8rem; margin:.6rem 0 0; }}
+  .note {{ color:#e0b872; font-size:.8rem; margin:.6rem 0 0; line-height:1.4;
+          background:rgba(224,184,114,.08); border:1px solid rgba(224,184,114,.25);
+          border-radius:8px; padding:.55rem .65rem; }}
+  .quip {{ font-size:.72rem; color:#6b7280; margin:1.1rem 0 0; line-height:1.4; }}
+</style></head>
+<body>
+  <form class="card" method="POST" action="{action}">
+    <h1>🔒 {_html.escape(pod_id)}</h1>
+    <p class="sub">This site is private. Enter the access code to continue.</p>
+    <label for="secret">Access code</label>
+    <input id="secret" name="secret" type="password" autofocus autocomplete="off" required>
+    <input type="hidden" name="return_path" value="{_html.escape(return_path)}">
+    {err_html}
+    <button type="submit">Enter</button>
+    <p class="quip">{quip}</p>
+  </form>
+</body></html>"""
+
+
+@router.get(
+    "/pods/{pod_id_net}/gate",
+    tags=["Pods"],
+    summary="pod_access_gate",
+    operation_id="pod_access_gate",
+    include_in_schema=False)
+async def pod_access_gate(pod_id_net, request: Request):
+    """Traefik forwardAuth target for access_gate. 200 = allow (valid session cookie);
+    otherwise redirect a ?access= link to redeem, or show the login form (401)."""
+    pod_id, network_key = _gate_split_pod_id(pod_id_net)
+    logger.info(f"GET /pods/{pod_id_net}/gate - access-gate check.")
+
+    pod, net_info = _gate_load_net_info(pod_id, network_key)
+    if not net_info:
+        return JSONResponse(content=f"Pod {pod_id} misconfigured networking for '{network_key}'.", status_code=500)
+    if not net_info.get("access_gate", False):
+        # Gate is off — or was just toggled off and Traefik hasn't dropped the forwardAuth
+        # middleware yet. FAIL OPEN (allow) so visitors aren't blocked during that reconcile
+        # window; blocking here would show every visitor "does not have access_gate enabled".
+        return JSONResponse(content=ok("Access gate disabled"), status_code=200)
+
+    _pod_id_from_url, tapis_domain = net_info['url'].split('.pods.')
+    return_path = net_info.get("access_gate_return_path", "/") or "/"
+
+    # 1) valid session cookie → allow, and stamp which code the visitor came in on so the
+    #    traffic pipeline can attribute their (otherwise anonymous) requests. The gate
+    #    middleware forwards X-Tapis-Gate-Code to the pod; Traefik logs it → traffic_utils
+    #    surfaces it as username "gate:<label>".
+    gate_tok = (
+        PodAccessToken.check_gate(pod_id, cookie_val, tenant=g.request_tenant_id, site=g.site_id)
+        if (cookie_val := request.cookies.get(_gate_cookie_name(pod_id)))
+        else None
+    )
+    if gate_tok:
+        code_label = _safe_header_val(gate_tok.label or gate_tok.id[:8])
+        return JSONResponse(content=ok("Access granted"), status_code=200,
+                            headers={"X-Tapis-Gate-Code": code_label})
+
+    # 2) redemption link ?access=CODE on the original request → hand off to redeem (which sets the cookie)
+    forwarded_uri = request.headers.get('x-forwarded-uri', '') or ''
+    access_code = None
+    if 'access=' in forwarded_uri:
+        try:
+            q = parse_qs(urlparse(forwarded_uri).query)
+            access_code = (q.get('access') or [None])[0]
+        except Exception:
+            access_code = None
+    if access_code:
+        redeem_base = f"https://{tapis_domain}/v3/pods/{pod_id_net}/gate/redeem"
+        return RedirectResponse(url=f"{redeem_base}?access={quote(access_code)}", status_code=302)
+
+    # 3) no session → show login form
+    return HTMLResponse(content=_gate_login_html(pod_id, tapis_domain, network_key, return_path), status_code=401)
+
+
+async def _gate_do_redeem(pod_id_net: str, request: Request, secret: str, return_path_override: str = ""):
+    """Shared redeem logic for GET (?access=) and POST (form). Sets the session cookie."""
+    pod_id, network_key = _gate_split_pod_id(pod_id_net)
+    pod, net_info = _gate_load_net_info(pod_id, network_key)
+    if not net_info:
+        return JSONResponse(content=f"Pod {pod_id_net} misconfigured networking.", status_code=500)
+    if not net_info.get("access_gate", False):
+        # Gate is off (e.g. someone clicks an old redemption link after it was disabled) —
+        # no code needed; just send them to the site instead of erroring.
+        return RedirectResponse(url=f"https://{net_info['url']}/", status_code=302)
+
+    _pod_id_from_url, tapis_domain = net_info['url'].split('.pods.')
+    return_path = return_path_override or net_info.get("access_gate_return_path", "/") or "/"
+    if not return_path.startswith("/"):
+        return_path = "/"
+
+    # Brute-force guard: refuse further attempts once this IP has failed too many times.
+    ip = _client_ip(request)
+    locked = _gate_rl_locked_seconds(pod_id, ip)
+    if locked:
+        wait = f"{locked // 60}m {locked % 60}s" if locked >= 60 else f"{locked}s"
+        html = _gate_login_html(
+            pod_id, tapis_domain, network_key, return_path,
+            error=f"Too many attempts from your network. Please wait about {wait} and try again.",
+            owner_fault=True)
+        return HTMLResponse(content=html, status_code=429)
+
+    tok, reason, cookie_value = PodAccessToken.redeem(pod_id, secret, tenant=g.request_tenant_id, site=g.site_id)
+    if not tok:
+        # Count real guesses (a wrong/empty code) toward the limit; don't penalize a code
+        # that is simply dead (revoked/expired/exhausted) — that's not a brute-force signal.
+        if reason in ("not_found", "empty"):
+            _gate_rl_record_fail(pod_id, ip)
+        # Reason-specific messages: separate "check your code" (empty / not_found) from
+        # "nothing you did" (revoked / expired / exhausted) so a visitor knows whether to
+        # retry or to ask the pod owner for a fresh code.
+        error, blame_owner = _GATE_REDEEM_MESSAGES.get(
+            reason, ("That access code didn’t work. Try again, or ask the pod owner for a new one.", True)
+        )
+        html = _gate_login_html(pod_id, tapis_domain, network_key, return_path,
+                                error=error, owner_fault=blame_owner)
+        return HTMLResponse(content=html, status_code=401)
+
+    # success — clear this IP's failure streak
+    _gate_rl_clear(pod_id, ip)
+
+    # success — set the session cookie HOST-ONLY (no domain=), so it is scoped to this
+    # pod's hostname alone.
+    #
+    # It previously used the tenant base domain, which meant the gate session secret was
+    # transmitted to EVERY other pod under *.pods.<tenant>.<base> and to the Tapis API
+    # host — any other pod owner in the tenant could harvest and replay another pod's
+    # gate cookie. Host-only is safe here because the whole redeem flow is proxied
+    # through the pod's own hostname (traefik forwardAuth), so the browser's origin for
+    # this response is exactly the host the cookie needs to be sent back to.
+    # COOKIE_DOMAIN remains honored as a deliberate operator override.
+    cookie_domain = conf.get('COOKIE_DOMAIN', None)
+    max_age = 7 * 24 * 3600
+    if tok.expires_at:
+        remaining = int((tok.expires_at - datetime.utcnow()).total_seconds())
+        max_age = max(60, min(max_age, remaining))
+    response = RedirectResponse(url=f"https://{net_info['url']}{return_path}", status_code=302)
+    # cookie_value is the high-entropy session value (a link's own secret, or a password
+    # token's session_secret) — never the typed password.
+    cookie_kwargs = {"secure": True, "httponly": True, "samesite": "lax", "max_age": max_age}
+    if cookie_domain:
+        cookie_kwargs["domain"] = cookie_domain
+    response.set_cookie(_gate_cookie_name(pod_id), cookie_value or secret, **cookie_kwargs)
+    return response
+
+
+@router.get(
+    "/pods/{pod_id_net}/gate/redeem",
+    tags=["Pods"],
+    summary="pod_access_gate_redeem_link",
+    operation_id="pod_access_gate_redeem_link",
+    include_in_schema=False)
+async def pod_access_gate_redeem_link(pod_id_net, request: Request, access: str = Query(default="")):
+    """Redeem a ?access= link secret into a session cookie."""
+    logger.info(f"GET /pods/{pod_id_net}/gate/redeem - link redemption.")
+    return await _gate_do_redeem(pod_id_net, request, access)
+
+
+@router.post(
+    "/pods/{pod_id_net}/gate/redeem",
+    tags=["Pods"],
+    summary="pod_access_gate_redeem_form",
+    operation_id="pod_access_gate_redeem_form",
+    include_in_schema=False)
+async def pod_access_gate_redeem_form(pod_id_net, request: Request,
+                                      secret: str = Form(default=""),
+                                      return_path: str = Form(default="")):
+    """Redeem a login-form password into a session cookie."""
+    logger.info(f"POST /pods/{pod_id_net}/gate/redeem - form redemption.")
+    return await _gate_do_redeem(pod_id_net, request, secret, return_path_override=return_path)
+
+
+@router.get(
+    "/pods/{pod_id}/access-tokens",
+    tags=["Permissions"],
+    summary="list_pod_access_tokens",
+    operation_id="list_pod_access_tokens",
+    response_model=PodAccessTokensResponse)
+async def list_pod_access_tokens(pod_id):
+    """List the access-gate credentials minted for a pod (metadata only — never the secret)."""
+    logger.info(f"GET /pods/{pod_id}/access-tokens - Top of list_pod_access_tokens.")
+    # ensure pod exists (and 404s cleanly if not)
+    Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
+    tokens = PodAccessToken.list_for_pod(pod_id, tenant=g.request_tenant_id, site=g.site_id)
+    result = [tok.display() for tok in tokens]
+    return ok(result=result, msg="Pod access tokens retrieved successfully.")
+
+
+@router.post(
+    "/pods/{pod_id}/access-tokens",
+    tags=["Permissions"],
+    summary="create_pod_access_token",
+    operation_id="create_pod_access_token",
+    response_model=PodAccessTokenMintResponse)
+async def create_pod_access_token(pod_id, mint_request: AccessTokenMintRequest):
+    """Mint an access-gate credential (password or shareable link). The raw secret and a
+    redemption URL are returned ONCE — they are not recoverable afterward."""
+    logger.info(f"POST /pods/{pod_id}/access-tokens - Top of create_pod_access_token.")
+    pod = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
+
+    if mint_request.kind == "password" and not mint_request.password:
+        raise ValueError("kind='password' requires a 'password' value.")
+
+    expires_at = None
+    if mint_request.expires_in_seconds:
+        expires_at = datetime.utcnow() + timedelta(seconds=mint_request.expires_in_seconds)
+
+    tok, raw = PodAccessToken.mint(
+        pod_id, tenant=g.request_tenant_id, site=g.site_id,
+        label=mint_request.label, kind=mint_request.kind, created_by=g.username,
+        raw_secret=mint_request.password, expires_at=expires_at, max_uses=mint_request.max_uses,
+    )
+
+    # Build a redemption URL pointing straight at the /gate/redeem endpoint (NOT the pod
+    # URL with ?access=). Redeem sets the cookie on a direct response we control and then
+    # 302s to the pod, so a shared link works without relying on Traefik forwarding
+    # X-Forwarded-Uri. ONLY for link tokens — a password's URL would leak the human
+    # password (a reuse risk); passwords are meant to be typed on the gate screen.
+    redemption_url = ""
+    if mint_request.kind == "link":
+        try:
+            for _k, _net in (pod.networking or {}).items():
+                n = _net if isinstance(_net, dict) else _net.dict()
+                if n.get("protocol") == "http" and n.get("url") and ".pods." in n["url"]:
+                    _tapis_domain = n["url"].split(".pods.", 1)[1]
+                    redemption_url = (
+                        f"https://{_tapis_domain}/v3/pods/{pod_id}/gate/redeem?access={quote(raw)}"
+                    )
+                    break
+        except Exception:
+            redemption_url = ""
+
+    # Audit trail — record the mint in the pod's action_logs (label only, never the secret).
+    try:
+        _lbl = mint_request.label or tok.id[:8]
+        pod.db_update(log=f"Minted access-gate code '{_lbl}' ({mint_request.kind}) by {g.username}",
+                      tenant=g.request_tenant_id, site=g.site_id)
+    except Exception as e:
+        logger.warning(f"Failed to write mint action_log for pod {pod_id}: {e}")
+
+    result = tok.display()
+    result["secret"] = raw
+    result["redemption_url"] = redemption_url
+    return ok(result=result, msg="Access token minted. Save the secret now — it will not be shown again.")
+
+
+@router.delete(
+    "/pods/{pod_id}/access-tokens/{token_id}",
+    tags=["Permissions"],
+    summary="revoke_pod_access_token",
+    operation_id="revoke_pod_access_token",
+    response_model=PodAccessTokensResponse)
+async def revoke_pod_access_token(pod_id, token_id):
+    """Revoke (permanently disable) an access-gate credential. Existing sessions using it
+    stop working on their next gate check."""
+    logger.info(f"DELETE /pods/{pod_id}/access-tokens/{token_id} - Top of revoke_pod_access_token.")
+    pod = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
+    tok = PodAccessToken.get(token_id, pod_id, tenant=g.request_tenant_id, site=g.site_id)
+    if not tok:
+        raise ValueError(f"Access token '{token_id}' not found for pod '{pod_id}'.")
+    tok.revoked = True
+    tok.db_update(tenant=g.request_tenant_id, site=g.site_id)
+    # Audit trail — record the revoke in the pod's action_logs.
+    try:
+        pod.db_update(log=f"Revoked access-gate code '{tok.label or tok.id[:8]}' by {g.username}",
+                      tenant=g.request_tenant_id, site=g.site_id)
+    except Exception as e:
+        logger.warning(f"Failed to write revoke action_log for pod {pod_id}: {e}")
+    tokens = PodAccessToken.list_for_pod(pod_id, tenant=g.request_tenant_id, site=g.site_id)
+    result = [t.display() for t in tokens]
+    return ok(result=result, msg="Access token revoked successfully.")
+
 
 @router.get(
     "/pods/{pod_id}/events",

@@ -38,6 +38,16 @@ http:
     {% endfor %}
 
     {% for pname, pdata in http_proxy_info.items() -%}
+    {% if pdata.access_gate -%}
+    tapis-gate-{{ pname }}:
+      forwardAuth:
+        address: {{ pdata.gate_url }}
+        authResponseHeaders: # forward matched code label to the pod so traffic logs attribute the visitor
+          - "X-Tapis-Gate-Code"
+    {% endif -%}
+    {% endfor %}
+
+    {% for pname, pdata in http_proxy_info.items() -%}
     {% if pdata.cors_allow_origins -%}
     tapis-cors-{{ pname }}:
       headers:
@@ -124,7 +134,7 @@ http:
       entryPoints:
        - web
       rule: "Host(`{{ pdata.url }}`){% if pdata.custom_domain and pdata.custom_domain_verified %} || Host(`{{ pdata.custom_domain }}`){% endif %}"
-      {% if pdata.splash_mode or pdata.tapis_auth or pdata.cors_allow_origins or pdata.ip_allow_list or (pdata.proxy_compression is defined and pdata.proxy_compression) -%}
+      {% if pdata.splash_mode or pdata.tapis_auth or pdata.access_gate or pdata.cors_allow_origins or pdata.ip_allow_list or (pdata.proxy_compression is defined and pdata.proxy_compression) -%}
       middlewares:
         {% if pdata.splash_mode is defined and pdata.splash_mode -%}
         - "tapis-splash-{{ pname }}"
@@ -134,6 +144,9 @@ http:
         {% endif -%}
         {% if pdata.cors_allow_origins -%}
         - "tapis-cors-{{ pname }}"
+        {% endif -%}
+        {% if pdata.access_gate and not (pdata.splash_mode is defined and pdata.splash_mode) -%}
+        - "tapis-gate-{{ pname }}"
         {% endif -%}
         {% if pdata.tapis_auth and not (pdata.splash_mode is defined and pdata.splash_mode) -%}
         - "tapis-auth-{{ pname }}"

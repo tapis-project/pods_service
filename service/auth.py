@@ -260,6 +260,12 @@ def check_route_permissions(request):
         ["/pods/{pod_id}/exec", "POST", codes.ADMIN],
         ["/pods/{pod_id_net}/auth", "GET", "NEED-BASEURL"], # oauth
         ["/pods/{pod_id_net}/auth/callback", "GET", "NEED-BASEURL"], # oauth
+        ["/pods/{pod_id_net}/gate", "GET", "NEED-BASEURL"], # access-gate forwardAuth (no Tapis token)
+        ["/pods/{pod_id_net}/gate/redeem", "GET", "NEED-BASEURL"], # access-gate ?access= link redemption
+        ["/pods/{pod_id_net}/gate/redeem", "POST", "NEED-BASEURL"], # access-gate login-form redemption
+        ["/pods/{pod_id}/access-tokens", "GET", codes.USER], # list access-gate credentials
+        ["/pods/{pod_id}/access-tokens", "POST", codes.USER], # mint an access-gate credential
+        ["/pods/{pod_id}/access-tokens/{token_id}", "DELETE", codes.USER], # revoke a credential
         ["/pods/{pod_id}", "GET", codes.READ],
         ["/pods/{pod_id}", "PUT", codes.USER],
         ["/pods/{pod_id}/reset_field", "POST", codes.ADMIN],
@@ -422,8 +428,10 @@ def check_route_permissions(request):
 
 def authentication(request):
     # Pod OAuth routes handle their own auth flow — skip token checks entirely.
-    # Regex matches /pods/<pod_id_net>/auth and /pods/<pod_id_net>/auth/callback
-    if re.match(r'^/pods/[^/]+/auth(/callback)?$', request.url.path):
+    # Regex matches /pods/<pod_id_net>/auth and /pods/<pod_id_net>/auth/callback,
+    # plus the access-gate routes /pods/<pod_id_net>/gate and /gate/redeem (visitors
+    # supply a shared secret, not a Tapis token, so token checks must be skipped).
+    if re.match(r'^/pods/[^/]+/(auth(/callback)?|gate(/redeem)?)$', request.url.path):
         pass
     elif (request.url.path == '/redoc' or
         request.url.path == '/docs' or

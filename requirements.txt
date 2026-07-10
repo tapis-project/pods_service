@@ -23,6 +23,7 @@ rabbitpy
 channelpy
 python-multipart
 pika
+bcrypt # gate access-token password hashing (already present transitively via paramiko)
 
 # Misc
 pylint
