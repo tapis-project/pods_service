@@ -122,6 +122,7 @@ The edge release. Pods learned to leave the cluster.
 - Fleet metrics endpoints with cached PromQL and an availability stanza.
 - `scripts/smoke.sh` — one command that tells you which layer of a deployment is broken (nginx, api, traefik-config, or client) from the shape of the response.
 - bruno: stacks and stack-template-tag requests, plus example template-tag definitions (codeserver, gatus monitoring suites, onlyoffice, peekaping, phoenix, uptimekuma) to crib from.
+- flexserv pod template — transformers CPU variant with a gateway and backend.
 
 ### Bug fixes:
 - Permission guards return proper 4xx codes instead of bare errors that mapped to 500.
