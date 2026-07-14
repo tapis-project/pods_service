@@ -1487,12 +1487,29 @@ async def pod_auth(pod_id_net, request: Request):
     except Exception as e:
         logger.debug(f"Authentication failed: {getattr(e, 'detail', None) or e}")
 
-    ## if request headers has X-Tapis-Token, we assume they're not browser based and want to use the token
-    ## if it doesn't validate they need a warning message rather than getting an error due to redirect
+    ## A token was actually attached (header or cookie) but failed validation.
+    ## API/XHR callers get an explicit 403 here — bouncing them into the browser
+    ## OAuth redirect would just hand them the authorize page HTML. Browser
+    ## navigations (e.g. a stale cookie) still fall through to the redirect so
+    ## humans re-login seamlessly. Tokenless requests always fall through too:
+    ## plenty of traffic lands on traefik that is simply meant to fail, and the
+    ## OAuth bounce is the expected failure mode there.
     logger.debug(f"request_info dump: {request.headers}, {request.cookies}, {request.query_params}")
-    if request.headers.get('X-Tapis-Token') or request.headers.get('x-tapis-token2'):
-        logger.debug(f"X-Tapis-Token found in headers, but not authenticated. Returning 403.")
-        return JSONResponse(content="Pods Service tapis_auth - not authenticated", status_code=403)
+    token_attached = bool(
+        request.headers.get('X-Tapis-Token')
+        or request.headers.get('x-tapis-token2')
+        or request.cookies.get('X-Tapis-Token'))
+    if token_attached:
+        accept_header = request.headers.get('accept', '')
+        is_browser_nav = (
+            'text/html' in accept_header
+            and request.headers.get('sec-fetch-mode', 'navigate') == 'navigate')
+        if not is_browser_nav:
+            logger.debug("Token attached but not authenticated; non-browser client. Returning 403.")
+            return JSONResponse(
+                content="Pods Service tapis_auth - token attached but not valid (expired, wrong tenant, or malformed). Re-authenticate and retry with a valid X-Tapis-Token.",
+                status_code=403)
+        logger.debug("Token attached but not authenticated; browser navigation. Falling through to OAuth redirect.")
     
 
     # Get info for clients

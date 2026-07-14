@@ -128,6 +128,7 @@ The edge release. Pods learned to leave the cluster.
 - Permission guards return proper 4xx codes instead of bare errors that mapped to 500.
 - Client errors return proper 4xx instead of 500 across pod, volume, snapshot, and template guards — the error handler only mapped Tapis errors, so bare raises leaked as server errors.
 - The Traefik template can no longer render a bare `tcp.middlewares:` — the resulting YAML null made Traefik reject the entire dynamic config, 404ing every route on the site.
+- An API client whose token fails validation gets an explicit 403 instead of the browser OAuth redirect; only browser navigations still get bounced to re-login.
 
 
 ## 26Q2.1
