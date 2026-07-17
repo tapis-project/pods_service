@@ -147,6 +147,28 @@
         "description": "Auto-refresh / Retry-After interval (seconds) for the Traefik splash page shown while a pod is starting or its cert is being issued.",
         "default": 10
       },
+      "metrics_backend": {
+        "type": "string",
+        "enum": ["none", "grafana", "metrics-server"],
+        "default": "none",
+        "description": "OPTIONAL cpu/mem metrics source for get_pod_metrics and admin health. 'none' (default) disables usage metrics entirely; 'grafana' queries PromQL through a Grafana datasource proxy (needs grafana_url/grafana_token/grafana_prom_ds_uid/metrics_k8s_namespace); 'metrics-server' is reserved for the future in-cluster k8s metrics-server integration (not implemented yet). Metrics failures NEVER take the service down - all failures degrade to an 'unavailable' field in responses."
+      },
+      "grafana_url": {
+        "type": "string",
+        "description": "Base URL of the Grafana instance fronting the Prometheus/Thanos datasource, e.g. https://grafana.tacc.cloud. Used only when metrics_backend=grafana."
+      },
+      "grafana_token": {
+        "type": "string",
+        "description": "Grafana service-account Bearer token used for datasource proxy queries (metrics_backend=grafana). NOTE: these tokens EXPIRE. Symptom of an expired/invalid token: GET /pods/admin/health shows metrics_backend reachable=false with HTTP 401/403 guidance, and pod metrics report 'unavailable'. Fix: in Grafana go to Administration -> Users and access -> Service accounts, generate a new token for the service account, and update this config value."
+      },
+      "grafana_prom_ds_uid": {
+        "type": "string",
+        "description": "Grafana datasource UID of the Prometheus/Thanos datasource to proxy queries to (Grafana -> Connections -> Data sources -> the datasource's uid, e.g. P98FD586FDD5909DA for TACC Thanos Query). Used only when metrics_backend=grafana."
+      },
+      "metrics_k8s_namespace": {
+        "type": "string",
+        "description": "Kubernetes namespace value carried in the cAdvisor series labels (container_label_io_kubernetes_pod_namespace) for THIS deployment's pods - differs per deployment (develop=tapisdev, prod=tapisprod). Required whenever metrics_backend is grafana; a wrong value makes every pod report 'no series found'."
+      },
       "compute_queues": {
         "type": "array",
         "description": "List of node objects available to the spawner using this config.",

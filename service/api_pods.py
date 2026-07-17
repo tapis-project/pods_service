@@ -138,6 +138,103 @@ async def list_pods(
     logger.info("Pods retrieved.")
     return ok(result=pods_to_show, metadata=metadata, msg=final_msg)
 
+
+def _metrics_visible_pods():
+    """Permission-filtered pod set for the fleet metrics endpoints — same
+    visibility rule as list_pods (admin_active sees the whole tenant)."""
+    if getattr(g, 'admin_active', False):
+        return Pod.db_get_all(tenant=g.request_tenant_id, site=g.site_id,
+                              defer_columns=[Pod.logs, Pod.action_logs])
+    return Pod.db_get_all_with_permission(user=g.username, level='READ',
+                                          tenant=g.request_tenant_id, site=g.site_id)
+
+
+@router.get(
+    "/pods/metrics",
+    tags=["Pods"],
+    summary="list_pods_metrics",
+    operation_id="list_pods_metrics")
+async def list_pods_metrics():
+    """
+    Live cpu/mem usage for every pod you can read — in ONE metrics-backend
+    query. The service answers from its own TTL cache (~45 s), so dashboards
+    can poll this freely without load reaching Grafana: all users
+    in a tenant share one upstream query per cache window.
+
+    Returns {pods: {pod_id: {status, usage, resources}}, backend, [unavailable]}.
+    `usage` is {"unavailable": reason} per-pod-absent or fleet-wide when the
+    backend is down/unconfigured — always HTTP 200.
+    """
+    logger.info("GET /pods/metrics - Top of list_pods_metrics.")
+    from metrics_backend import bulk_usage_dict, explore_hint, get_provider
+
+    pods = _metrics_visible_pods()
+    pattern = f"pods-{g.site_id}-{g.request_tenant_id}-.*"
+    bulk = bulk_usage_dict(pattern)
+
+    result = {
+        "pods": {},
+        "backend": {"name": get_provider().name, "explore": explore_hint()},
+    }
+    if "unavailable" in bulk:
+        result["unavailable"] = bulk["unavailable"]
+    usage_by_k8_name = bulk.get("pods", {})
+    for pod in pods:
+        res = pod.resources or {}
+        result["pods"][pod.pod_id] = {
+            "status":  pod.status,
+            "k8_name": pod.k8_name,
+            "usage":   usage_by_k8_name.get(pod.k8_name),  # None = no series (not running)
+            "resources": {
+                "cpu_request_m":  int(res.get("cpu_request",  0) or 0),
+                "cpu_limit_m":    int(res.get("cpu_limit",    0) or 0),
+                "mem_request_mb": int(res.get("mem_request",  0) or 0),
+                "mem_limit_mb":   int(res.get("mem_limit",    0) or 0),
+                "gpus":           int(res.get("gpus",         0) or 0),
+            },
+        }
+    return ok(result=result, msg="Fleet metrics retrieved.")
+
+
+@router.get(
+    "/pods/metrics/history",
+    tags=["Pods"],
+    summary="list_pods_metrics_history",
+    operation_id="list_pods_metrics_history")
+async def list_pods_metrics_history(
+    window_s: int = Query(3600, description="History window in seconds (300..86400)."),
+    step_s: int = Query(120, description="Sample step in seconds (>=30; raised automatically to cap points/pod at 400)."),
+):
+    """
+    Cpu/mem time series for every pod you can read — sparkline/chart food.
+    ONE cached query_range per (window, step) serves the whole tenant for
+    ~3 minutes, so every dashboard and per-pod page shares the same upstream
+    query. Series: cpu = cores, mem = bytes, points = [unix_ts, value].
+    """
+    logger.info(f"GET /pods/metrics/history - window_s={window_s}, step_s={step_s}")
+    from metrics_backend import bulk_range_dict, explore_hint, get_provider
+
+    pods = _metrics_visible_pods()
+    pattern = f"pods-{g.site_id}-{g.request_tenant_id}-.*"
+    bulk = bulk_range_dict(pattern, window_s=window_s, step_s=step_s)
+
+    result = {
+        "pods": {},
+        "backend": {"name": get_provider().name, "explore": explore_hint()},
+    }
+    if "unavailable" in bulk:
+        result["unavailable"] = bulk["unavailable"]
+    else:
+        result["window_s"] = bulk.get("window_s")
+        result["step_s"] = bulk.get("step_s")
+    series_by_k8_name = bulk.get("pods", {})
+    for pod in pods:
+        series = series_by_k8_name.get(pod.k8_name)
+        if series:
+            result["pods"][pod.pod_id] = series
+    return ok(result=result, msg="Fleet metrics history retrieved.")
+
+
 @router.post(
     "/pods",
     tags=["Pods"],

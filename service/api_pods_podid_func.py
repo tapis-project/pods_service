@@ -2206,13 +2206,22 @@ async def get_pod_events(
     tags=["Pods"],
     summary="get_pod_metrics",
     operation_id="get_pod_metrics")
-async def get_pod_metrics(pod_id):
+async def get_pod_metrics(
+    pod_id,
+    history: bool = Query(False, description="Include ~1h cpu/mem time series (usage_history). Served from the tenant-wide range cache — no extra backend load."),
+):
     """
     Get live compute and traffic metrics for a pod.
 
-    Returns current CPU/memory usage from the k8s Metrics API plus 24-hour
-    traffic statistics from the traffic_logs table. CPU/memory data requires
-    metrics-server to be installed; traffic data is always available.
+    Returns current CPU/memory usage from the configured metrics backend
+    (`metrics_backend` config: grafana/metrics-server/none) plus
+    24-hour traffic statistics from the traffic_logs table. When no backend is
+    configured or the backend is down, the `usage` field explains why —
+    the request still returns 200; traffic data is always available.
+    With `?history=true` the response also carries `usage_history`
+    ({"cpu": [[ts, cores]...], "mem": [[ts, bytes]...], window_s, step_s}) —
+    filtered out of the SAME cached tenant-wide range query the fleet
+    endpoints use, so per-pod sparklines add zero metrics-backend queries.
     """
     logger.info(f"GET /pods/{pod_id}/metrics - Top of get_pod_metrics.")
     pod = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
@@ -2221,7 +2230,20 @@ async def get_pod_metrics(pod_id):
         # .k8_name deref below raises an opaque 500 ('NoneType' object has no attribute ...).
         raise ResourceError(f"Pod with id '{pod_id}' not found in tenant '{g.request_tenant_id}', site '{g.site_id}'.", 404)
 
-    # ── k8s live usage ─────────────────────────────────────────────────────────
+    # ── Live usage via the pluggable metrics backend (never raises) ────────────
+    from metrics_backend import pod_usage_dict, bulk_range_dict, explore_hint
+    usage = pod_usage_dict(pod.k8_name)
+
+    usage_history = None
+    if history:
+        bulk = bulk_range_dict(f"pods-{g.site_id}-{g.request_tenant_id}-.*")
+        if "unavailable" in bulk:
+            usage_history = {"unavailable": bulk["unavailable"]}
+        else:
+            series = bulk.get("pods", {}).get(pod.k8_name) or {"cpu": [], "mem": []}
+            usage_history = {**series, "window_s": bulk.get("window_s"), "step_s": bulk.get("step_s")}
+
+    # ── k8s metrics-server (legacy path; {} unless metrics-server installed) ──
     k8s_data = get_pod_k8s_metrics(pod.k8_name)
 
     # ── 24-hour traffic summary ────────────────────────────────────────────────
@@ -2278,6 +2300,9 @@ async def get_pod_metrics(pod_id):
         "pod_id":   pod_id,
         "k8_name":  pod.k8_name,
         "status":   pod.status,
+        "usage":    usage,          # cpu/mem from metrics backend, or {"unavailable": reason}
+        "usage_history": usage_history,  # only with ?history=true
+        "backend":  {"explore": explore_hint()},  # Grafana deep-link ingredients (or None)
         "k8s_metrics": k8s_data,    # {} if metrics-server unavailable
         "resources": {
             "cpu_request_m":  int(res.get("cpu_request",  0) or 0),

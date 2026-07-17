@@ -101,7 +101,9 @@ paths:
       description: 'Admin-only diagnostic endpoint. Checks database, RabbitMQ, Traefik
         pod
 
-        status, traffic ingestion state, RBAC, and TLS cert (ACME) provisioning.
+        status, traffic ingestion state, RBAC, TLS cert (ACME) provisioning, and
+
+        the optional metrics backend (grafana).
 
         Returns a structured report with per-subsystem status (ok / warning / error)
 
@@ -118,14 +120,12 @@ paths:
       tags:
       - Admin
       summary: admin_metrics
-      description: 'Admin-only. Aggregate compute and status metrics across all pods.
-
-
-        Fetches live CPU/memory usage from the k8s Metrics API (requires metrics-server)
-
-        and merges with DB records to produce per-pod and cluster-wide summaries.
-
-        Returns gracefully if metrics-server is unavailable.'
+      description: "Admin-only. Aggregate compute and status metrics across all pods.\n\
+        \nLive CPU/memory comes from the configured metrics backend (grafana \u2014\
+        \nONE cached bulk query for the whole cluster), falling back to\nthe k8s Metrics\
+        \ API when no backend is configured. Merged with DB records\nfor per-pod and\
+        \ cluster-wide summaries. Degrades gracefully: pod counts\nand allocation\
+        \ totals are always correct even with no usage source."
       operationId: admin_metrics
       responses:
         '200':
@@ -1092,103 +1092,6 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
-  /pods/snapshots/{snapshot_id}:
-    put:
-      tags:
-      - Snapshots
-      summary: update_snapshot
-      description: 'Update a snapshot.
-
-
-        Note:
-
-        - Fields that change snapshot source or sink are not modifiable. Please recreate
-        your snapshot in that case.
-
-
-        Returns updated snapshot object.'
-      operationId: update_snapshot
-      parameters:
-      - name: snapshot_id
-        in: path
-        required: true
-        schema:
-          title: Snapshot Id
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/UpdateSnapshot'
-      responses:
-        '200':
-          description: Successful Response
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/SnapshotResponse'
-        '422':
-          description: Validation Error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-    delete:
-      tags:
-      - Snapshots
-      summary: delete_snapshot
-      description: 'Delete a snapshot.
-
-
-        Returns "".'
-      operationId: delete_snapshot
-      parameters:
-      - name: snapshot_id
-        in: path
-        required: true
-        schema:
-          title: Snapshot Id
-      responses:
-        '200':
-          description: Successful Response
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/DeleteSnapshotResponse'
-        '422':
-          description: Validation Error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-    get:
-      tags:
-      - Snapshots
-      summary: get_snapshot
-      description: 'Get a snapshot.
-
-
-        Returns retrieved snapshot object.'
-      operationId: get_snapshot
-      parameters:
-      - name: snapshot_id
-        in: path
-        required: true
-        schema:
-          title: Snapshot Id
-      responses:
-        '200':
-          description: Successful Response
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/SnapshotResponse'
-        '422':
-          description: Validation Error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HTTPValidationError'
   /pods/snapshots/{snapshot_id}/list:
     get:
       tags:
@@ -1503,6 +1406,103 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /pods/snapshots/{snapshot_id}:
+    put:
+      tags:
+      - Snapshots
+      summary: update_snapshot
+      description: 'Update a snapshot.
+
+
+        Note:
+
+        - Fields that change snapshot source or sink are not modifiable. Please recreate
+        your snapshot in that case.
+
+
+        Returns updated snapshot object.'
+      operationId: update_snapshot
+      parameters:
+      - name: snapshot_id
+        in: path
+        required: true
+        schema:
+          title: Snapshot Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateSnapshot'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SnapshotResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+      - Snapshots
+      summary: delete_snapshot
+      description: 'Delete a snapshot.
+
+
+        Returns "".'
+      operationId: delete_snapshot
+      parameters:
+      - name: snapshot_id
+        in: path
+        required: true
+        schema:
+          title: Snapshot Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeleteSnapshotResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    get:
+      tags:
+      - Snapshots
+      summary: get_snapshot
+      description: 'Get a snapshot.
+
+
+        Returns retrieved snapshot object.'
+      operationId: get_snapshot
+      parameters:
+      - name: snapshot_id
+        in: path
+        required: true
+        schema:
+          title: Snapshot Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SnapshotResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /pods/volumes:
     get:
       tags:
@@ -1543,103 +1543,6 @@ paths:
             schema:
               $ref: '#/components/schemas/NewVolume'
         required: true
-      responses:
-        '200':
-          description: Successful Response
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/VolumeResponse'
-        '422':
-          description: Validation Error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-  /pods/volumes/{volume_id}:
-    put:
-      tags:
-      - Volumes
-      summary: update_volume
-      description: 'Update a volume.
-
-
-        Note:
-
-        - Fields that change volume source or sink are not modifiable. Please recreate
-        your volume in that case.
-
-
-        Returns updated volume object.'
-      operationId: update_volume
-      parameters:
-      - name: volume_id
-        in: path
-        required: true
-        schema:
-          title: Volume Id
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/UpdateVolume'
-      responses:
-        '200':
-          description: Successful Response
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/VolumeResponse'
-        '422':
-          description: Validation Error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-    delete:
-      tags:
-      - Volumes
-      summary: delete_volume
-      description: 'Delete a volume.
-
-
-        Returns "".'
-      operationId: delete_volume
-      parameters:
-      - name: volume_id
-        in: path
-        required: true
-        schema:
-          title: Volume Id
-      responses:
-        '200':
-          description: Successful Response
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/DeleteVolumeResponse'
-        '422':
-          description: Validation Error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-    get:
-      tags:
-      - Volumes
-      summary: get_volume
-      description: 'Get a volume.
-
-
-        Returns retrieved volume object.'
-      operationId: get_volume
-      parameters:
-      - name: volume_id
-        in: path
-        required: true
-        schema:
-          title: Volume Id
       responses:
         '200':
           description: Successful Response
@@ -2012,6 +1915,103 @@ paths:
           content:
             application/json:
               schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /pods/volumes/{volume_id}:
+    put:
+      tags:
+      - Volumes
+      summary: update_volume
+      description: 'Update a volume.
+
+
+        Note:
+
+        - Fields that change volume source or sink are not modifiable. Please recreate
+        your volume in that case.
+
+
+        Returns updated volume object.'
+      operationId: update_volume
+      parameters:
+      - name: volume_id
+        in: path
+        required: true
+        schema:
+          title: Volume Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateVolume'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VolumeResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+      - Volumes
+      summary: delete_volume
+      description: 'Delete a volume.
+
+
+        Returns "".'
+      operationId: delete_volume
+      parameters:
+      - name: volume_id
+        in: path
+        required: true
+        schema:
+          title: Volume Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeleteVolumeResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    get:
+      tags:
+      - Volumes
+      summary: get_volume
+      description: 'Get a volume.
+
+
+        Returns retrieved volume object.'
+      operationId: get_volume
+      parameters:
+      - name: volume_id
+        in: path
+        required: true
+        schema:
+          title: Volume Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VolumeResponse'
         '422':
           description: Validation Error
           content:
@@ -2412,6 +2412,68 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PodResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /pods/metrics:
+    get:
+      tags:
+      - Pods
+      summary: list_pods_metrics
+      description: "Live cpu/mem usage for every pod you can read \u2014 in ONE metrics-backend\n\
+        query. The service answers from its own TTL cache (~45 s), so dashboards\n\
+        can poll this freely without load reaching Grafana: all users\nin a tenant\
+        \ share one upstream query per cache window.\n\nReturns {pods: {pod_id: {status,\
+        \ usage, resources}}, backend, [unavailable]}.\n`usage` is {\"unavailable\"\
+        : reason} per-pod-absent or fleet-wide when the\nbackend is down/unconfigured\
+        \ \u2014 always HTTP 200."
+      operationId: list_pods_metrics
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /pods/metrics/history:
+    get:
+      tags:
+      - Pods
+      summary: list_pods_metrics_history
+      description: "Cpu/mem time series for every pod you can read \u2014 sparkline/chart\
+        \ food.\nONE cached query_range per (window, step) serves the whole tenant\
+        \ for\n~3 minutes, so every dashboard and per-pod page shares the same upstream\n\
+        query. Series: cpu = cores, mem = bytes, points = [unix_ts, value]."
+      operationId: list_pods_metrics_history
+      parameters:
+      - name: window_s
+        in: query
+        required: false
+        schema:
+          type: integer
+          description: History window in seconds (300..86400).
+          default: 3600
+          title: Window S
+        description: History window in seconds (300..86400).
+      - name: step_s
+        in: query
+        required: false
+        schema:
+          type: integer
+          description: Sample step in seconds (>=30; raised automatically to cap points/pod
+            at 400).
+          default: 120
+          title: Step S
+        description: Sample step in seconds (>=30; raised automatically to cap points/pod
+          at 400).
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
         '422':
           description: Validation Error
           content:
@@ -3002,7 +3064,12 @@ paths:
 
 
         Use check_unresolved=true to detect any ${...} patterns that haven''t been
-        resolved.'
+        resolved.
+
+        Use derived_lite=true (or derived=true) to get the template-merged values
+        together
+
+        with modified_fields in a single request, instead of also calling /derived.'
       operationId: get_pod
       parameters:
       - name: pod_id
@@ -3033,6 +3100,33 @@ paths:
           title: Check Unresolved
         description: 'Check for unresolved ${...} patterns and include in metadata.
           Default: True'
+      - name: derived
+        in: query
+        required: false
+        schema:
+          type: boolean
+          description: Return the template-merged definition (also interpolates legacy
+            <<TAPIS_*>> placeholders). Like GET /pods/{pod_id}/derived but on this
+            endpoint, so the merged values come back alongside modified_fields in
+            one call.
+          default: false
+          title: Derived
+        description: Return the template-merged definition (also interpolates legacy
+          <<TAPIS_*>> placeholders). Like GET /pods/{pod_id}/derived but on this endpoint,
+          so the merged values come back alongside modified_fields in one call.
+      - name: derived_lite
+        in: query
+        required: false
+        schema:
+          type: boolean
+          description: 'Fast template-only merge for display: combines templates but
+            skips password lookup + legacy placeholder interpolation. Returns resolved
+            values AND modified_fields in a single call. Template-less pods are unchanged.'
+          default: false
+          title: Derived Lite
+        description: 'Fast template-only merge for display: combines templates but
+          skips password lookup + legacy placeholder interpolation. Returns resolved
+          values AND modified_fields in a single call. Template-less pods are unchanged.'
       responses:
         '200':
           description: Successful Response
@@ -3046,20 +3140,116 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /pods/{pod_id}/reset_field:
+    post:
+      tags:
+      - Pods
+      summary: reset_pod_field
+      description: "Reset one or more pod fields to their template default.\n\nRemoves\
+        \ each field from `modified_fields` and re-materializes it from the\npod's\
+        \ template, re-linking the field to the template (undoing a pod-level\noverride).\
+        \ Only valid for template-backed pods.\n\nNOTE: whole-field \u2014 resetting\
+        \ `volume_mounts` reverts ALL of the pod's mounts\nto the template, including\
+        \ any the user added. Restart required to apply."
+      operationId: reset_pod_field
+      parameters:
+      - name: pod_id
+        in: path
+        required: true
+        schema:
+          title: Pod Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResetPodFields'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PodResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /pods/{pod_id}/overrides:
+    get:
+      tags:
+      - Pods
+      summary: get_pod_overrides
+      description: "Lean \"what the user actually set\" view: only the pod's override\
+        \ layer (the fields in\nmodified_fields) plus identity (pod_id, template,\
+        \ status). The normal GET resolves every\ndefault/template value, hiding what's\
+        \ a real user override and bloating the payload; this\nreturns just the sparse\
+        \ override layer \u2014 legible and safe to round-trip on edit. Pairs with\n\
+        /provenance (per-field source). See tapis-ui src/app/Pods/LAYERING_MODEL.md."
+      operationId: get_pod_overrides
+      parameters:
+      - name: pod_id
+        in: path
+        required: true
+        schema:
+          title: Pod Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PodsFinalResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /pods/{pod_id}/provenance:
+    get:
+      tags:
+      - Pods
+      summary: get_pod_provenance
+      description: "Per-field provenance for a pod: which fields are the user's overrides\
+        \ (pod),\nwhich come from the template, and which are plain service defaults.\n\
+        \nSource-of-truth is `modified_fields`, NOT value-emptiness \u2014 so a template\
+        \ pod's\nmaterialized-but-unmodified fields read as 'template'. For each field\
+        \ you get\nsource (pod|template|default), in_modified_fields, and the pod/template/derived\n\
+        values, so the determination is fully inspectable."
+      operationId: get_pod_provenance
+      parameters:
+      - name: pod_id
+        in: path
+        required: true
+        schema:
+          title: Pod Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PodsFinalResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /pods/{pod_id}/derived:
     get:
       tags:
       - Pods
       summary: get_derived_pod
-      description: 'Derive a pod''s final definition if templates are used.
-
-
-        Returns final pod definition to be used for pod creation.
-
-
-        Use resolve_secrets=true (admin only) to preview how secrets will be interpolated
-
-        into environment_variables and config_content.'
+      description: "Derive a pod's final definition if templates are used.\n\nReturns\
+        \ final pod definition to be used for pod creation.\n\nUse resolve_secrets=true\
+        \ (admin only) to preview how secrets will be interpolated\ninto environment_variables\
+        \ and config_content. By default this honours each\nsecret's write-only (readable=False)\
+        \ flag \u2014 those come back as '<<write-only>>'.\nPass reveal_write_only=true\
+        \ (admin only) to bypass that and see write-only values."
       operationId: get_derived_pod
       parameters:
       - name: pod_id
@@ -3084,12 +3274,29 @@ paths:
         required: false
         schema:
           type: boolean
-          description: 'Resolve and show actual secret values (admin only). Default:
-            false. Use to preview how secrets will be interpolated.'
+          description: "Resolve and show secret values (admin only). Default: false.\
+            \ Honours each secret's readable flag: a write-only (readable=False) secret\
+            \ is NOT read \u2014 its value comes back as the sentinel '<<write-only>>'.\
+            \ Use to preview how secrets interpolate."
           default: false
           title: Resolve Secrets
-        description: 'Resolve and show actual secret values (admin only). Default:
-          false. Use to preview how secrets will be interpolated.'
+        description: "Resolve and show secret values (admin only). Default: false.\
+          \ Honours each secret's readable flag: a write-only (readable=False) secret\
+          \ is NOT read \u2014 its value comes back as the sentinel '<<write-only>>'.\
+          \ Use to preview how secrets interpolate."
+      - name: reveal_write_only
+        in: query
+        required: false
+        schema:
+          type: boolean
+          description: 'Admin escalation for resolve_secrets: also read+reveal write-only
+            (readable=False) secret values, bypassing the readable flag (the same
+            privileged read pods use at start). Admin only. Implies resolve_secrets.'
+          default: false
+          title: Reveal Write Only
+        description: 'Admin escalation for resolve_secrets: also read+reveal write-only
+          (readable=False) secret values, bypassing the readable flag (the same privileged
+          read pods use at start). Admin only. Implies resolve_secrets.'
       responses:
         '200':
           description: Successful Response
@@ -3913,6 +4120,100 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /pods/{pod_id}/access-tokens:
+    get:
+      tags:
+      - Permissions
+      summary: list_pod_access_tokens
+      description: "List the access-gate credentials minted for a pod (metadata only\
+        \ \u2014 never the secret)."
+      operationId: list_pod_access_tokens
+      parameters:
+      - name: pod_id
+        in: path
+        required: true
+        schema:
+          title: Pod Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PodAccessTokensResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    post:
+      tags:
+      - Permissions
+      summary: create_pod_access_token
+      description: "Mint an access-gate credential (password or shareable link). The\
+        \ raw secret and a\nredemption URL are returned ONCE \u2014 they are not recoverable\
+        \ afterward."
+      operationId: create_pod_access_token
+      parameters:
+      - name: pod_id
+        in: path
+        required: true
+        schema:
+          title: Pod Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccessTokenMintRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PodAccessTokenMintResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /pods/{pod_id}/access-tokens/{token_id}:
+    delete:
+      tags:
+      - Permissions
+      summary: revoke_pod_access_token
+      description: 'Revoke (permanently disable) an access-gate credential. Existing
+        sessions using it
+
+        stop working on their next gate check.'
+      operationId: revoke_pod_access_token
+      parameters:
+      - name: pod_id
+        in: path
+        required: true
+        schema:
+          title: Pod Id
+      - name: token_id
+        in: path
+        required: true
+        schema:
+          title: Token Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PodAccessTokensResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /pods/{pod_id}/events:
     get:
       tags:
@@ -3964,14 +4265,16 @@ paths:
       tags:
       - Pods
       summary: get_pod_metrics
-      description: 'Get live compute and traffic metrics for a pod.
-
-
-        Returns current CPU/memory usage from the k8s Metrics API plus 24-hour
-
-        traffic statistics from the traffic_logs table. CPU/memory data requires
-
-        metrics-server to be installed; traffic data is always available.'
+      description: "Get live compute and traffic metrics for a pod.\n\nReturns current\
+        \ CPU/memory usage from the configured metrics backend\n(`metrics_backend`\
+        \ config: grafana/metrics-server/none) plus\n24-hour traffic statistics from\
+        \ the traffic_logs table. When no backend is\nconfigured or the backend is\
+        \ down, the `usage` field explains why \u2014\nthe request still returns 200;\
+        \ traffic data is always available.\nWith `?history=true` the response also\
+        \ carries `usage_history`\n({\"cpu\": [[ts, cores]...], \"mem\": [[ts, bytes]...],\
+        \ window_s, step_s}) \u2014\nfiltered out of the SAME cached tenant-wide range\
+        \ query the fleet\nendpoints use, so per-pod sparklines add zero metrics-backend\
+        \ queries."
       operationId: get_pod_metrics
       parameters:
       - name: pod_id
@@ -3979,6 +4282,17 @@ paths:
         required: true
         schema:
           title: Pod Id
+      - name: history
+        in: query
+        required: false
+        schema:
+          type: boolean
+          description: "Include ~1h cpu/mem time series (usage_history). Served from\
+            \ the tenant-wide range cache \u2014 no extra backend load."
+          default: false
+          title: History
+        description: "Include ~1h cpu/mem time series (usage_history). Served from\
+          \ the tenant-wide range cache \u2014 no extra backend load."
       responses:
         '200':
           description: Successful Response
@@ -3993,6 +4307,42 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
 components:
   schemas:
+    AccessTokenMintRequest:
+      properties:
+        label:
+          type: string
+          title: Label
+          description: Human label for this credential.
+          default: ''
+        kind:
+          type: string
+          title: Kind
+          description: '''link'' (generated high-entropy secret, shared as ?access=
+            URL) or ''password'' (you supply a human-typed value below).'
+          default: link
+        password:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Password
+          description: 'For kind=''password'': the value visitors will type. Leave
+            null for kind=''link'' to auto-generate a strong secret.'
+        expires_in_seconds:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Expires In Seconds
+          description: Lifetime in seconds from now; null = never expires. e.g. 86400
+            for a day.
+        max_uses:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Max Uses
+          description: Max redemptions into a session; null = unlimited.
+      additionalProperties: false
+      type: object
+      title: AccessTokenMintRequest
     Body_upload_template_gallery_photo:
       properties:
         file:
@@ -4423,7 +4773,6 @@ components:
           - type: 'null'
           title: Creation Ts
           description: Time (UTC) that this image was created.
-          default: '2026-06-27T00:26:21.118798'
         added_by:
           type: string
           title: Added By
@@ -4925,6 +5274,190 @@ components:
       additionalProperties: false
       type: object
       title: PermissionsModel
+    PodAccessTokenMetaResponse:
+      properties:
+        id:
+          type: string
+          title: Id
+        pod_id:
+          type: string
+          title: Pod Id
+        label:
+          type: string
+          title: Label
+        kind:
+          type: string
+          title: Kind
+        created_by:
+          type: string
+          title: Created By
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+        expires_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Expires At
+        max_uses:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Max Uses
+        uses:
+          type: integer
+          title: Uses
+        revoked:
+          type: boolean
+          title: Revoked
+        last_used_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Last Used At
+      additionalProperties: false
+      type: object
+      required:
+      - id
+      - pod_id
+      - label
+      - kind
+      - created_by
+      - created_at
+      - expires_at
+      - max_uses
+      - uses
+      - revoked
+      - last_used_at
+      title: PodAccessTokenMetaResponse
+    PodAccessTokenMintResponse:
+      properties:
+        message:
+          type: string
+          title: Message
+        metadata:
+          additionalProperties: true
+          type: object
+          title: Metadata
+        result:
+          $ref: '#/components/schemas/PodAccessTokenMintResult'
+        status:
+          type: string
+          title: Status
+        version:
+          type: string
+          title: Version
+      additionalProperties: false
+      type: object
+      required:
+      - message
+      - metadata
+      - result
+      - status
+      - version
+      title: PodAccessTokenMintResponse
+    PodAccessTokenMintResult:
+      properties:
+        id:
+          type: string
+          title: Id
+        pod_id:
+          type: string
+          title: Pod Id
+        label:
+          type: string
+          title: Label
+        kind:
+          type: string
+          title: Kind
+        created_by:
+          type: string
+          title: Created By
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+        expires_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Expires At
+        max_uses:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Max Uses
+        uses:
+          type: integer
+          title: Uses
+        revoked:
+          type: boolean
+          title: Revoked
+        last_used_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Last Used At
+        secret:
+          type: string
+          title: Secret
+          description: "The raw secret \u2014 shown ONCE at mint time."
+        redemption_url:
+          type: string
+          title: Redemption Url
+          description: Shareable link that redeems this secret and sets the session
+            cookie.
+          default: ''
+      additionalProperties: false
+      type: object
+      required:
+      - id
+      - pod_id
+      - label
+      - kind
+      - created_by
+      - created_at
+      - expires_at
+      - max_uses
+      - uses
+      - revoked
+      - last_used_at
+      - secret
+      title: PodAccessTokenMintResult
+    PodAccessTokensResponse:
+      properties:
+        message:
+          type: string
+          title: Message
+        metadata:
+          additionalProperties: true
+          type: object
+          title: Metadata
+        result:
+          items:
+            $ref: '#/components/schemas/PodAccessTokenMetaResponse'
+          type: array
+          title: Result
+        status:
+          type: string
+          title: Status
+        version:
+          type: string
+          title: Version
+      additionalProperties: false
+      type: object
+      required:
+      - message
+      - metadata
+      - result
+      - status
+      - version
+      title: PodAccessTokensResponse
     PodCredentialsResponse:
       properties:
         message:
@@ -5446,12 +5979,47 @@ components:
           - type: 'null'
           title: Start Instance Ts
           description: Time (UTC) that this pod instance was started.
+        modified_fields:
+          items:
+            type: string
+          type: array
+          title: Modified Fields
+          description: Fields that have been modified by the user since creation.
+          default: []
       additionalProperties: false
       type: object
       required:
       - pod_id
       title: PodResponseModel
       description: Response object for Pod class.
+    PodsFinalResponse:
+      properties:
+        message:
+          type: string
+          title: Message
+        metadata:
+          additionalProperties: true
+          type: object
+          title: Metadata
+        result:
+          additionalProperties: true
+          type: object
+          title: Result
+        status:
+          type: string
+          title: Status
+        version:
+          type: string
+          title: Version
+      additionalProperties: false
+      type: object
+      required:
+      - message
+      - metadata
+      - result
+      - status
+      - version
+      title: PodsFinalResponse
     PodsResponse:
       properties:
         message:
@@ -5481,6 +6049,29 @@ components:
       - status
       - version
       title: PodsResponse
+    ResetPodFields:
+      properties:
+        fields:
+          items:
+            type: string
+          type: array
+          title: Fields
+          description: Pod fields to reset to template default, e.g. ['volume_mounts'].
+      additionalProperties: false
+      type: object
+      required:
+      - fields
+      title: ResetPodFields
+      description: 'Request to reset one or more pod fields to their template default.
+
+
+        Each listed field is removed from `modified_fields` and re-materialized from
+
+        the pod''s template, re-linking it to the template (undoing a pod-level
+
+        override). Only valid for template-backed pods. Whole-field granularity:
+
+        resetting `volume_mounts` reverts ALL of the pod''s mounts to the template.'
     SaveStackAsTemplateRequest:
       properties:
         template_id:
@@ -7991,6 +8582,21 @@ components:
           description: List of PathRegexp patterns to exclude from Tapis auth. ex.
             ['\\.(js|css|ico|png|jpg|jpeg|webp|gif|svg|woff2?|ttf|map)$']
           default: []
+        access_gate:
+          type: boolean
+          title: Access Gate
+          description: "If true, this endpoint is gated behind a shared password/token\
+            \ (the 'access gate'), so a site is not reachable on the public web until\
+            \ a visitor supplies a secret. Independent of tapis_auth \u2014 visitors\
+            \ do NOT need to be Tapis users. Mint credentials via POST /pods/{pod_id}/access-tokens.\
+            \ Can be combined with tapis_auth (both must pass)."
+          default: false
+        access_gate_return_path:
+          type: string
+          title: Access Gate Return Path
+          description: Path to redirect to after a visitor successfully redeems an
+            access-gate secret.
+          default: /
         cors_allow_origins:
           items:
             type: string
@@ -8235,6 +8841,21 @@ components:
           description: List of PathRegexp patterns to exclude from Tapis auth. ex.
             ['\\.(js|css|ico|png|jpg|jpeg|webp|gif|svg|woff2?|ttf|map)$']
           default: []
+        access_gate:
+          type: boolean
+          title: Access Gate
+          description: "If true, this endpoint is gated behind a shared password/token\
+            \ (the 'access gate'), so a site is not reachable on the public web until\
+            \ a visitor supplies a secret. Independent of tapis_auth \u2014 visitors\
+            \ do NOT need to be Tapis users. Mint credentials via POST /pods/{pod_id}/access-tokens.\
+            \ Can be combined with tapis_auth (both must pass)."
+          default: false
+        access_gate_return_path:
+          type: string
+          title: Access Gate Return Path
+          description: Path to redirect to after a visitor successfully redeems an
+            access-gate secret.
+          default: /
         cors_allow_origins:
           items:
             type: string
