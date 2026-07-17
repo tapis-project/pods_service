@@ -9,6 +9,7 @@ from channels import CommandChannel
 from tapisservice.tapisfastapi.utils import g, ok
 from tapisservice.config import conf
 from tapisservice.logs import get_logger
+from errors import ResourceError
 logger = get_logger(__name__)
 
 router = APIRouter()
@@ -69,7 +70,7 @@ async def get_snapshot_contents(
 
     # Validate path to prevent accessing all files on the host
     if not path or path == "/":
-        raise KeyError("Requesting no path or / path is not allowed. Please download individual directories, files or objects.")
+        raise ResourceError("Requesting no path or / path is not allowed. Please download individual directories, files or objects.", 400)
 
     # Call files_download from snapshot_utils
     file_content, filename = files_download(
@@ -115,7 +116,7 @@ async def download_snapshot_file(
 
     # Validate path to prevent accessing all files
     if not path or path == "/":
-        raise KeyError("Requesting no path or / path is not allowed. Please specify a file path.")
+        raise ResourceError("Requesting no path or / path is not allowed. Please specify a file path.", 400)
 
     # Call files_download from volume_utils (without zip for single file)
     file_content, filename = files_download(
@@ -185,7 +186,7 @@ async def set_snapshot_permission(snapshot_id, set_permission: SetPermission):
 
     # Ensure there's still one ADMIN role before finishing.
     if "ADMIN" not in curr_perms.values():
-        raise KeyError(f"Operation would result in snapshot with no users in 'ADMIN' roll. Rolling back.")
+        raise ResourceError("Operation would leave the snapshot with no ADMIN-capable user. Rolling back.", 400)
 
     # Convert back to db format
     perm_list = []
@@ -219,14 +220,14 @@ async def delete_snapshot_permission(snapshot_id, user):
     curr_perms = snapshot.get_permissions()
 
     if user not in curr_perms.keys():
-        raise KeyError(f"Could not find permission for snapshot with username {user} when deleting permission")
+        raise ResourceError(f"Could not find permission for snapshot with username {user} when deleting permission.", 404)
 
     # Delete permission
     del curr_perms[user]
 
     # Ensure there's still one ADMIN role before finishing.
     if "ADMIN" not in curr_perms.values():
-        raise KeyError(f"Operation would result in snapshot with no users in ADMIN role. Rolling back.")
+        raise ResourceError("Operation would leave the snapshot with no ADMIN-capable user. Rolling back.", 400)
 
     # Convert back to db format
     perm_list = []
