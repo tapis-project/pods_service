@@ -16,6 +16,12 @@ services:
       # Durable audit log lives here (mounted volume below) — the full MCP history
       # survives restarts and powers /audit/history. Unset it to go back to in-memory.
       - BRIDGE_STATE_DIR=/data
+      # OTel: every tool call also becomes a TOOL span in the self-hosted Arize
+      # Phoenix (pods stack `phoenix` on tacc.develop). The exporter attaches the
+      # bridge's current Tapis token, which passes the pods tapis_auth gate for
+      # non-browser clients. Unset to disable tracing.
+      - PHOENIX_OTLP_ENDPOINT=https://phoenix.pods.tacc.develop.tapis.io/v1/traces
+      - PHOENIX_PROJECT_NAME=pods-mcp-bridge
     volumes:
       - ../docs/openapi_v3-pods.yml:/app/pods-openapi.yml:ro
       - pods-mcp-state:/data

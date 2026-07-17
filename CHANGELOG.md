@@ -118,6 +118,7 @@ The edge release. Pods learned to leave the cluster.
 - MCP full create/read/update tool surface (exec, file readers, secret use, all-resource CRUD). Deletes stay gated behind a flag.
 - The no-ADMIN invariant accepts APPROVEDADMIN, so a sole owner can self-promote for private image pulls.
 - **Pod access gate** — share a pod with someone who has no Tapis account: shared passwords (bcrypt) or high-entropy links, secrets shown exactly once, secure httponly cookies, and per-IP rate limiting on redemption.
+- MCP tool spans export to Phoenix over OTLP, so agent activity is traceable alongside everything else.
 
 ### Bug fixes:
 - Permission guards return proper 4xx codes instead of bare errors that mapped to 500.

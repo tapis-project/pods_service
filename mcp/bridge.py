@@ -137,6 +137,86 @@ _open_audit()
 
 
 # ---------------------------------------------------------------------------
+# Optional OTel export — every tool call becomes a TOOL span in Arize Phoenix.
+# Enabled by setting PHOENIX_OTLP_ENDPOINT (e.g. https://phoenix.pods.<base>/v1/traces).
+# The exporter injects the CURRENT Tapis token per request (pods_mcp.TOKEN refreshes),
+# which passes the pods tapis_auth gate for non-browser clients.
+# ---------------------------------------------------------------------------
+_tracer = None
+PHOENIX_OTLP = os.environ.get("PHOENIX_OTLP_ENDPOINT", "")
+if PHOENIX_OTLP:
+    try:
+        from opentelemetry.sdk.resources import Resource
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+
+        _otlp_exporter = OTLPSpanExporter(endpoint=PHOENIX_OTLP)
+
+        def _fresh_token_auth(request):
+            request.headers["X-Tapis-Token"] = pods_mcp.TOKEN or ""
+            return request
+
+        _otlp_exporter._session.auth = _fresh_token_auth
+        _otel_tp = TracerProvider(resource=Resource.create({
+            "service.name": "pods-mcp-bridge",
+            "openinference.project.name": os.environ.get("PHOENIX_PROJECT_NAME", "pods-mcp-bridge"),
+        }))
+        _otel_tp.add_span_processor(BatchSpanProcessor(_otlp_exporter))
+        _tracer = _otel_tp.get_tracer("pods-mcp-bridge")
+        print(f"[otel] exporting tool-call spans to {PHOENIX_OTLP}", flush=True)
+    except Exception as _e:  # noqa: BLE001 — tracing is best-effort, never block the bridge
+        print(f"[otel] tracing disabled ({_e})", flush=True)
+
+
+def _span_start(tool: str, args: dict, kind: str, intent: str, agent: str, source: str):
+    """Open a TOOL span mirroring one audit tool_start (None when tracing is off)."""
+    if _tracer is None:
+        return None
+    try:
+        span = _tracer.start_span(f"tool:{tool}")
+        span.set_attribute("openinference.span.kind", "TOOL")
+        span.set_attribute("tool.name", tool)
+        span.set_attribute("audit.kind", kind)
+        span.set_attribute("audit.source", source)
+        if intent:
+            span.set_attribute("audit.intent", intent)
+        if agent:
+            span.set_attribute("audit.agent", agent)
+        try:
+            span.set_attribute("input.value", json.dumps(args)[:4000])
+        except Exception:  # noqa: BLE001
+            pass
+        return span
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _span_end(span, ok: bool, error=None, summary=None, http=None):
+    """Close a TOOL span with outcome attributes (no-op for None)."""
+    if span is None:
+        return
+    try:
+        from opentelemetry.trace import Status, StatusCode
+        if http and isinstance(http, dict):
+            span.set_attribute("http.status_code", int(http.get("status") or 0))
+        if summary is not None:
+            span.set_attribute("output.value", str(summary)[:2000])
+        if error:
+            span.set_attribute("error.message", str(error)[:2000])
+            span.set_status(Status(StatusCode.ERROR, str(error)[:200]))
+        else:
+            span.set_status(Status(StatusCode.OK))
+    except Exception:  # noqa: BLE001
+        pass
+    finally:
+        try:
+            span.end()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+# ---------------------------------------------------------------------------
 # History aggregation — daily heatmap + batches over the durable log
 # ---------------------------------------------------------------------------
 def _read_events() -> list[dict]:
@@ -308,21 +388,26 @@ class AuditMiddleware(Middleware):
         publish({"type": "tool_start", "id": ev_id, "tool": tool, "args": args,
                  "kind": kind, "intent": intent, "agent": agent,
                  "source": "claude-code", "ts": time.time()})
+        span = _span_start(tool, args, kind, intent, agent, "claude-code")
         t0 = time.perf_counter()
         try:
             result = await call_next(context)
         except Exception as e:  # noqa: BLE001
+            _span_end(span, False, error=str(e))
             publish({"type": "tool_end", "id": ev_id, "tool": tool, "ok": False,
                      "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
                      "kind": kind, "agent": agent, "error": str(e),
                      "source": "claude-code", "ts": time.time()})
             raise
         data = _unwrap(result)
+        summ = _summarize(tool, data)
+        _span_end(span, not getattr(result, "is_error", False),
+                  summary=summ.get("summary"))
         publish({"type": "tool_end", "id": ev_id, "tool": tool,
                  "ok": not getattr(result, "is_error", False),
                  "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
                  "kind": kind, "agent": agent, "source": "claude-code",
-                 "ts": time.time(), **_summarize(tool, data)})
+                 "ts": time.time(), **summ})
         return result
 
 
@@ -340,6 +425,7 @@ async def invoke(tool: str, args: dict, intent: str = "", agent: str = "") -> tu
              "ts": time.time()}
     http_token = _http_calls.set([])
     invoke_token = _via_invoke.set(True)
+    span = _span_start(tool, args or {}, kind, intent, agent, "bridge")
     t0 = time.perf_counter()
     try:
         result = await pods_mcp.mcp.call_tool(tool, args or {})
@@ -356,6 +442,7 @@ async def invoke(tool: str, args: dict, intent: str = "", agent: str = "") -> tu
            "ts": time.time(),
            "http": http[-1] if http else None, "http_calls": len(http),
            "error": err, **({} if not ok else _summarize(tool, data))}
+    _span_end(span, ok, error=err, summary=end.get("summary"), http=end.get("http"))
     start = publish(start)
     end = publish(end)
     return start, end
