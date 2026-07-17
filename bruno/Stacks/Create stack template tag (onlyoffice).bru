@@ -1,0 +1,185 @@
+meta {
+  name: tag: onlyoffice (stack)
+  type: http
+  seq: 21
+}
+
+post {
+  url: {{base_url}}/pods/templates/onlyoffice/tags
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+body:json {
+  {
+    "kind": "stack",
+    "stack_definition": {
+      "restart_policy": "ordered",
+      "secret_map": {
+        "PG_PASSWORD": "${pods:random:32}",
+        "RABBITMQ_PASSWORD": "${pods:random:32}",
+        "JWT_SECRET": "${pods:random:32}"
+      },
+      "members": [
+        {
+          "name": "db",
+          "image": "postgres:16",
+          "description": "Postgres 16 for ONLYOFFICE Document Server (cache/state). local_only.",
+          "ready_condition": "ready",
+          "time_to_stop_default": -1,
+          "networking": {
+            "default": { "protocol": "local_only", "port": 5432, "tapis_auth": false }
+          },
+          "healthchecks": {
+            "readiness": {
+              "exec_command": ["pg_isready", "-U", "onlyoffice", "-d", "onlyoffice"],
+              "initial_delay_seconds": 5,
+              "period_seconds": 5
+            },
+            "networking_requires_ready": false
+          },
+          "environment_variables": {
+            "POSTGRES_USER": "onlyoffice",
+            "POSTGRES_DB": "onlyoffice",
+            "POSTGRES_PASSWORD": "${stack:secrets:PG_PASSWORD}",
+            "PGDATA": "/var/lib/postgresql/data/pgdata"
+          },
+          "resources": { "cpu_request": 250, "cpu_limit": 2000, "mem_request": 256, "mem_limit": 2048 }
+        },
+        {
+          "name": "redis",
+          "image": "redis:7-alpine",
+          "description": "Redis 7 cache for ONLYOFFICE. local_only, no auth (in-cluster only).",
+          "ready_condition": "ready",
+          "time_to_stop_default": -1,
+          "networking": {
+            "default": { "protocol": "local_only", "port": 6379, "tapis_auth": false }
+          },
+          "healthchecks": {
+            "readiness": {
+              "exec_command": ["redis-cli", "ping"],
+              "initial_delay_seconds": 3,
+              "period_seconds": 5
+            },
+            "networking_requires_ready": false
+          },
+          "resources": { "cpu_request": 100, "cpu_limit": 1000, "mem_request": 128, "mem_limit": 1024 }
+        },
+        {
+          "name": "rabbitmq",
+          "image": "rabbitmq:3-management-alpine",
+          "description": "RabbitMQ 3 message broker for ONLYOFFICE conversion jobs. local_only.",
+          "ready_condition": "ready",
+          "time_to_stop_default": -1,
+          "networking": {
+            "default": { "protocol": "local_only", "port": 5672, "tapis_auth": false }
+          },
+          "healthchecks": {
+            "readiness": {
+              "exec_command": ["rabbitmq-diagnostics", "-q", "ping"],
+              "initial_delay_seconds": 15,
+              "period_seconds": 10
+            },
+            "networking_requires_ready": false
+          },
+          "environment_variables": {
+            "RABBITMQ_DEFAULT_USER": "onlyoffice",
+            "RABBITMQ_DEFAULT_PASS": "${stack:secrets:RABBITMQ_PASSWORD}"
+          },
+          "resources": { "cpu_request": 100, "cpu_limit": 1000, "mem_request": 256, "mem_limit": 1024 }
+        },
+        {
+          "name": "docs",
+          "image": "onlyoffice/documentserver:latest",
+          "description": "ONLYOFFICE Document Server wired to the external postgres/redis/rabbitmq. JWT enabled with a shared random secret.",
+          "depends_on": ["db", "redis", "rabbitmq"],
+          "ready_condition": "ready",
+          "time_to_stop_default": -1,
+          "environment_variables": {
+            "DB_TYPE": "postgres",
+            "DB_HOST": "${stack:db:host}",
+            "DB_PORT": "5432",
+            "DB_NAME": "onlyoffice",
+            "DB_USER": "onlyoffice",
+            "DB_PWD": "${stack:secrets:PG_PASSWORD}",
+            "REDIS_SERVER_HOST": "${stack:redis:host}",
+            "REDIS_SERVER_PORT": "6379",
+            "AMQP_URI": "amqp://onlyoffice:${stack:secrets:RABBITMQ_PASSWORD}@${stack:rabbitmq:host}:5672",
+            "JWT_ENABLED": "true",
+            "JWT_HEADER": "Authorization",
+            "JWT_SECRET": "${stack:secrets:JWT_SECRET}"
+          },
+          "networking": {
+            "default": {
+              "protocol": "http",
+              "port": 80,
+              "tapis_auth": true,
+              "tapis_auth_allowed_users": ["*"],
+              "tapis_auth_return_path": "/welcome/",
+              "tapis_ui_uri_redirect": true,
+              "tapis_ui_uri_description": "ONLYOFFICE Document Server - editor API + welcome page"
+            }
+          },
+          "healthchecks": {
+            "readiness": {
+              "http_get_path": "/healthcheck",
+              "http_get_port": 80,
+              "initial_delay_seconds": 20,
+              "period_seconds": 10,
+              "failure_threshold": 6
+            }
+          },
+          "resources": { "cpu_request": 500, "cpu_limit": 4000, "mem_request": 1024, "mem_limit": 6144 },
+          "compute_queue": "default"
+        }
+      ]
+    },
+    "tag": "latest-ha-stack",
+    "commit_message": "ONLYOFFICE Document Server with externalised postgres + redis + rabbitmq, JWT enabled (shared random secret), shared random PG + RabbitMQ passwords. /healthcheck readiness gate."
+  }
+}
+
+docs {
+  ## ONLYOFFICE Document Server - the "feature complete" 4-container stack
+
+  The single-pod tag (`onlyoffice:single`) is convenient but stuffs postgres/redis/rabbitmq inside
+  the one container on ephemeral disk. This stack **externalises all three** so state persists and
+  the Document Server itself can be scaled/restarted independently.
+
+  ### How many containers? Four.
+  | member | image | role |
+  |--------|-------|------|
+  | db       | `postgres:16`               | cache/state store |
+  | redis    | `redis:7-alpine`            | in-memory cache |
+  | rabbitmq | `rabbitmq:3-management-alpine` | conversion job queue |
+  | docs     | `onlyoffice/documentserver` | the editor engine, `depends_on` all three |
+
+  ### Wiring (all by reference, nothing written into pod rows)
+  - `${stack:secrets:PG_PASSWORD}` / `${stack:secrets:RABBITMQ_PASSWORD}` - one random each, shared
+    between the datastore that sets it and `docs` that connects with it.
+  - `${stack:secrets:JWT_SECRET}` - the signing secret embedding apps must use.
+  - `${stack:db:host}` / `${stack:redis:host}` / `${stack:rabbitmq:host}` - compiled to in-cluster
+    DNS at instantiation, so `DB_HOST` / `REDIS_SERVER_HOST` / `AMQP_URI` resolve to real hosts.
+  - `restart_policy: ordered` + each datastore's `ready_condition: ready` means `docs` only starts
+    once postgres, redis and rabbitmq actually accept connections (rabbitmq is the slow one - note
+    its longer `initial_delay`).
+
+  ### Instantiate
+  `POST /pods/stacks/from-template` with
+  `{ "template": "onlyoffice:latest-ha-stack", "stack_id": "myoffice",
+     "pod_ids": { "docs": "myoffice" } }`
+  -> editor at `myoffice.pods.<base>`; db/redis/rabbitmq derive `myofficedb`/`myofficeredis`/`myofficerabbitmq`.
+
+  ### After it's up
+  Read the `JWT_SECRET` back from the stack secret and configure whatever embeds the editor
+  (Nextcloud/Seafile/your app) with the same secret + the `myoffice.pods.<base>` URL.
+
+  > Pin `onlyoffice/documentserver:latest` -> a concrete `8.x.y` tag for production. RabbitMQ uses a
+  > real user (`onlyoffice`) rather than the default `guest`, since `guest` only authenticates from
+  > localhost and would be rejected over the in-cluster hop.
+}

@@ -1,0 +1,200 @@
+meta {
+  name: tag: olmo training (illustrative stack)
+  type: http
+  seq: 25
+}
+
+post {
+  url: {{base_url}}/pods/templates/olmo-training/tags
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+body:json {
+  {
+    "kind": "stack",
+    "stack_definition": {
+      "restart_policy": "ordered",
+      "secret_map": {
+        "MINIO_PASSWORD": "${pods:random:24}"
+      },
+      "members": [
+        {
+          "name": "store",
+          "image": "minio/minio:latest",
+          "description": "[RUNS - browse it] Object store standing in for OLMo's data + checkpoint storage. Real OLMo writes to AWS S3 / GCS / Weka; MinIO is the self-hostable S3-compatible stand-in. Two conceptual buckets: 'data-shards' (tokenized .npy token files from data-prep) and 'checkpoints' (sharded model+optimizer state the trainer writes every N steps). The console (port 9001) lets you literally see the buckets fill up.",
+          "command": ["server", "/data", "--console-address", ":9001"],
+          "ready_condition": "ready",
+          "time_to_stop_default": -1,
+          "environment_variables": {
+            "MINIO_ROOT_USER": "olmo",
+            "MINIO_ROOT_PASSWORD": "${stack:secrets:MINIO_PASSWORD}"
+          },
+          "networking": {
+            "console": {
+              "protocol": "http",
+              "port": 9001,
+              "tapis_auth": true,
+              "tapis_auth_allowed_users": ["*"],
+              "tapis_ui_uri_redirect": true,
+              "tapis_ui_uri_description": "MinIO console - the data-shards + checkpoints buckets"
+            },
+            "s3api": {
+              "protocol": "local_only",
+              "port": 9000,
+              "tapis_auth": false
+            }
+          },
+          "healthchecks": {
+            "readiness": {
+              "http_get_path": "/minio/health/live",
+              "http_get_port": 9000,
+              "initial_delay_seconds": 5,
+              "period_seconds": 10
+            },
+            "networking_requires_ready": false
+          },
+          "resources": { "cpu_request": 250, "cpu_limit": 1000, "mem_request": 256, "mem_limit": 1024 }
+        },
+        {
+          "name": "dataprep",
+          "image": "python:3.11-slim",
+          "description": "[scaffold - real tool: Dolma, 'pip install dolma' / github.com/allenai/dolma] Stage 1: DATA PREP + TOKENIZATION. Takes raw web-scale text (e.g. OLMo-mix-1124 for pretraining, Dolmino-mix-1124 for the high-quality anneal), runs the Dolma toolkit to filter / dedup / tokenize with the GPT-NeoX tokenizer, and writes memory-mapped .npy token shards into the store's data-shards bucket. It's a batch job (no web port). This box idles - exec in to poke around.",
+          "command": ["tail", "-f", "/dev/null"],
+          "depends_on": ["store"],
+          "time_to_stop_default": -1,
+          "resources": { "cpu_request": 250, "cpu_limit": 2000, "mem_request": 256, "mem_limit": 2048 }
+        },
+        {
+          "name": "trainer",
+          "image": "python:3.11-slim",
+          "description": "[scaffold - real image: ghcr.io/allenai/olmo-core (multi-GB CUDA, tested on in-house H100 clusters)] Stage 2: THE TRAINER - the heart of it. Real launch is 'torchrun --nproc_per_node=8 src/scripts/official/OLMo2/OLMo-2-...-train.py': PyTorch FSDP shards the model + optimizer state across GPUs (8x H100 per node, scaled across many nodes for the big runs). Reads a train config (model size, LR schedule, 4096-token sequences, data mix), streams tokenized shards from the store, writes sharded checkpoints back to store/checkpoints every N steps, and streams loss/throughput to Weights & Biases. Resources here are deliberately tiny because this is an idle scaffold - a real OLMo-2 run needs 8x H100 + ~1TB host RAM PER NODE across dozens of nodes.",
+          "command": ["tail", "-f", "/dev/null"],
+          "depends_on": ["store", "dataprep"],
+          "time_to_stop_default": -1,
+          "secret_map": {
+            "WANDB_API_KEY": "${pods:default::?Weights & Biases API key for experiment tracking - real OLMo logs every run to W&B. Leave blank for the scaffold.}"
+          },
+          "environment_variables": {
+            "WANDB_API_KEY": "${pods:secrets:WANDB_API_KEY}",
+            "CHECKPOINT_DIR": "s3://checkpoints/olmo-run-001",
+            "DATA_DIR": "s3://data-shards"
+          },
+          "resources": { "cpu_request": 250, "cpu_limit": 2000, "mem_request": 512, "mem_limit": 3072 }
+        },
+        {
+          "name": "evaluator",
+          "image": "python:3.11-slim",
+          "description": "[scaffold - real tool: OLMES / oe-eval, github.com/allenai/olmes] Stage 3: EVALUATION. Pulls a checkpoint from store/checkpoints and runs the OLMo eval suite - the in-loop downstream tasks the trainer fires periodically (MMLU, ARC, HellaSwag, PIQA, BoolQ, ...) plus the heavier offline OLMES benchmark battery - writing metric JSON back to the store. Batch job, no port. Idles here.",
+          "command": ["tail", "-f", "/dev/null"],
+          "depends_on": ["store", "trainer"],
+          "time_to_stop_default": -1,
+          "resources": { "cpu_request": 250, "cpu_limit": 2000, "mem_request": 256, "mem_limit": 2048 }
+        },
+        {
+          "name": "notebook",
+          "image": "quay.io/jupyter/scipy-notebook:latest",
+          "description": "[RUNS - browse it] Your hands-on window into the pipeline. JupyterLab pre-wired with S3 creds to the store - boto3 / s3fs in to peek at a tokenized .npy shard, crack open a checkpoint, or plot eval metrics. Use this to actually SEE what each upstream box produces.",
+          "arguments": ["--IdentityProvider.token="],
+          "depends_on": ["store"],
+          "ready_condition": "ready",
+          "time_to_stop_default": -1,
+          "environment_variables": {
+            "AWS_ACCESS_KEY_ID": "olmo",
+            "AWS_SECRET_ACCESS_KEY": "${stack:secrets:MINIO_PASSWORD}",
+            "AWS_ENDPOINT_URL": "http://${stack:store:host}:9000",
+            "AWS_S3_ENDPOINT": "http://${stack:store:host}:9000"
+          },
+          "networking": {
+            "default": {
+              "protocol": "http",
+              "port": 8888,
+              "tapis_auth": true,
+              "tapis_auth_allowed_users": ["*"],
+              "tapis_auth_return_path": "/lab",
+              "tapis_ui_uri_redirect": true,
+              "tapis_ui_uri_description": "JupyterLab - inspect shards / checkpoints / metrics in the store"
+            }
+          },
+          "healthchecks": {
+            "readiness": {
+              "tcp_socket_port": 8888,
+              "initial_delay_seconds": 15,
+              "period_seconds": 10,
+              "failure_threshold": 6
+            }
+          },
+          "resources": { "cpu_request": 500, "cpu_limit": 2000, "mem_request": 512, "mem_limit": 4096 }
+        }
+      ]
+    },
+    "tag": "illustrative-scaffold",
+    "commit_message": "Illustrative (NON-functional) OLMo training pipeline: store(MinIO) + dataprep(Dolma) + trainer(OLMo-core/FSDP) + evaluator(OLMES) + notebook(Jupyter). Teaching scaffold - rich pod descriptions map to the real AI2 OLMo stack; compute stages idle on light placeholders."
+  }
+}
+
+docs {
+  ## OLMo training pipeline - an illustrative scaffold (NOT a real training run)
+
+  > **Read this first.** Real OLMo (AI2's fully-open LLM) training runs on **dozens of nodes x 8
+  > H100 GPUs** with petabytes of tokenized data and cloud object storage. You cannot - and this
+  > stack does NOT - actually train OLMo here. This is a **teaching scaffold**: the *shape* of the
+  > real pipeline, with each pod richly described and two pieces that genuinely run so you can
+  > poke around. It's for eyeballing the architecture, not for compute.
+
+  ### The pipeline, left to right
+  ```
+  dataprep (Dolma)            trainer (OLMo-core, FSDP)         evaluator (OLMES)
+  raw web text  --tokenize-->  .npy shards --train on GPUs-->  checkpoints --benchmark-->  metrics
+        \                          |   ^                            |                         /
+         \________ all read/write through ________ store (MinIO, S3-compatible) ___________/
+                                                          ^
+                                          notebook (Jupyter) -- inspect everything
+  ```
+
+  ### Members
+  | member | runs? | image | maps to (real OLMo) |
+  |--------|-------|-------|---------------------|
+  | **store**     | ✅ browse | `minio/minio` | AWS S3 / GCS / Weka - data shards + checkpoints |
+  | **dataprep**  | idle | `python` placeholder | **Dolma** toolkit - tokenize OLMo-mix / Dolmino-mix -> `.npy` |
+  | **trainer**   | idle | `python` placeholder | **`ghcr.io/allenai/olmo-core`** - `torchrun` + FSDP on H100s |
+  | **evaluator** | idle | `python` placeholder | **OLMES / oe-eval** - MMLU/ARC/HellaSwag/... |
+  | **notebook**  | ✅ browse | `quay.io/jupyter/scipy-notebook` | a researcher's inspect shell |
+
+  The three compute stages use light `python:3.11-slim` images that just `tail -f /dev/null`
+  (so the stack is cheap to spin up and stays alive for you to `exec` into) - their **descriptions
+  name the real images, commands, and data** they stand for. The store and notebook are real and
+  reachable.
+
+  ### What's genuinely real here vs. illustrative
+  - **Real:** the data flow (text -> tokenized shards -> train -> checkpoints -> eval -> metrics),
+    the tool/image names, the FSDP/`torchrun` launch shape, W&B tracking, the S3-style storage
+    model, the `${stack:store:host}` wiring that points the notebook at MinIO.
+  - **Illustrative:** the compute pods don't compute; resources are tiny; no GPUs requested (so it
+    actually schedules). Real numbers are in each pod's description.
+
+  ### Instantiate (to walk around it)
+  `POST /pods/stacks/from-template` with
+  `{ "template": "olmo-training:illustrative-scaffold", "stack_id": "olmodemo",
+     "pod_ids": { "notebook": "olmodemo" } }`
+  Then:
+  - open the **MinIO console** (`olmodemodstore...`-ish derived id) and make `data-shards` /
+    `checkpoints` buckets to see the storage model,
+  - open **JupyterLab** (`olmodemo.pods.<base>`) and `boto3`/`s3fs` against `AWS_ENDPOINT_URL`,
+  - `exec` into **dataprep / trainer / evaluator** and read what they'd run.
+
+  ### Where the real thing lives
+  - Training code: `github.com/allenai/OLMo-core` (and the original `github.com/allenai/OLMo`)
+  - Data: `github.com/allenai/dolma` (toolkit) + the OLMo-mix / Dolmino-mix datasets on HF
+  - Eval: `github.com/allenai/olmes`
+  - Runs/dashboards: Weights & Biases (e.g. wandb.ai/OLMo2-1B)
+
+  > If you ever want a *single* real pod to actually explore the OLMo-core image (deps, scripts),
+  > say so and I'll make a one-pod tag on `ghcr.io/allenai/olmo-core` (heavy multi-GB pull, no GPUs
+  > needed just to read it).
+}

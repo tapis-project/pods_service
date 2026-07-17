@@ -1,0 +1,144 @@
+meta {
+  name: tag: gatus postgres (stack)
+  type: http
+  seq: 19
+}
+
+post {
+  url: {{base_url}}/pods/templates/gatus/tags
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+body:json {
+  {
+    "kind": "stack",
+    "stack_definition": {
+      "restart_policy": "ordered",
+      "secret_map": {
+        "PG_PASSWORD": "${pods:random:32}"
+      },
+      "members": [
+        {
+          "name": "db",
+          "image": "postgres:17-alpine",
+          "description": "Postgres 17 for gatus check history. local_only - never exposed outside the cluster.",
+          "ready_condition": "ready",
+          "time_to_stop_default": -1,
+          "networking": {
+            "default": { "protocol": "local_only", "port": 5432, "tapis_auth": false }
+          },
+          "healthchecks": {
+            "readiness": {
+              "exec_command": ["pg_isready", "-U", "gatus", "-d", "gatus"],
+              "initial_delay_seconds": 5,
+              "period_seconds": 5
+            },
+            "networking_requires_ready": false
+          },
+          "environment_variables": {
+            "POSTGRES_DB": "gatus",
+            "POSTGRES_USER": "gatus",
+            "POSTGRES_PASSWORD": "${stack:secrets:PG_PASSWORD}",
+            "PGDATA": "/var/lib/postgresql/data/pgdata"
+          },
+          "resources": { "cpu_request": 250, "cpu_limit": 2000, "mem_request": 256, "mem_limit": 2048 }
+        },
+        {
+          "name": "app",
+          "image": "twinproduction/gatus:v5.36.0",
+          "description": "Gatus v5.36.0 with postgres storage - check history survives app restarts. DB connection is assembled by gatus from GATUS_DB_* env vars.",
+          "depends_on": ["db"],
+          "time_to_stop_default": -1,
+          "environment_variables": {
+            "GATUS_DB_HOST": "${stack:db:host}",
+            "GATUS_DB_PORT": "5432",
+            "GATUS_DB_USER": "gatus",
+            "GATUS_DB_NAME": "gatus",
+            "GATUS_DB_PASSWORD": "${stack:secrets:PG_PASSWORD}"
+          },
+          "volume_mounts": {
+            "/config/config.yaml": {
+              "type": "ephemeral",
+              "read_only": false,
+              "config_permissions": "0644",
+              "config_update_mode": "always",
+              "config_content": "# Gatus - https://github.com/TwiN/gatus\n# ${VAR} is expanded by gatus from this pod's environment_variables at startup.\n# key=value DSN form (not postgres://) because the generated password may contain\n# characters that break URL parsing (@ # %).\n\nstorage:\n  type: postgres\n  path: \"host=${GATUS_DB_HOST} port=${GATUS_DB_PORT} user=${GATUS_DB_USER} password='${GATUS_DB_PASSWORD}' dbname=${GATUS_DB_NAME} sslmode=disable\"\n\nui:\n  title: Gatus | Tapis Pods\n  header: Health Dashboard\n\nendpoints:\n  - name: tapis-pods-api\n    group: tapis\n    url: https://tacc.tapis.io/v3/pods\n    interval: 60s\n    conditions:\n      - \"[STATUS] == any(200, 401)\"\n      - \"[RESPONSE_TIME] < 1500\"\n"
+            }
+          },
+          "networking": {
+            "default": {
+              "protocol": "http",
+              "port": 8080,
+              "tapis_auth": true,
+              "tapis_auth_allowed_users": ["*"],
+              "tapis_auth_return_path": "/"
+            }
+          },
+          "healthchecks": {
+            "readiness": {
+              "http_get_path": "/health",
+              "http_get_port": 8080,
+              "initial_delay_seconds": 5,
+              "period_seconds": 10
+            },
+            "liveness": {
+              "http_get_path": "/health",
+              "http_get_port": 8080,
+              "initial_delay_seconds": 30,
+              "period_seconds": 15
+            },
+            "networking_requires_ready": true
+          }
+        }
+      ]
+    },
+    "tag": "v5.36.0-postgres",
+    "commit_message": "Gatus v5.36.0 + Postgres 17 stack - durable check history, auto-generated shared password."
+  }
+}
+
+docs {
+  ## Gatus + Postgres stack — `v5.36.0-postgres`
+  
+  The persistence answer to the single-pod `v5.36.0` tag: `storage.type: postgres` moves
+  check history into the `db` member, so restarting/upgrading the `app` member keeps it.
+  
+  ### Why the DB connection goes through env vars (not config_content directly)
+  `compile_member_stack_refs` (stack_template_utils.py) only walks `environment_variables`
+  and `secret_map` — `${stack:db:host}` inside `config_content` would NOT be compiled. So the
+  stack refs land in `GATUS_DB_*` env vars, and gatus's own `${VAR}` expansion threads them
+  into `storage.path` at startup. Nice side effect: the resolved password never appears in
+  the rendered ConfigMap, only in the pod's env (k8s secret).
+  
+  ### Why key=value DSN instead of postgres://
+  `${pods:random:32}` draws from `a-zA-Z0-9!@#$%^&*` — `@`, `#`, and `%` corrupt a
+  `postgres://user:pass@host` URL. lib/pq's keyword form with the password single-quoted
+  (`password='...'`) is safe for that charset. (Service-side nicety someday:
+  `${pods:random:alnum:N}`.)
+  
+  ### Ordering / readiness
+  `restart_policy: ordered` + `depends_on: ["db"]` + `ready_condition: ready` ⇒ gatus starts
+  only after `pg_isready -U gatus -d gatus` passes. `networking_requires_ready: true` on app
+  keeps the public URL behind the splash page until `/health` responds.
+  
+  ### Networking
+  `db` uses `local_only` — resolvable in-cluster via `${stack:db:host}` but never routed by
+  Traefik. Only `app` gets a public, tapis_auth'd URL.
+  
+  ### Full durability (db restart too)
+  The db member's filesystem is still ephemeral. To survive *db* pod recreation, add to the
+  db member (template volume mounts require the placeholder form, so instantiation will
+  prompt for a volume ID):
+  
+  ```json
+  "volume_mounts": {
+    "/var/lib/postgresql/data": { "type": "tapisvolume", "source_id": "${:?Tapis volume for Postgres data}" }
+  }
+  ```
+}

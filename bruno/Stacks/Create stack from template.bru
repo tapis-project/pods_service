@@ -1,0 +1,56 @@
+meta {
+  name: stacks: from template
+  type: http
+  seq: 15
+}
+
+post {
+  url: {{base_url}}/pods/stacks/from-template
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+body:json {
+  {
+    "template": "{{template_id}}:queue-v1",
+    "stack_id": "{{stack_id}}",
+    "pod_ids": {
+      "main": "{{stack_id}}"
+    },
+    "secrets": {},
+    "overrides": {
+      "worker": { "resources": { "cpu_limit": 1000, "mem_limit": 2048 } }
+    },
+    "description": "my n8n"
+  }
+}
+
+docs {
+  ## Instantiate a whole stack in one call (PROPOSED — Part D, not yet implemented)
+  
+  Expands the `kind=stack` template into a Stack + its member pods. With `stack_id = myn8n`:
+  
+  | member | resolved pod_id | why |
+  |---|---|---|
+  | db     | `myn8ndb`     | derived `{stack_id}{name}` |
+  | redis  | `myn8nredis`  | derived |
+  | main   | `myn8n`       | **overridden** via `pod_ids` → clean public URL `myn8n.pods.<base>` |
+  | worker | `myn8nworker` | derived |
+  
+  - **`pod_ids`** — per-member override of the public id (precedence: this > member's template
+    `pod_id` > `{stack_id}{name}`). Rename only the pods that matter (the frontend); the rest stay
+    prefixed and collision-free.
+  - **`secrets`** — fill any *required* placeholder secrets the template declared. Empty here
+    because `PG_PASSWORD`/`N8N_ENC_KEY` are `${pods:random:N}` (generated once, shared).
+  - **`overrides`** — per-member field overrides applied on top of the template (here, smaller
+    worker limits).
+  - **Cross-member refs resolve to literals**: `${stack:db:host}` → `pods-<site>-<tenant>-myn8ndb`;
+    `${stack:secrets:PG_PASSWORD}` → the one generated password.
+  - **Atomic**: the whole set is validated up front (names, id charset/length/uniqueness, no
+    cycles, `ready`⇒probe); if any member fails to create, everything already created is rolled back.
+}

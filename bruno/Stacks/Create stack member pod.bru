@@ -1,0 +1,41 @@
+meta {
+  name: stacks: member pod
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{base_url}}/pods
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+body:json {
+  {
+    "pod_id": "myn8nmain",
+    "stack_id": "{{stack_id}}",
+    "image": "n8nio/n8n:latest",
+    "depends_on": ["myn8ndb", "myn8nredis"],
+    "ready_condition": "available",
+    "networking": {
+      "default": { "protocol": "http", "port": 5678 }
+    }
+  }
+}
+
+docs {
+  ## Joining a stack at create time (runtime, no template)
+  - `stack_id` — join an existing stack you have USER+ on. The pod inherits stack permissions.
+  - `depends_on` — **same-stack pod_ids** the runner waits on before starting this pod.
+  - `ready_condition` — `available` (container running) or `ready` (readiness probe passing;
+    requires `healthchecks.readiness`).
+
+  Note: cross-pod **secrets and hosts** here must be wired by hand (a Tapis SK secret referenced
+  in each pod, and the dependency's pod_id as the host). The **stack template** flow automates
+  exactly this — see `Create stack template tag (n8n)`.
+}

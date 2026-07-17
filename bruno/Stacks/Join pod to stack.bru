@@ -1,0 +1,28 @@
+meta {
+  name: Join pod to stack
+  type: http
+  seq: 10
+}
+
+post {
+  url: {{base_url}}/pods/{{pod_id}}/stack
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+body:json {
+  {
+    "stack_id": "{{stack_id}}"
+  }
+}
+
+docs {
+  Adds an existing pod to a stack. Requires pod-ADMIN **and** stack-USER+. Membership is an
+  explicit, gated operation — not a free-form field edit — so a pod can't drift into a stack by
+  accident.
+}

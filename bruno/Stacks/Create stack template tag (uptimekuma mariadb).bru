@@ -1,0 +1,133 @@
+meta {
+  name: tag: uptimekuma mariadb (stack)
+  type: http
+  seq: 18
+}
+
+post {
+  url: {{base_url}}/pods/templates/uptimekuma/tags
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+body:json {
+  {
+    "kind": "stack",
+    "stack_definition": {
+      "restart_policy": "ordered",
+      "secret_map": {
+        "DB_PASSWORD": "${pods:random:32}",
+        "DB_ROOT_PASSWORD": "${pods:random:32}"
+      },
+      "members": [
+        {
+          "name": "db",
+          "image": "mariadb:11",
+          "description": "MariaDB 11 backend for Uptime Kuma. local_only - reachable inside the cluster only.",
+          "ready_condition": "ready",
+          "time_to_stop_default": -1,
+          "networking": {
+            "default": { "protocol": "local_only", "port": 3306, "tapis_auth": false }
+          },
+          "healthchecks": {
+            "readiness": {
+              "exec_command": ["healthcheck.sh", "--connect", "--innodb_initialized"],
+              "initial_delay_seconds": 10,
+              "period_seconds": 5
+            },
+            "networking_requires_ready": false
+          },
+          "environment_variables": {
+            "MARIADB_DATABASE": "kuma",
+            "MARIADB_USER": "kuma",
+            "MARIADB_PASSWORD": "${stack:secrets:DB_PASSWORD}",
+            "MARIADB_ROOT_PASSWORD": "${stack:secrets:DB_ROOT_PASSWORD}"
+          },
+          "resources": { "cpu_request": 250, "cpu_limit": 2000, "mem_request": 256, "mem_limit": 2048 }
+        },
+        {
+          "name": "app",
+          "image": "louislam/uptime-kuma:2.4.0",
+          "description": "Uptime Kuma 2.4.0 wired to the db member via UPTIME_KUMA_DB_* env vars - monitors and history survive app restarts.",
+          "depends_on": ["db"],
+          "time_to_stop_default": -1,
+          "networking": {
+            "default": {
+              "protocol": "http",
+              "port": 3001,
+              "tapis_auth": true,
+              "tapis_auth_allowed_users": ["*"],
+              "tapis_auth_return_path": "/"
+            }
+          },
+          "healthchecks": {
+            "readiness": {
+              "http_get_path": "/",
+              "http_get_port": 3001,
+              "initial_delay_seconds": 10,
+              "period_seconds": 10
+            },
+            "liveness": {
+              "http_get_path": "/",
+              "http_get_port": 3001,
+              "initial_delay_seconds": 90,
+              "period_seconds": 15
+            },
+            "networking_requires_ready": true
+          },
+          "environment_variables": {
+            "UPTIME_KUMA_DB_TYPE": "mariadb",
+            "UPTIME_KUMA_DB_HOSTNAME": "${stack:db:host}",
+            "UPTIME_KUMA_DB_PORT": "3306",
+            "UPTIME_KUMA_DB_NAME": "kuma",
+            "UPTIME_KUMA_DB_USERNAME": "kuma",
+            "UPTIME_KUMA_DB_PASSWORD": "${stack:secrets:DB_PASSWORD}"
+          }
+        }
+      ]
+    },
+    "tag": "2.4.0-mariadb",
+    "commit_message": "Uptime Kuma 2.4.0 + MariaDB 11 stack - monitors/history in the db member, shared auto-generated password."
+  }
+}
+
+docs {
+  ## Uptime Kuma + MariaDB stack — `2.4.0-mariadb`
+  
+  The persistence answer to the single-pod `2.4.0` tag: Kuma 2.x natively supports an
+  external MariaDB via `UPTIME_KUMA_DB_*` env vars (server/setup-database.js). With state in
+  the `db` member, restarting/upgrading the `app` member keeps all monitors and history.
+  
+  ### How the shared password flows
+  `${stack:secrets:DB_PASSWORD}` in app env is normalized at instantiation into the member's
+  own `secret_map` + a `${pods:secrets:DB_PASSWORD}` env ref; the value resolves at pod start
+  from the stack's secret_map. The literal password is never persisted on either pod row.
+  `${pods:random:32}` generates once per stack — both members see the same value.
+  
+  ### Ordering / readiness
+  `restart_policy: ordered` + `depends_on: ["db"]` + `ready_condition: ready` on db ⇒ Kuma
+  only starts after `healthcheck.sh --connect --innodb_initialized` passes (ships in the
+  mariadb image). App liveness has a generous 90s initial delay — first boot runs DB
+  migrations.
+  
+  ### Networking
+  `db` uses `local_only` — resolvable in-cluster via `${stack:db:host}`
+  (`pods-<site>-<tenant>-<pod_id>`) but never exposed through Traefik. Only `app` gets a
+  public, tapis_auth'd URL.
+  
+  ### Full durability (db restart too)
+  The db member's filesystem is still ephemeral. To survive *db* pod recreation, add to the
+  db member (template volume mounts require the placeholder form, so instantiation will
+  prompt for a volume ID):
+  
+  ```json
+  "volume_mounts": {
+    "/var/lib/mysql": { "type": "tapisvolume", "source_id": "${:?Tapis volume for MariaDB data}" }
+  }
+  ```
+}

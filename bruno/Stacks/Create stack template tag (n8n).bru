@@ -1,0 +1,132 @@
+meta {
+  name: tag: n8n (stack)
+  type: http
+  seq: 14
+}
+
+post {
+  url: {{base_url}}/pods/templates/crab/tags
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+body:json {
+  {
+    "kind": "stack",
+    "stack_definition": {
+      "restart_policy": "ordered",
+      "secret_map": {
+        "PG_PASSWORD": "${pods:random:32}",
+        "N8N_ENC_KEY": "${pods:random:48}"
+      },
+      "members": [
+        {
+          "name": "db",
+          "image": "postgis/postgis:17-3.5",
+          "ready_condition": "ready",
+          "networking": {
+            "default": { "protocol": "postgres", "port": 5432, "tapis_auth": false }
+          },
+          "healthchecks": {
+            "readiness": { "exec_command": ["pg_isready", "-U", "n8n"] }
+          },
+          "environment_variables": {
+            "POSTGRES_USER": "n8n",
+            "POSTGRES_DB": "n8n",
+            "POSTGRES_PASSWORD": "${stack:secrets:PG_PASSWORD}"
+          },
+          "resources": { "cpu_request": 250, "cpu_limit": 2000, "mem_request": 256, "mem_limit": 3072 }
+        },
+        {
+          "name": "redis",
+          "image": "redis:7",
+          "ready_condition": "ready",
+          "networking": {
+            "default": { "protocol": "tcp", "port": 6379, "tapis_auth": false }
+          },
+          "healthchecks": {
+            "readiness": { "tcp_socket_port": 6379 }
+          }
+        },
+        {
+          "name": "main",
+          "image": "n8nio/n8n:latest",
+          "depends_on": ["db", "redis"],
+          "networking": {
+            "default": { "protocol": "http", "port": 5678 }
+          },
+          "environment_variables": {
+            "DB_TYPE": "postgresdb",
+            "DB_POSTGRESDB_HOST": "${stack:db:host}",
+            "DB_POSTGRESDB_PORT": "5432",
+            "DB_POSTGRESDB_USER": "n8n",
+            "DB_POSTGRESDB_DATABASE": "n8n",
+            "DB_POSTGRESDB_PASSWORD": "${stack:secrets:PG_PASSWORD}",
+            "EXECUTIONS_MODE": "queue",
+            "QUEUE_BULL_REDIS_HOST": "${stack:redis:host}",
+            "N8N_ENCRYPTION_KEY": "${stack:secrets:N8N_ENC_KEY}"
+          }
+        },
+        {
+          "name": "worker",
+          "image": "n8nio/n8n:latest",
+          "command": ["n8n", "worker"],
+          "depends_on": ["db", "redis", "main"],
+          "environment_variables": {
+            "DB_TYPE": "postgresdb",
+            "DB_POSTGRESDB_HOST": "${stack:db:host}",
+            "DB_POSTGRESDB_PORT": "5432",
+            "DB_POSTGRESDB_USER": "n8n",
+            "DB_POSTGRESDB_DATABASE": "n8n",
+            "DB_POSTGRESDB_PASSWORD": "${stack:secrets:PG_PASSWORD}",
+            "EXECUTIONS_MODE": "queue",
+            "QUEUE_BULL_REDIS_HOST": "${stack:redis:host}",
+            "N8N_ENCRYPTION_KEY": "${stack:secrets:N8N_ENC_KEY}"
+          }
+        }
+      ]
+    },
+    "description": "n8n in queue mode - postgres + redis + a `main` UI/webhook pod and a `worker` execution pod. Guests reach only `main`; workflows run on `worker`.\n\n<!--guide-->\n## Using your n8n stack\n\n### 1. First run - create the owner account\nOpen the **main** pod URL. There's no Tapis auth in front of n8n here, so the first screen asks you to create the n8n **owner account** (email + password). That account gates everything after - set a strong password.\n\n### 2. The queue architecture (why 4 pods)\n- **main** - editor UI + REST API + webhook receiver (:5678).\n- **worker** - runs workflows pulled off the Redis queue (`EXECUTIONS_MODE=queue`). Add more worker pods to scale executions; the UI stays responsive.\n- **db** (postgres) - stores workflows, execution history, and credentials (encrypted with `N8N_ENC_KEY`).\n- **redis** - the Bull queue between main and worker.\n\n### 3. Build your first workflow\n1. **Workflows -> Add workflow.**\n2. Drop a trigger (**Manual**, **Schedule**, or **Webhook**).\n3. Add nodes (HTTP Request, Set, IF, Code ...), wire them, hit **Execute Workflow** to test.\n4. Toggle **Active** (top-right) so live triggers fire - active executions run on the `worker`.\n\n### 4. Credentials\nCredentials you add in the UI are encrypted at rest with `N8N_ENC_KEY` (auto-generated once, shared by main + worker). **Do not rotate that secret** or existing saved credentials become unreadable.\n\n### 5. Webhooks behind the proxy\nWebhook + trigger URLs derive from the main pod's public address. If they render wrong through Traefik, set `WEBHOOK_URL=https://<main-pod-id>.pods.<tenant-base>/` on the **main** member and restart.\n\n### 6. Durability\nWorkflows/history live in postgres, so restarting main/worker loses nothing. But the `db` pod's filesystem is ephemeral here - for true durability add a tapisvolume to the db member at `/var/lib/postgresql/data` (same pattern as the gatus / uptimekuma tags).\n",
+    "tag": "queue-v1",
+    "commit_message": "n8n queue mode: postgres + redis + main + worker"
+  }
+}
+
+docs {
+  ## Stack template — one tag defines four pods (PROPOSED — Part D, not yet implemented)
+  
+  `kind: "stack"` + `stack_definition` makes a single template tag describe a whole stack. This
+  is the multi-pod evolution of the existing single-pod `postgres` + `n8n` templates.
+  
+  **Members are addressed internally by `name`** (`db`, `redis`, `main`, `worker`). Those names —
+  not pod_ids — are what `depends_on` and `${stack:…}` references use, so they're stable no matter
+  what the pods are finally named.
+  
+  ### New authoring syntax (compiled away at instantiation)
+  - `stack_definition.secret_map` — **shared, stack-scoped secrets**. `${pods:random:32}`
+    generates the value **once** and the same literal is injected into every member that
+    references it. Solves the postgres case: `db`, `main`, and `worker` all get the *same*
+    `PG_PASSWORD`; `main`/`worker` share one `N8N_ENC_KEY`. Only placeholders / `${pods:random:N}`
+    are allowed here — never an embedded user secret (a shared template stays generic).
+  - `${stack:secrets:KEY}` — a member references a shared stack secret (compiles to the member's
+    own `${pods:secrets:KEY}` + a `secret_map` entry).
+  - `${stack:<member>:host}` — the in-cluster DNS name of another member
+    (`pods-<site>-<tenant>-<that member's pod_id>`). Use `host` for internal deps (db/redis); `url`
+    for the public address.
+  
+  ### Naming
+  No `pod_id` is set on any member here, so each derives `{stack_id}{name}` at instantiation
+  (`myn8ndb`, `myn8nredis`, …). Override individual ones in the **Create stack from template**
+  request — e.g. give `main` the clean public id `myn8n` — without touching this template.
+  
+  ### Ordering
+  `restart_policy: "ordered"` + `depends_on` ⇒ start `db`+`redis` (wait for their readiness
+  probes) → `main` → `worker`; stop in reverse.
+  
+  > Set the `template_id` env var first (e.g. create a template `n8nstack`, then post this tag).
+}

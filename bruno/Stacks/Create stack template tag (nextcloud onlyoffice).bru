@@ -1,0 +1,219 @@
+meta {
+  name: tag: nextcloud + onlyoffice (stack)
+  type: http
+  seq: 24
+}
+
+post {
+  url: {{base_url}}/pods/templates/nextcloud/tags
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+body:json {
+  {
+    "kind": "stack",
+    "stack_definition": {
+      "restart_policy": "ordered",
+      "secret_map": {
+        "PG_PASSWORD": "${pods:random:32}",
+        "NC_ADMIN_PASSWORD": "${pods:random:24}",
+        "JWT_SECRET": "${pods:random:32}"
+      },
+      "members": [
+        {
+          "name": "db",
+          "image": "postgres:16",
+          "description": "Postgres 16 for Nextcloud (file metadata, shares, accounts). local_only.",
+          "ready_condition": "ready",
+          "time_to_stop_default": -1,
+          "networking": {
+            "default": { "protocol": "local_only", "port": 5432, "tapis_auth": false }
+          },
+          "healthchecks": {
+            "readiness": {
+              "exec_command": ["pg_isready", "-U", "nextcloud", "-d", "nextcloud"],
+              "initial_delay_seconds": 5,
+              "period_seconds": 5
+            },
+            "networking_requires_ready": false
+          },
+          "environment_variables": {
+            "POSTGRES_USER": "nextcloud",
+            "POSTGRES_DB": "nextcloud",
+            "POSTGRES_PASSWORD": "${stack:secrets:PG_PASSWORD}",
+            "PGDATA": "/var/lib/postgresql/data/pgdata"
+          },
+          "resources": { "cpu_request": 250, "cpu_limit": 2000, "mem_request": 256, "mem_limit": 2048 }
+        },
+        {
+          "name": "redis",
+          "image": "redis:7-alpine",
+          "description": "Redis 7 for Nextcloud file locking + cache (transactional locking, big perf win). local_only.",
+          "ready_condition": "ready",
+          "time_to_stop_default": -1,
+          "networking": {
+            "default": { "protocol": "local_only", "port": 6379, "tapis_auth": false }
+          },
+          "healthchecks": {
+            "readiness": {
+              "exec_command": ["redis-cli", "ping"],
+              "initial_delay_seconds": 3,
+              "period_seconds": 5
+            },
+            "networking_requires_ready": false
+          },
+          "resources": { "cpu_request": 100, "cpu_limit": 1000, "mem_request": 128, "mem_limit": 1024 }
+        },
+        {
+          "name": "documentserver",
+          "image": "onlyoffice/documentserver:latest",
+          "description": "ONLYOFFICE Document Server - the editor engine (same UI as the desktop app). tapis_auth FALSE on purpose: the browser must load the editor assets/websocket directly. Protected by JWT instead.",
+          "ready_condition": "ready",
+          "time_to_stop_default": -1,
+          "environment_variables": {
+            "JWT_ENABLED": "true",
+            "JWT_HEADER": "Authorization",
+            "JWT_SECRET": "${stack:secrets:JWT_SECRET}"
+          },
+          "networking": {
+            "default": {
+              "protocol": "http",
+              "port": 80,
+              "tapis_auth": false,
+              "tapis_ui_uri_redirect": false,
+              "tapis_ui_uri_description": "ONLYOFFICE Document Server engine (embedded by Nextcloud - not browsed directly)"
+            }
+          },
+          "healthchecks": {
+            "readiness": {
+              "http_get_path": "/healthcheck",
+              "http_get_port": 80,
+              "initial_delay_seconds": 20,
+              "period_seconds": 10,
+              "failure_threshold": 6
+            }
+          },
+          "resources": { "cpu_request": 500, "cpu_limit": 4000, "mem_request": 1024, "mem_limit": 6144 }
+        },
+        {
+          "name": "nextcloud",
+          "image": "nextcloud:stable-apache",
+          "description": "Nextcloud - the files UI + accounts. Auto-installs admin + DB + redis from env (skips the install wizard). The ONLYOFFICE connector still needs a one-time occ config - see docs.",
+          "depends_on": ["db", "redis"],
+          "ready_condition": "ready",
+          "time_to_stop_default": -1,
+          "environment_variables": {
+            "POSTGRES_HOST": "${stack:db:host}",
+            "POSTGRES_DB": "nextcloud",
+            "POSTGRES_USER": "nextcloud",
+            "POSTGRES_PASSWORD": "${stack:secrets:PG_PASSWORD}",
+            "REDIS_HOST": "${stack:redis:host}",
+            "REDIS_HOST_PORT": "6379",
+            "NEXTCLOUD_ADMIN_USER": "admin",
+            "NEXTCLOUD_ADMIN_PASSWORD": "${stack:secrets:NC_ADMIN_PASSWORD}",
+            "NEXTCLOUD_TRUSTED_DOMAINS": "${:?Public Nextcloud domain, e.g. mynextcloud.pods.<base> (no scheme)}",
+            "OVERWRITEPROTOCOL": "https",
+            "TRUSTED_PROXIES": "10.0.0.0/8"
+          },
+          "networking": {
+            "default": {
+              "protocol": "http",
+              "port": 80,
+              "tapis_auth": true,
+              "tapis_auth_allowed_users": ["*"],
+              "tapis_auth_return_path": "/",
+              "tapis_ui_uri_redirect": true,
+              "tapis_ui_uri_description": "Nextcloud - files UI; open a docx/pptx/xlsx to edit it in the ONLYOFFICE editor"
+            }
+          },
+          "healthchecks": {
+            "readiness": {
+              "http_get_path": "/status.php",
+              "http_get_port": 80,
+              "initial_delay_seconds": 30,
+              "period_seconds": 15,
+              "failure_threshold": 8
+            }
+          },
+          "resources": { "cpu_request": 500, "cpu_limit": 4000, "mem_request": 1024, "mem_limit": 4096 },
+          "compute_queue": "default"
+        }
+      ]
+    },
+    "tag": "latest-stack",
+    "commit_message": "Nextcloud (files UI) + ONLYOFFICE Document Server (editor engine) + postgres + redis. Nextcloud auto-setup via env; Document Server public-but-JWT for browser embed; shared random PG/admin/JWT secrets. Connector wiring documented."
+  }
+}
+
+docs {
+  ## Nextcloud + ONLYOFFICE Document Server - in-browser docx/pptx/xlsx editing
+
+  The pairing that gives you "the desktop ONLYOFFICE editor, in a browser, with a file manager":
+  **Nextcloud** is the files UI + accounts; **Document Server** is the same editor engine as the
+  desktop app, embedded by Nextcloud's ONLYOFFICE connector. Best self-hosted option for **pptx**
+  fidelity (OnlyOffice beats Collabora/LibreOffice on MS formats).
+
+  ### Four containers
+  | member | image | role | tapis_auth |
+  |--------|-------|------|-----------|
+  | db             | `postgres:16`               | Nextcloud metadata/accounts | n/a (local_only) |
+  | redis          | `redis:7-alpine`            | file locking + cache | n/a (local_only) |
+  | documentserver | `onlyoffice/documentserver` | editor engine | **false** (see below) |
+  | nextcloud      | `nextcloud:stable-apache`   | files UI, `depends_on: [db, redis]` | **true** |
+
+  ### Why Document Server is `tapis_auth: false`
+  The user's **browser** loads the editor JS/CSS and opens a websocket **directly** to Document
+  Server - a tapis-auth gate would block those iframe/asset/ws requests and the editor would never
+  render. So Document Server is public but protected by **JWT** (`JWT_ENABLED`): no one can open a
+  document without a Nextcloud-signed config. The server-to-server callback (Document Server saving
+  back to Nextcloud) goes over **in-cluster DNS**, which bypasses Traefik/tapis-auth entirely.
+
+  ### Low-wizard parts (already automated via env)
+  - Nextcloud **skips its install wizard**: admin user, postgres, and redis are all set from env.
+    Read the generated admin password from the `NC_ADMIN_PASSWORD` stack secret.
+  - `OVERWRITEPROTOCOL=https` + `TRUSTED_PROXIES` so links/redirects are correct behind Traefik.
+
+  ### The one wizardy step: wire the connector (one-time, via the Pods exec tab on the nextcloud pod)
+  With `stack_id = mydocs` (so nextcloud=`mydocs`, documentserver=`mydocsdocumentserver`):
+  ```
+  php occ app:install onlyoffice
+  php occ config:app:set onlyoffice DocumentServerUrl         --value="https://mydocsdocumentserver.pods.<base>/"
+  php occ config:app:set onlyoffice DocumentServerInternalUrl --value="http://pods-<site>-<tenant>-mydocsdocumentserver/"
+  php occ config:app:set onlyoffice StorageUrl               --value="http://pods-<site>-<tenant>-mydocs/"
+  php occ config:app:set onlyoffice jwt_secret              --value="<the JWT_SECRET stack secret>"
+  ```
+  - `DocumentServerUrl` = **public** DS url (browser-facing).
+  - `DocumentServerInternalUrl` = in-cluster DS host (Nextcloud -> DS, no auth hop).
+  - `StorageUrl` = in-cluster Nextcloud host (DS -> Nextcloud callback, bypasses tapis-auth).
+  - `jwt_secret` = the shared `JWT_SECRET` (must match what Document Server runs with).
+
+  ### Instantiate
+  `POST /pods/stacks/from-template` with
+  `{ "template": "nextcloud:latest-stack", "stack_id": "mydocs",
+     "pod_ids": { "nextcloud": "mydocs" },
+     "overrides": { "nextcloud": { "environment_variables": {
+       "NEXTCLOUD_TRUSTED_DOMAINS": "mydocs.pods.<base>" } } } }`
+  -> Nextcloud at `mydocs.pods.<base>`; run the occ block; then upload/open a `.pptx` and it opens
+  in the ONLYOFFICE editor.
+
+  ### Persistence (do before real use)
+  Base tag is ephemeral for a frictionless first run. **Two stores matter:** postgres (`db`) and
+  **Nextcloud's `/var/www/html` (apps + user files)**. Add tapisvolumes (prompt for ids at
+  instantiation) to both:
+  ```json
+  // db member
+  "volume_mounts": { "/var/lib/postgresql/data": { "type": "tapisvolume", "source_id": "${:?Tapis volume for Nextcloud postgres}" } }
+  // nextcloud member
+  "volume_mounts": { "/var/www/html": { "type": "tapisvolume", "source_id": "${:?Tapis volume for Nextcloud data}" } }
+  ```
+
+  > Heavier than Docmost and has the connector step above - that's the trade for real Office-file +
+  > slides editing. Pin both `:latest` images for production. If you want zero connector wiring and
+  > don't need MS-format fidelity, DocSpace (all-in-one) is the alternative - bigger footprint.
+}

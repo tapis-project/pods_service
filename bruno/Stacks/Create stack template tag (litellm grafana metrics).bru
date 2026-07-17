@@ -1,0 +1,250 @@
+meta {
+  name: tag: litellm + grafana metrics (stack)
+  type: http
+  seq: 27
+}
+
+post {
+  url: {{base_url}}/pods/templates/litellm/tags
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+body:json {
+  {
+    "kind": "stack",
+    "stack_definition": {
+      "restart_policy": "ordered",
+      "secret_map": {
+        "PG_PASSWORD": "${pods:random:32}",
+        "MASTER_KEY": "${pods:random:32}",
+        "GRAFANA_PASSWORD": "${pods:random:20}"
+      },
+      "members": [
+        {
+          "name": "db",
+          "image": "postgres:16",
+          "description": "Postgres 16 - litellm spend/usage store (tokens + cost per key/user/team/model). local_only.",
+          "ready_condition": "ready",
+          "time_to_stop_default": -1,
+          "networking": {
+            "default": { "protocol": "postgres", "port": 5432, "tapis_auth": false }
+          },
+          "healthchecks": {
+            "readiness": { "exec_command": ["pg_isready", "-U", "litellm"] }
+          },
+          "environment_variables": {
+            "POSTGRES_USER": "litellm",
+            "POSTGRES_DB": "litellm",
+            "POSTGRES_PASSWORD": "${stack:secrets:PG_PASSWORD}"
+          },
+          "resources": { "cpu_request": 250, "cpu_limit": 1000, "mem_request": 256, "mem_limit": 1024 }
+        },
+        {
+          "name": "litellm",
+          "image": "ghcr.io/berriai/litellm:v1.81.3-stable",
+          "description": "litellm proxy, Prometheus /metrics ON (callbacks: prometheus) + DB spend tracking. Prometheus scrapes its /metrics in-cluster (no key needed); LITELLM_MASTER_KEY unlocks /key/generate + spend APIs.",
+          "depends_on": ["db"],
+          "ready_condition": "ready",
+          "time_to_stop_default": -1,
+          "environment_variables": {
+            "STORE_MODEL_IN_DB": "True",
+            "DATABASE_URL": "postgresql://litellm:${stack:secrets:PG_PASSWORD}@${stack:db:host}:5432/litellm?sslmode=disable",
+            "CONFIG_FILE_PATH": "/app/litellm.config.yaml",
+            "LITELLM_MASTER_KEY": "sk-${stack:secrets:MASTER_KEY}"
+          },
+          "secret_map": {
+            "API_TOKEN_1": "${:?API token for ai.tejas.tacc.utexas.edu}"
+          },
+          "volume_mounts": {
+            "/app/litellm.config.yaml": {
+              "type": "ephemeral",
+              "read_only": true,
+              "config_content": "model_list:\n  - model_name: llama4-17b\n    litellm_params:\n      api_base: \"https://ai.tejas.tacc.utexas.edu\"\n      api_key: ${pods:secrets:API_TOKEN_1}\n      model: openai/Llama-4-Maverick-17B-128E-Instruct\n  - model_name: qwen3-32b\n    litellm_params:\n      api_base: \"https://ai.tejas.tacc.utexas.edu\"\n      api_key: ${pods:secrets:API_TOKEN_1}\n      model: openai/Qwen3-32B\n  - model_name: whisper-large-v3\n    litellm_params:\n      api_base: \"https://ai.tejas.tacc.utexas.edu\"\n      api_key: ${pods:secrets:API_TOKEN_1}\n      model: openai/Whisper-Large-v3\n  - model_name: llama3.3-70b-instruct\n    litellm_params:\n      api_base: \"https://ai.tejas.tacc.utexas.edu\"\n      api_key: ${pods:secrets:API_TOKEN_1}\n      model: openai/Meta-Llama-3.3-70B-Instruct\n  - model_name: mistral-7b-instruct\n    litellm_params:\n      api_base: \"https://ai.tejas.tacc.utexas.edu\"\n      api_key: ${pods:secrets:API_TOKEN_1}\n      model: openai/E5-Mistral-7B-Instruct\n    model_info:\n      mode: embedding\nlitellm_settings:\n  drop_params: true\n  callbacks: [\"prometheus\"]\n  enable_end_user_cost_tracking_prometheus_only: true\ngeneral_settings:\n  store_model_in_db: true\n",
+              "config_permissions": "0644",
+              "config_filename": "litellm.config.yaml",
+              "config_update_mode": "always"
+            }
+          },
+          "networking": {
+            "default": {
+              "protocol": "http",
+              "port": 4000,
+              "tapis_auth": true,
+              "tapis_auth_allowed_users": ["*"],
+              "tapis_auth_return_path": "/",
+              "tapis_ui_uri_redirect": true,
+              "tapis_ui_uri_description": "litellm proxy - swagger, /metrics, /global/spend/report"
+            }
+          },
+          "healthchecks": {
+            "readiness": {
+              "http_get_path": "/health/readiness",
+              "http_get_port": 4000,
+              "initial_delay_seconds": 15,
+              "period_seconds": 10,
+              "failure_threshold": 6
+            }
+          },
+          "resources": { "cpu_request": 250, "cpu_limit": 1000, "mem_request": 256, "mem_limit": 1024 },
+          "compute_queue": "default"
+        },
+        {
+          "name": "prometheus",
+          "image": "prom/prometheus:latest",
+          "description": "Prometheus - polls litellm /metrics every 30s and stores the time series. Scrape target is wired automatically: PROM_TARGET secret = ${stack:litellm:host}:4000 (stack-ref compiled), then interpolated into prometheus.yml. local_only - Grafana is the face.",
+          "depends_on": ["litellm"],
+          "ready_condition": "ready",
+          "time_to_stop_default": -1,
+          "secret_map": {
+            "PROM_TARGET": "${stack:litellm:host}:4000"
+          },
+          "volume_mounts": {
+            "/etc/prometheus/prometheus.yml": {
+              "type": "ephemeral",
+              "read_only": true,
+              "config_content": "global:\n  scrape_interval: 30s\nscrape_configs:\n  - job_name: litellm\n    metrics_path: /metrics\n    static_configs:\n      - targets: [\"${pods:secrets:PROM_TARGET}\"]\n",
+              "config_permissions": "0644",
+              "config_filename": "prometheus.yml",
+              "config_update_mode": "always"
+            }
+          },
+          "networking": {
+            "default": { "protocol": "local_only", "port": 9090, "tapis_auth": false }
+          },
+          "healthchecks": {
+            "readiness": {
+              "http_get_path": "/-/ready",
+              "http_get_port": 9090,
+              "initial_delay_seconds": 10,
+              "period_seconds": 10
+            },
+            "networking_requires_ready": false
+          },
+          "resources": { "cpu_request": 100, "cpu_limit": 1000, "mem_request": 256, "mem_limit": 1536 }
+        },
+        {
+          "name": "grafana",
+          "image": "grafana/grafana:latest",
+          "description": "Grafana - the dashboard. Datasource (Prometheus) + a litellm usage dashboard are auto-provisioned. PROM_URL secret = http://${stack:prometheus:host}:9090 (stack-ref compiled) is interpolated into the datasource. Login: admin / the GRAFANA_PASSWORD stack secret.",
+          "depends_on": ["prometheus"],
+          "ready_condition": "ready",
+          "time_to_stop_default": -1,
+          "secret_map": {
+            "PROM_URL": "http://${stack:prometheus:host}:9090"
+          },
+          "environment_variables": {
+            "GF_SECURITY_ADMIN_USER": "admin",
+            "GF_SECURITY_ADMIN_PASSWORD": "${stack:secrets:GRAFANA_PASSWORD}",
+            "GF_USERS_ALLOW_SIGN_UP": "false"
+          },
+          "volume_mounts": {
+            "/etc/grafana/provisioning/datasources/ds.yaml": {
+              "type": "ephemeral",
+              "read_only": true,
+              "config_content": "apiVersion: 1\ndatasources:\n  - name: Prometheus\n    uid: prometheus\n    type: prometheus\n    access: proxy\n    url: ${pods:secrets:PROM_URL}\n    isDefault: true\n",
+              "config_permissions": "0644",
+              "config_filename": "ds.yaml",
+              "config_update_mode": "always"
+            },
+            "/etc/grafana/provisioning/dashboards/provider.yaml": {
+              "type": "ephemeral",
+              "read_only": true,
+              "config_content": "apiVersion: 1\nproviders:\n  - name: litellm\n    type: file\n    options:\n      path: /var/lib/grafana/dashboards\n",
+              "config_permissions": "0644",
+              "config_filename": "provider.yaml",
+              "config_update_mode": "always"
+            },
+            "/var/lib/grafana/dashboards/litellm.json": {
+              "type": "ephemeral",
+              "read_only": true,
+              "config_content": "{\"title\":\"litellm usage\",\"uid\":\"litellm-usage\",\"schemaVersion\":39,\"time\":{\"from\":\"now-6h\",\"to\":\"now\"},\"panels\":[{\"type\":\"timeseries\",\"title\":\"Tokens by model\",\"datasource\":{\"type\":\"prometheus\",\"uid\":\"prometheus\"},\"gridPos\":{\"h\":8,\"w\":12,\"x\":0,\"y\":0},\"targets\":[{\"expr\":\"sum by(model)(litellm_total_tokens_metric)\",\"legendFormat\":\"{{model}}\"}]},{\"type\":\"timeseries\",\"title\":\"Tokens by user\",\"datasource\":{\"type\":\"prometheus\",\"uid\":\"prometheus\"},\"gridPos\":{\"h\":8,\"w\":12,\"x\":12,\"y\":0},\"targets\":[{\"expr\":\"sum by(user)(litellm_total_tokens_metric)\",\"legendFormat\":\"{{user}}\"}]},{\"type\":\"timeseries\",\"title\":\"Spend by model\",\"datasource\":{\"type\":\"prometheus\",\"uid\":\"prometheus\"},\"gridPos\":{\"h\":8,\"w\":12,\"x\":0,\"y\":8},\"targets\":[{\"expr\":\"sum by(model)(litellm_spend_metric)\",\"legendFormat\":\"{{model}}\"}]}]}",
+              "config_permissions": "0644",
+              "config_filename": "litellm.json",
+              "config_update_mode": "always"
+            }
+          },
+          "networking": {
+            "default": {
+              "protocol": "http",
+              "port": 3000,
+              "tapis_auth": true,
+              "tapis_auth_allowed_users": ["*"],
+              "tapis_auth_return_path": "/",
+              "tapis_ui_uri_redirect": true,
+              "tapis_ui_uri_description": "Grafana - litellm usage dashboard (tokens/spend by model + user)"
+            }
+          },
+          "healthchecks": {
+            "readiness": {
+              "http_get_path": "/api/health",
+              "http_get_port": 3000,
+              "initial_delay_seconds": 15,
+              "period_seconds": 10,
+              "failure_threshold": 6
+            }
+          },
+          "resources": { "cpu_request": 100, "cpu_limit": 1000, "mem_request": 256, "mem_limit": 1024 }
+        }
+      ]
+    },
+    "tag": "v1.81.3-metrics-grafana-stack",
+    "commit_message": "litellm usage observability stack: db + litellm(prometheus callback, master key) + prometheus(auto-scrapes litellm /metrics via secret-wired target) + grafana(auto-provisioned datasource + tokens/spend-by-model/user dashboard). Login admin / GRAFANA_PASSWORD secret."
+  }
+}
+
+docs {
+  ## litellm + prometheus + grafana - turnkey usage dashboard
+  
+  The visualized version of `tag: litellm metrics (stack)`. Four members, all wired up:
+  
+  ```
+  db(postgres) <- litellm(/metrics) <- prometheus(scrape 30s) <- grafana(dashboard)
+  ```
+  
+  | member | role | exposed |
+  |--------|------|---------|
+  | db         | litellm spend store | local_only |
+  | litellm    | proxy, `/metrics` on 4000 | tapis-auth |
+  | prometheus | scrapes litellm `/metrics`, stores TS | local_only |
+  | grafana    | **the dashboard** | tapis-auth |
+  
+  ### How the caveat is handled (auto-wiring)
+  `${stack:<member>:host}` does NOT compile inside `config_content`, but it DOES compile inside
+  `secret_map`. So cross-member hosts are routed through secrets:
+  - prometheus `secret_map.PROM_TARGET = ${stack:litellm:host}:4000` -> referenced in
+    `prometheus.yml` as `${pods:secrets:PROM_TARGET}` (the pods service interpolates it before mount).
+  - grafana `secret_map.PROM_URL = http://${stack:prometheus:host}:9090` -> referenced in the
+    datasource provisioning the same way.
+  No placeholders to fill - it just resolves.
+  
+  ### Login credentials
+  - **Grafana:** user `admin`, password = the **`GRAFANA_PASSWORD`** stack secret (random, read it
+    back from the stack's secrets after instantiation). You also pass tapis-auth first (the pod is
+    gated), then Grafana's own login - two layers.
+  - **litellm:** the **`MASTER_KEY`** stack secret (used as `sk-<MASTER_KEY>`) for `/key/generate`
+    and the spend APIs.
+  
+  ### Instantiate
+  `POST /pods/stacks/from-template` with
+  `{ "template": "litellm:v1.81.3-metrics-grafana-stack", "stack_id": "myllmobs",
+     "pod_ids": { "grafana": "myllmobs" } }`
+  -> Grafana at `myllmobs.pods.<base>` with a **"litellm usage"** dashboard (tokens by model, tokens
+  by user, spend by model) already loaded. Generate per-user keys (`/key/generate` with the master
+  key), send traffic, and the panels fill in. Scrape interval is 30s, so allow a minute.
+  
+  ### Minimal by design
+  Prometheus has no public UI (local_only) and the dashboard is 3 panels - extend it in Grafana
+  (it's editable) or add panels/queries against the `litellm_*` metrics. `model_list` is empty;
+  add your providers via the litellm UI/DB (`store_model_in_db: true`).
+  
+  > Couldn't deploy this live - the wiring follows the documented secret_map->config_content path
+  > and the JSON validates, but confirm on first run that Prometheus shows the litellm target UP
+  > (exec into prometheus: `wget -qO- localhost:9090/api/v1/targets`) and that Grafana's datasource
+  > is green. Pin all `:latest` images for production.
+}

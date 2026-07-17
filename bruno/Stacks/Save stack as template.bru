@@ -1,0 +1,35 @@
+meta {
+  name: Save stack as template
+  type: http
+  seq: 16
+}
+
+post {
+  url: {{base_url}}/pods/stacks/{{stack_id}}/save_as_template
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+body:json {
+  {
+    "template_id": "{{template_id}}",
+    "tag": "snapshot-v1",
+    "commit_message": "snapshot of my running n8n stack"
+  }
+}
+
+docs {
+  ## Snapshot a live stack back into a reusable template (PROPOSED — Part D, not yet implemented)
+
+  Writes a new `kind=stack` tag from the running stack:
+  - member pod_ids → member `name`s (the `{stack_id}` prefix is stripped where present);
+  - `depends_on` pod_ids → member names;
+  - **secret values are NOT copied** — concrete `${secret:…}` / generated passwords become
+    `${:?…}` required placeholders, so a shared template never leaks credentials (same hygiene as
+    the existing `save_as_template` for single pods).
+}

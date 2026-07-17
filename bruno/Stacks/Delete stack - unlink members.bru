@@ -1,0 +1,21 @@
+meta {
+  name: Delete stack - unlink members
+  type: http
+  seq: 12
+}
+
+delete {
+  url: {{base_url}}/pods/stacks/{{stack_id}}?force=true
+  body: none
+  auth: none
+}
+
+headers {
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+docs {
+  Deletes the **stack only**; member pods survive and are detached (their `stack_id`/`depends_on`
+  cleared). A plain delete (no `?force`) refuses while members exist, so you never lose pods by
+  accident.
+}

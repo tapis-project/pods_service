@@ -1,0 +1,20 @@
+meta {
+  name: Get stack
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{base_url}}/pods/stacks/{{stack_id}}
+  body: none
+  auth: none
+}
+
+headers {
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+docs {
+  Returns the stack plus its member pods (in dependency order) and `action_logs` — the timeline
+  of actions and per-pod release/ready transitions.
+}

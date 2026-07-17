@@ -1,0 +1,19 @@
+meta {
+  name: List stacks
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{base_url}}/pods/stacks
+  body: none
+  auth: none
+}
+
+headers {
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+docs {
+  Lists every stack you have READ+ on, each with its cached aggregate `status` (e.g. `3/4 AVAILABLE`).
+}
