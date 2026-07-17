@@ -1,0 +1,105 @@
+meta {
+  name: tag: xyops (stats)
+  type: http
+  seq: 25
+}
+
+post {
+  url: {{base_url}}/pods/templates/xyops/tags
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+body:json {
+  {
+    "kind": "pod",
+    "pod_definition": {
+      "image": "pixlcore/xyops:latest",
+      "description": "xyOps server - built-in quick_monitors track host CPU/mem/disk stats out of the box. SECRET_KEY is a stable per-pod random so encrypted data survives restarts; /opt/xyops/data is ephemeral (use a tapisvolume for durable history).",
+      "time_to_stop_default": -1,
+      "environment_variables": {
+        "XYOPS_secret_key": "${pods:secrets:XYOPS_SECRET_KEY}"
+      },
+      "secret_map": {
+        "XYOPS_SECRET_KEY": "${pods:random:32}"
+      },
+      "volume_mounts": {
+        "/opt/xyops/data": {
+          "type": "ephemeral",
+          "read_only": false
+        }
+      },
+      "networking": {
+        "default": {
+          "protocol": "http",
+          "port": 5522,
+          "tapis_auth": true,
+          "tapis_auth_allowed_users": [
+            "*"
+          ],
+          "tapis_auth_return_path": "/"
+        }
+      },
+      "healthchecks": {
+        "readiness": {
+          "http_get_path": "/",
+          "http_get_port": 5522,
+          "initial_delay_seconds": 15,
+          "period_seconds": 10
+        },
+        "liveness": {
+          "http_get_path": "/",
+          "http_get_port": 5522,
+          "initial_delay_seconds": 45,
+          "period_seconds": 15
+        },
+        "networking_requires_ready": true
+      },
+      "resources": {
+        "cpu_request": 500,
+        "cpu_limit": 2000,
+        "mem_request": 512,
+        "mem_limit": 2048
+      }
+    },
+    "tag": "stats",
+    "commit_message": "xyOps server - built-in quick_monitors (host stats), stable secret_key, ephemeral data.",
+    "description": "Simple xyOps tag: a running server that monitors host CPU/mem/disk via built-in quick_monitors. Add your own HTTP/uptime monitors in the UI."
+  }
+}
+
+docs {
+  ## xyOps — `stats` (simple)
+  
+  A bare, working xyOps server. Because xyOps ships **built-in `quick_monitors`** (host CPU / memory
+  / disk), this tag is monitoring server stats the moment it's up — the analog of gatus's "green out
+  of the box" example.
+  
+  ### How it's configured (no config file)
+  xyOps uses the pixl-server framework: settings come from `XYOPS_<key>` **environment overrides**, so
+  there's nothing to mount. `XYOPS_secret_key` is set to a **stable per-pod random** (`${pods:random:32}`)
+  so encrypted storage stays readable across restarts.
+  
+  ### ⚠️ Unlike gatus, monitors/workflows are NOT declarative
+  xyOps stores events/monitors/workflows in its **SQLite store under `/opt/xyops/data`** — they are
+  created in the **web UI or via the API**, not embedded in config. So this tag can't "seed" a monitor
+  the way the gatus config.yaml does. What you get: a running server + built-in host stats. Add a
+  simple HTTP check in the UI: **Monitors → add → URL monitor** (or a "Shell" event running `curl -fsS
+  https://example.com`), 1–5 min interval.
+  
+  ### Access / first login
+  Web UI on `:5522` behind tapis_auth. xyOps initializes its store on first boot (default admin per the
+  app's setup — see docs.xyops.io). If links/redirects look wrong through the proxy, set
+  `XYOPS_base_app_url=https://<pod_id>.pods.<tenant-base>` (override at instantiation).
+  
+  ### Durability
+  `/opt/xyops/data` is **ephemeral** (wiped on restart). For durable monitors/history, mount a volume:
+  ```json
+  "volume_mounts": { "/opt/xyops/data": { "type": "tapisvolume", "source_id": "${:?Tapis volume for xyOps data}" } }
+  ```
+}

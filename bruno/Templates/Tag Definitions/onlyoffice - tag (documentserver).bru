@@ -1,0 +1,75 @@
+meta {
+  name: tag: onlyoffice (documentserver)
+  type: http
+  seq: 16
+}
+
+post {
+  url: {{base_url}}/pods/templates/onlyoffice/tags
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+body:json {
+  {
+    "pod_definition": {
+      "description": "ONLYOFFICE Document Server (single-container). Bundles its own postgres/redis/rabbitmq inside the image - good for a personal editor or proof of concept. For HA/scale use the onlyoffice stack tag instead.",
+      "image": "onlyoffice/documentserver:latest",
+      "secret_map": {
+        "JWT_SECRET": "${pods:random:32}"
+      },
+      "environment_variables": {
+        "JWT_ENABLED": "true",
+        "JWT_HEADER": "Authorization",
+        "JWT_SECRET": "${pods:secrets:JWT_SECRET}"
+      },
+      "networking": {
+        "default": {
+          "protocol": "http",
+          "port": 80,
+          "tapis_auth": true,
+          "tapis_auth_allowed_users": ["*"],
+          "tapis_auth_return_path": "/welcome/",
+          "tapis_ui_uri_redirect": true,
+          "tapis_ui_uri_description": "ONLYOFFICE Document Server - editor API + welcome page"
+        }
+      },
+      "resources": { "cpu_request": 500, "cpu_limit": 4000, "mem_request": 1024, "mem_limit": 6144 },
+      "time_to_stop_default": -1
+    },
+    "tag": "single",
+    "commit_message": "ONLYOFFICE Document Server single-container with JWT enabled (random secret). Editor API on port 80, tapis-auth gated."
+  }
+}
+
+docs {
+  ## ONLYOFFICE Document Server - single container
+  
+  **Self-hostable: yes.** `onlyoffice/documentserver` is the open-source Document Server (Docs
+  Community Edition) - the editing engine that renders/edits docx, xlsx, pptx and PDFs and that
+  apps like Nextcloud/Seafile embed. This single-pod tag runs the all-in-one image, which carries
+  its **own postgres, redis and rabbitmq inside the container**, so **1 container** is enough to
+  get going.
+  
+  ### JWT is mandatory in modern builds
+  The editor refuses unsigned requests by default. `JWT_ENABLED=true` + a random `JWT_SECRET` is
+  set here; whatever app embeds the editor (or your API calls) must sign its config payloads with
+  that same secret. Read it back from the pod's secret to configure the embedding app.
+  
+  ### When to move to the stack
+  The bundled datastores live on the container's ephemeral disk and don't scale. For persistence
+  across restarts and for multiple Document Server replicas, use
+  `Create stack template tag (onlyoffice)` which externalises postgres + redis + rabbitmq.
+  
+  ### Instantiate
+  `POST /pods` with `{ "template": "onlyoffice:single", "pod_id": "myoffice" }`
+  -> editor at `myoffice.pods.<base>` (the `/welcome/` page confirms it's up).
+  
+  > It's an *editing engine*, not a file manager - point a document app at it, or drive the
+  > conversion/editor API directly. Big memory footprint; give it room (4-6 GB).
+}

@@ -1,0 +1,141 @@
+meta {
+  name: tag: peekaping (sqlite)
+  type: http
+  seq: 17
+}
+
+post {
+  url: {{base_url}}/pods/templates/peekaping/tags
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+body:json {
+  {
+    "kind": "pod",
+    "pod_definition": {
+      "image": "0xfurai/peekaping-bundle-sqlite:latest",
+      "description": "Peekaping - modern uptime monitoring + status pages (Uptime Kuma alternative, Go + React). Bundle image. LOGIN: there is NO default admin/admin - the first visit runs a registration wizard where YOU set the admin email + password; whatever you enter on first run becomes your login. State is ephemeral (SQLite at /app/data, wiped on restart) - mount a tapisvolume there to persist (lose the volume and you re-register from scratch).",
+      "time_to_stop_default": -1,
+      "environment_variables": {
+        "DB_NAME": "/app/data/peekaping.db"
+      },
+      "networking": {
+        "default": {
+          "protocol": "http",
+          "port": 8383,
+          "tapis_auth": true,
+          "tapis_auth_allowed_users": ["*"],
+          "tapis_auth_return_path": "/",
+          "tapis_ui_uri_redirect": true,
+          "tapis_ui_uri_description": "Peekaping - uptime monitoring dashboard + status pages"
+        }
+      },
+      "healthchecks": {
+        "readiness": {
+          "http_get_path": "/",
+          "http_get_port": 8383,
+          "initial_delay_seconds": 10,
+          "period_seconds": 10,
+          "failure_threshold": 6
+        },
+        "liveness": {
+          "http_get_path": "/",
+          "http_get_port": 8383,
+          "initial_delay_seconds": 30,
+          "period_seconds": 15
+        },
+        "networking_requires_ready": true
+      },
+      "resources": { "cpu_request": 250, "cpu_limit": 2000, "mem_request": 256, "mem_limit": 2048 }
+    },
+    "tag": "bundle-sqlite",
+    "commit_message": "Peekaping bundle-sqlite single pod (server+web+redis in one image), port 8383, SQLite at /app/data. Ephemeral; health probes gate the URL. Persist via a tapisvolume at /app/data."
+  }
+}
+
+docs {
+  ## Peekaping - single pod (SQLite bundle)
+  
+  Self-hosted uptime monitoring + status pages, an **Uptime Kuma alternative** (API-first, Go +
+  React). This uses the **bundle** image `0xfurai/peekaping-bundle-sqlite`, which packs the server,
+  the web UI, and Redis into one container - so it runs as a single pod with no datastore members
+  to wire. (Peekaping also ships postgres/mongodb bundle variants for an external DB.)
+  
+  - **Port 8383** - web UI + API on the same port.
+  - **`DB_NAME=/app/data/peekaping.db`** - SQLite path inside the image's data dir (matches the
+    maintainer's quickstart). `/app/data` exists and is writable in the bundle image (same shape as
+    the Uptime Kuma image), so there's no missing-dir / `SQLITE_CANTOPEN` trap here.
+  - **First run** - open the URL and the setup wizard creates your admin account.
+  - **Health probes** on `/` gate the Tapis URL behind the "service starting" splash until ready.
+  
+  ### Login credentials
+  **There are no default credentials** (no `admin/admin`). Like Uptime Kuma, Peekaping's first page
+  is a one-time **registration wizard**: you type the admin email + password yourself, and that
+  becomes your login from then on. So the "default creds" are simply *whatever you set on first
+  visit*. Two consequences:
+  - If the pod is **ephemeral** (no volume) and restarts, the SQLite DB is wiped -> you'll get the
+    registration wizard again and set a fresh admin. Mount the `/app/data` tapisvolume (below) to
+    keep your account + history.
+  - Forgot the password? With SQLite there's no email reset out of the box - easiest fix is to wipe
+    `/app/data` (or the volume) and re-register.
+  
+  ### Sign in vs sign up
+  On a **fresh** (empty-DB) instance the first screen is **registration** - you create the admin.
+  If you only see a **Sign in** screen, look for a "Create account / Register" link and **go
+  through signup once** (that becomes your login). If there's no signup link and you can't sign in,
+  the DB already has an account - since this pod is ephemeral, **restart it** (wipes `/app/data`) to
+  get the registration screen again. (You also pass Tapis-auth *before* reaching Peekaping's own
+  screen, since the pod is gated.)
+
+  ### Monitors can't be pre-seeded - add them in the UI (verified specs)
+  Peekaping stores monitors in its DB and creates them via the UI/API - there's **no config-file
+  way to bake them into this tag** (gatus is the config-driven one if you want pre-seeded checks).
+  After you log in, add these (status codes below are real, just probed):
+
+  | monitor | type | target | expect |
+  |---------|------|--------|--------|
+  | Tapis Systems | HTTP | `https://tacc.tapis.io/v3/systems/healthcheck` | **200** |
+  | Tapis Apps    | HTTP | `https://tacc.tapis.io/v3/apps/healthcheck`    | **200** |
+  | Tapis Jobs    | HTTP | `https://tacc.tapis.io/v3/jobs/healthcheck`    | **200** |
+  | Tapis Pods    | HTTP | `https://tacc.tapis.io/v3/pods/healthcheck`    | **400** (tenant-resolution quirk on direct calls - it returning 400 still means the service answered; or monitor the pods ingress below) |
+  | This Peekaping | HTTP | `https://peek.pods.tacc.tapis.io/` | **302** |
+  | **Exotic: Keyword** | HTTP + keyword | `https://tacc.tapis.io/v3/systems/healthcheck` | body contains `TAPIS_HEALTHY` (content-aware, not just status) |
+
+  **Big gotcha for monitoring your own pods:** a tapis-auth-gated pod returns **302** (redirect to
+  the OAuth login) to any monitor, because Peekaping has no Tapis JWT. So `peek.pods...` -> 302
+  proves *ingress + auth gating are up*, not the app behind them. To truly health-check a gated app,
+  monitor it **in-cluster** (internal DNS, bypasses Traefik) or expose a public unauthenticated
+  health path. The Tapis `*/healthcheck` endpoints are public (hence real 200s) - that's why they
+  work from an external monitor.
+
+  Other exotic types Peekaping supports if you want them: **Push** (heartbeat - your cron pings
+  Peekaping; alert if it goes silent), **TCP** (`tacc.tapis.io:443`), **DNS**, **Ping**.
+
+  ### Instantiate
+  `POST /pods` with `{ "template": "peekaping:bundle-sqlite", "pod_id": "mypeekaping" }`
+  -> dashboard at `mypeekaping.pods.<base>`.
+  
+  ### Persistence (ephemeral by default)
+  All monitors/history live in SQLite at `/app/data` on the container filesystem - **wiped on
+  restart**. To keep them, mount a tapisvolume there (prompts for a volume id at instantiation):
+  ```json
+  "volume_mounts": {
+    "/app/data": { "type": "tapisvolume", "source_id": "${:?Tapis volume for Peekaping SQLite data}" }
+  }
+  ```
+  
+  ### Want a "real" external DB instead of SQLite?
+  Swap the image for the postgres bundle (`0xfurai/peekaping-bundle-postgres`) and add a postgres
+  member as a stack - say the word and I'll build a `peekaping postgres` stack tag mirroring the
+  gatus/uptimekuma postgres stacks (shared random password, `${stack:db:host}` wiring).
+  
+  > Pin `0xfurai/peekaping-bundle-sqlite:latest` to a concrete version for production. The bundled
+  > Redis is internal to the container (the repo's compose files only add a separate Redis +
+  > asynqmon dashboard for development - not needed for this single-pod bundle).
+}

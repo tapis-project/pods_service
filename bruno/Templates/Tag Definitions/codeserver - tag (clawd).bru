@@ -1,0 +1,97 @@
+meta {
+  name: tag: codeserver (clawd)
+  type: http
+  seq: 11
+}
+
+post {
+  url: {{base_url}}/pods/templates/codeserver/tags
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+body:json {
+  {
+    "pod_definition": {
+      "description": "VS Code + OpenClaw, PREBUILT image (gitea.pods.tacc.develop.tapis.io/cgarcia/clawd) - openclaw + openclaw-vscode + node/python baked in, so it starts in seconds. OpenClaw's MCP client is wired to the Tapis Pods *bridge* (audited MCP at PODS_MCP_URL) with a Tapis token auto-refreshed from client creds. Terminal auto-launches openclaw. Copilot disabled. Image is PRIVATE - pulled via TAPIS_PODS_IMAGEPULLSECRET.",
+      "image": "gitea.pods.tacc.develop.tapis.io/cgarcia/clawd:latest",
+      "secret_map": {
+        "LITELLM_API_KEY":    "${:?LiteLLM or OpenWebUI API key}",
+        "LITELLM_BASE_URL":   "${:?LiteLLM or OpenWebUI base URL - e.g. https://litellm.your-host.tapis.io/v1}",
+        "AI_MODEL":           "${pods:default:gpt-4o:?Model name as defined in LiteLLM/OpenWebUI}",
+        "TAPIS_BASE_URL":     "${pods:default:https://tacc.develop.tapis.io:?Tapis tenant base URL for the MCP token}",
+        "PODS_MCP_URL":       "${pods:default:https://podsmcp.pods.tacc.develop.tapis.io/mcp:?Hosted Pods MCP BRIDGE endpoint (…/mcp). ASSUMED live - point at your deployed bridge}",
+        "TAPIS_CLIENT_BASIC": "${:?base64(client_id:client_key) for auto-refreshing the MCP Tapis token}",
+        "TAPIS_USERNAME":     "${:?Tapis username the MCP acts as}",
+        "TAPIS_PASSWORD":     "${:?Tapis password for TAPIS_USERNAME}",
+        "IMAGE_PULL_USER":    "${pods:default:cgarcia:?Tapis username whose Kubernetes image-pull secret pulls the private clawd image - needs APPROVEDADMIN}",
+        "GITHUB_TOKEN":       "${pods:default:none:?GitHub personal access token - skip for public repos}",
+        "GIT_REPO":           "${pods:default:none:?Git repo URL to clone on first start}",
+        "GIT_USER_NAME":      "${pods:default:none:?Full name for git commits}",
+        "GIT_USER_EMAIL":     "${pods:default:none:?Email for git commits}",
+        "TZ":                 "${pods:default:Etc/UTC:?Timezone - e.g. America/Chicago}"
+      },
+      "environment_variables": {
+        "PUID":              "1000",
+        "PGID":              "1000",
+        "TZ":                "${pods:secrets:TZ}",
+        "DEFAULT_WORKSPACE": "/config/workspace",
+        "LITELLM_API_KEY":   "${pods:secrets:LITELLM_API_KEY}",
+        "LITELLM_BASE_URL":  "${pods:secrets:LITELLM_BASE_URL}",
+        "OPENAI_API_KEY":    "${pods:secrets:LITELLM_API_KEY}",
+        "OPENAI_BASE_URL":   "${pods:secrets:LITELLM_BASE_URL}",
+        "AI_MODEL":          "${pods:secrets:AI_MODEL}",
+        "TAPIS_BASE_URL":    "${pods:secrets:TAPIS_BASE_URL}",
+        "PODS_MCP_URL":      "${pods:secrets:PODS_MCP_URL}",
+        "TAPIS_CLIENT_BASIC":"${pods:secrets:TAPIS_CLIENT_BASIC}",
+        "TAPIS_USERNAME":    "${pods:secrets:TAPIS_USERNAME}",
+        "TAPIS_PASSWORD":    "${pods:secrets:TAPIS_PASSWORD}",
+        "GITHUB_TOKEN":      "${pods:secrets:GITHUB_TOKEN}",
+        "GIT_REPO":          "${pods:secrets:GIT_REPO}",
+        "GIT_USER_NAME":     "${pods:secrets:GIT_USER_NAME}",
+        "GIT_USER_EMAIL":    "${pods:secrets:GIT_USER_EMAIL}",
+        "TAPIS_PODS_IMAGEPULLSECRET": "${pods:secrets:IMAGE_PULL_USER}"
+      },
+      "networking": {
+        "default": { "protocol": "http", "port": 8443, "tapis_auth": true, "tapis_auth_allowed_users": ["*"] }
+      },
+      "resources": { "cpu_request": 1000, "cpu_limit": 8000, "mem_request": 2048, "mem_limit": 10000 },
+      "time_to_stop_default": 7200
+    },
+    "tag": "clawd",
+    "commit_message": "clawd -> prebuilt Gitea image (fast start); OpenClaw MCP wired to the Tapis Pods bridge with client-cred token auto-refresh; private image via TAPIS_PODS_IMAGEPULLSECRET"
+  }
+}
+
+docs {
+  ## codeserver `clawd` — prebuilt + MCP-through-the-bridge
+
+  ### Why it's fast now
+  All the slow install work (openclaw, openclaw-vscode, node, python, curl/jq) is baked into the
+  image `scripts/Dockerfile.clawd`, so the pod only does per-instance config at boot
+  (`scripts/clawd-init.sh`). Build + push once:
+  ```
+  docker build -f scripts/Dockerfile.clawd -t gitea.pods.tacc.develop.tapis.io/cgarcia/clawd:latest .
+  docker push  gitea.pods.tacc.develop.tapis.io/cgarcia/clawd:latest
+  ```
+  The image is PRIVATE — the pod pulls it via `TAPIS_PODS_IMAGEPULLSECRET` (set to `IMAGE_PULL_USER`,
+  who needs the `tapis-pods-imagepullsecret-<user>` k8s secret + APPROVEDADMIN).
+
+  ### Tapis logic via the BRIDGE (policy: always through the bridge)
+  OpenClaw's MCP client is pointed at `PODS_MCP_URL` — the audited Pods MCP the bridge mounts at
+  `/mcp` (`bridge.py`: `app.mount("/mcp", pods_mcp.mcp.http_app())`). Not a direct `fastmcp run`.
+  `clawd-init.sh` mints a Tapis token from `TAPIS_CLIENT_BASIC` + username/password and refreshes it
+  (~50 min loop, ahead of the ~4h expiry), rewriting `~/.openclaw/openclaw.json`'s MCP header.
+
+  ### Assumptions to verify (flagged in clawd-init.sh)
+  1. **PODS_MCP_URL is live on the internet.** The bridge currently runs locally only — deploy it as
+     its own Pods stack and point this at its `…/mcp` URL. Default host is a placeholder.
+  2. **OpenClaw MCP config key** = `mcp.servers.<name> = {type:http,url,headers}`. Verify against
+     OpenClaw's docs; adjust `write_mcp()` in clawd-init.sh if the key differs.
+  3. **Bridge forwards X-Tapis-Token per request** (README TODO). Assumed live per the deploy plan.
+}

@@ -1,0 +1,96 @@
+meta {
+  name: tag: gatus (v5.36.0)
+  type: http
+  seq: 13
+}
+
+post {
+  url: {{base_url}}/pods/templates/gatus/tags
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+body:json {
+  {
+    "kind": "pod",
+    "pod_definition": {
+      "image": "twinproduction/gatus:v5.36.0",
+      "description": "Edit /config/config.yaml to add endpoints. ${pods:secrets:KEY} in the config is interpolated from this pod's secret_map at start; ${VAR} is expanded by gatus itself from environment_variables. Storage is in-memory (ephemeral) - check history is wiped on restart; use the v5.36.0-postgres stack tag for durable history.",
+      "time_to_stop_default": -1,
+      "environment_variables": {},
+      "secret_map": {
+        "MONITOR_BEARER_TOKEN": "${pods:default::?Optional bearer token for authenticated endpoint checks - referenced from config.yaml. Leave empty if unused.}"
+      },
+      "volume_mounts": {
+        "/config/config.yaml": {
+          "type": "ephemeral",
+          "read_only": false,
+          "config_permissions": "0644",
+          "config_update_mode": "always",
+          "config_content": "# Gatus - https://github.com/TwiN/gatus\n# ${VAR} is expanded by gatus from this pod's environment_variables at startup.\n# ${pods:secrets:KEY} is interpolated by the Pods service from secret_map before mount.\n\nstorage:\n  type: memory  # in-memory, ephemeral - history wiped on restart (use the postgres stack tag to persist)\n\nui:\n  title: Gatus | Tapis Pods\n  header: Health Dashboard\n\nendpoints:\n  - name: tapis-pods-api\n    group: tapis\n    url: https://tacc.tapis.io/v3/pods\n    interval: 60s\n    conditions:\n      - \"[STATUS] == any(200, 401)\"\n      - \"[RESPONSE_TIME] < 1500\"\n\n  # Authenticated check example - set the MONITOR_BEARER_TOKEN secret on the pod to use:\n  # - name: private-api\n  #   group: tapis\n  #   url: https://my-service.example/health\n  #   headers:\n  #     Authorization: \"Bearer ${pods:secrets:MONITOR_BEARER_TOKEN}\"\n  #   conditions:\n  #     - \"[STATUS] == 200\"\n"
+        }
+      },
+      "networking": {
+        "default": {
+          "protocol": "http",
+          "port": 8080,
+          "tapis_auth": true,
+          "tapis_auth_allowed_users": ["*"],
+          "tapis_auth_return_path": "/"
+        }
+      },
+      "healthchecks": {
+        "readiness": {
+          "http_get_path": "/health",
+          "http_get_port": 8080,
+          "initial_delay_seconds": 5,
+          "period_seconds": 10
+        },
+        "liveness": {
+          "http_get_path": "/health",
+          "http_get_port": 8080,
+          "initial_delay_seconds": 30,
+          "period_seconds": 15
+        },
+        "networking_requires_ready": true
+      }
+    },
+    "tag": "v5.36.0",
+    "commit_message": "v5.36.0 - health probes, placeholder-documented config, optional bearer-token secret.",
+    "description": "Gatus v5.36.0 - declarative endpoint monitoring. Config is /config/config.yaml (config_update_mode=always, so edits apply on restart). Check history is in-memory and lost on restart - use the v5.36.0-postgres stack tag for durable history."
+  }
+}
+
+docs {
+  ## Gatus v5.36.0 — single pod
+  
+  Declarative endpoint monitoring. Bumps the old `v5.34.0` tag and adds:
+  
+  - **Health probes** on gatus's own `GET /health`.
+  - **Optional secret placeholder** `MONITOR_BEARER_TOKEN` (`${pods:default::?...}` — empty
+    default, so instantiation never blocks on it). It is referenced from a commented example
+    in config.yaml for authenticated endpoint checks.
+  - **Self-documenting config** explaining the two interpolation layers.
+  
+  ### Two interpolation layers (they stack)
+  1. **Pods service** replaces `${pods:secrets:KEY}` in `config_content` from the pod's
+     resolved `secret_map` *before* the file is mounted (`interpolate_config_content`).
+  2. **Gatus** expands `${ENV_VAR}` from environment at startup — so any `${VAR}` you put in
+     the config resolves from `environment_variables` (e.g. add a `DATA_DIR` env and reference
+     `${DATA_DIR}` if you wire SQLite to a mounted volume).
+  
+  ### Why `storage.type: memory` (not sqlite)
+  `twinproduction/gatus` is a `FROM scratch` image — it has **no writable data directory**, and
+  SQLite won't create a missing parent dir, so `type: sqlite` with `path: ./data/data.db` panics
+  with `unable to open database file (14)`. In-memory storage avoids that and is the right fit for
+  this *ephemeral* tag. To use SQLite you'd have to mount a writable `tapisvolume` for the db dir.
+  
+  ### Persistence caveat
+  In-memory history is wiped on restart. For durable history use the `v5.36.0-postgres` **stack**
+  tag (Stacks → "tag: gatus postgres (stack)").
+}

@@ -1,0 +1,72 @@
+meta {
+  name: tag: codeserver (openclaw)
+  type: http
+  seq: 10
+}
+
+post {
+  url: {{base_url}}/pods/templates/codeserver/tags
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+body:json {
+  {
+    "pod_definition": {
+      "description": "VS Code with OpenClaw (openclaw.ai - terminal AI agent) + openclaw-vscode extension. Connects to LiteLLM via LITELLM_API_KEY/LITELLM_BASE_URL. Models auto-discovered from LiteLLM /models endpoint via litellm/* provider wildcard - no hardcoded model list needed. OpenClaw gateway at ws://127.0.0.1:18789 for VS Code extension. Terminal auto-launches openclaw. Copilot disabled.",
+      "image": "lscr.io/linuxserver/code-server",
+      "command": [
+        "/bin/bash",
+        "-c",
+        "if ! command -v openclaw >/dev/null 2>&1; then curl -fsSL https://openclaw.ai/install.sh | bash 2>/dev/null || npm install -g openclaw@latest 2>/dev/null; fi; mkdir -p ~/.openclaw /config/data/User; openclaw onboard --non-interactive --auth-choice litellm-api-key --litellm-api-key \"$LITELLM_API_KEY\" --custom-base-url \"$LITELLM_BASE_URL\" 2>/dev/null || true; python3 -c \"import json,os;cfg={'models':{'mode':'merge','providers':{'litellm':{'baseUrl':os.environ.get('LITELLM_BASE_URL',''),'apiKey':os.environ.get('LITELLM_API_KEY',''),'api':'openai-completions','models':[]}}},'agents':{'defaults':{'models':{'litellm/*':{}}}}};open(os.path.expanduser('~/.openclaw/openclaw.json'),'w').write(json.dumps(cfg))\"; printf 'LITELLM_API_KEY=%s\\nOPENAI_API_KEY=%s\\nOPENAI_BASE_URL=%s\\n' \"$LITELLM_API_KEY\" \"$LITELLM_API_KEY\" \"$LITELLM_BASE_URL\" > ~/.openclaw/.env && chmod 600 ~/.openclaw/.env; [ ! -f /config/data/User/settings.json ] && printf '{\"workbench.colorTheme\":\"Default Dark+\",\"workbench.startupEditor\":\"terminal\",\"terminal.integrated.defaultProfile.linux\":\"openclaw\",\"terminal.integrated.profiles.linux\":{\"openclaw\":{\"path\":\"/bin/bash\",\"args\":[\"-c\",\"openclaw; exec bash -i\"]}}}' > /config/data/User/settings.json; code-server --install-extension OwenLiuyuxuan.openclaw-vscode 2>/dev/null || true; code-server --uninstall-extension GitHub.copilot 2>/dev/null || true; code-server --uninstall-extension GitHub.copilot-chat 2>/dev/null || true; if [ -n \"$GITHUB_TOKEN\" ] && [ \"$GITHUB_TOKEN\" != \"none\" ]; then git config --global credential.helper store && echo \"https://oauth2:$GITHUB_TOKEN@github.com\" > /root/.git-credentials; fi; [ -n \"$GIT_USER_NAME\" ] && [ \"$GIT_USER_NAME\" != \"none\" ] && git config --global user.name \"$GIT_USER_NAME\"; [ -n \"$GIT_USER_EMAIL\" ] && [ \"$GIT_USER_EMAIL\" != \"none\" ] && git config --global user.email \"$GIT_USER_EMAIL\"; if [ -n \"$GIT_REPO\" ] && [ \"$GIT_REPO\" != \"none\" ]; then REPO_DIR=/config/workspace/$(basename \"$GIT_REPO\" .git); [ ! -d \"$REPO_DIR\" ] && git clone \"$GIT_REPO\" \"$REPO_DIR\"; fi; openclaw gateway start --no-daemon 2>/dev/null & exec /init"
+      ],
+      "secret_map": {
+        "LITELLM_API_KEY": "${:?LiteLLM or OpenWebUI API key}",
+        "LITELLM_BASE_URL": "${:?LiteLLM or OpenWebUI base URL - e.g. https://litellm.your-host.tapis.io/v1}",
+        "AI_MODEL": "${pods:default:gpt-4o:?Model name as defined in LiteLLM or OpenWebUI - e.g. gpt-4o, claude-3-5-sonnet}",
+        "GITHUB_TOKEN": "${pods:default:none:?GitHub personal access token - skip for public repos}",
+        "GIT_REPO": "${pods:default:none:?Git repo URL to clone on first start - skip or enter e.g. https://github.com/org/repo}",
+        "GIT_USER_NAME": "${pods:default:none:?Full name for git commits - e.g. Alice Smith}",
+        "GIT_USER_EMAIL": "${pods:default:none:?Email for git commits - e.g. alice@example.com}",
+        "TZ": "${pods:default:Etc/UTC:?Timezone - e.g. America/Chicago}"
+      },
+      "environment_variables": {
+        "PUID": "1000",
+        "PGID": "1000",
+        "TZ": "${pods:secrets:TZ}",
+        "DEFAULT_WORKSPACE": "/config/workspace",
+        "LITELLM_API_KEY": "${pods:secrets:LITELLM_API_KEY}",
+        "LITELLM_BASE_URL": "${pods:secrets:LITELLM_BASE_URL}",
+        "OPENAI_API_KEY": "${pods:secrets:LITELLM_API_KEY}",
+        "OPENAI_BASE_URL": "${pods:secrets:LITELLM_BASE_URL}",
+        "AI_MODEL": "${pods:secrets:AI_MODEL}",
+        "GITHUB_TOKEN": "${pods:secrets:GITHUB_TOKEN}",
+        "GIT_REPO": "${pods:secrets:GIT_REPO}",
+        "GIT_USER_NAME": "${pods:secrets:GIT_USER_NAME}",
+        "GIT_USER_EMAIL": "${pods:secrets:GIT_USER_EMAIL}"
+      },
+      "networking": {
+        "default": {
+          "protocol": "http",
+          "port": 8443,
+          "tapis_auth": true,
+          "tapis_auth_allowed_users": ["*"]
+        }
+      },
+      "resources": {
+        "cpu_request": 500,
+        "cpu_limit": 4000,
+        "mem_request": 2048,
+        "mem_limit": 8192
+      },
+      "time_to_stop_default": 7200
+    },
+    "tag": "openclaw",
+    "commit_message": "VS Code + OpenClaw (openclaw.ai) + openclaw-vscode extension - LiteLLM/OpenWebUI backend via env vars, dark theme, auto-terminal"
+  }
+}

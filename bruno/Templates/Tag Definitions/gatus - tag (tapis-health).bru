@@ -1,0 +1,99 @@
+meta {
+  name: tag: gatus (tapis-health)
+  type: http
+  seq: 18
+}
+
+post {
+  url: {{base_url}}/pods/templates/gatus/tags
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+body:json {
+  {
+    "kind": "pod",
+    "pod_definition": {
+      "image": "twinproduction/gatus:v5.36.0",
+      "description": "Gatus pre-seeded to monitor the Tapis stack: Systems/Apps/Jobs/Pods healthchecks, this pod's own peek.pods URL (302 = up+gated), plus exotic DNS and TCP checks. Status codes were probed for real. In-memory storage (ephemeral). Edit /config/config.yaml to add more.",
+      "time_to_stop_default": -1,
+      "environment_variables": {},
+      "volume_mounts": {
+        "/config/config.yaml": {
+          "type": "ephemeral",
+          "read_only": false,
+          "config_permissions": "0644",
+          "config_update_mode": "always",
+          "config_content": "# Gatus - Tapis health board. ${VAR} expands from environment_variables; ${pods:secrets:KEY} from secret_map.\nstorage:\n  type: memory  # ephemeral - history in RAM, wiped on restart\n\nui:\n  title: Tapis Health | Gatus\n  header: Tapis Service Health\n\nendpoints:\n  # --- Tapis core services: public /healthcheck endpoints return 200 + {\"status\":\"success\"} ---\n  - name: systems\n    group: tapis\n    url: https://tacc.tapis.io/v3/systems/healthcheck\n    interval: 60s\n    conditions:\n      - \"[STATUS] == 200\"\n      - \"[BODY].status == success\"\n  - name: apps\n    group: tapis\n    url: https://tacc.tapis.io/v3/apps/healthcheck\n    interval: 60s\n    conditions:\n      - \"[STATUS] == 200\"\n      - \"[BODY].status == success\"\n  - name: jobs\n    group: tapis\n    url: https://tacc.tapis.io/v3/jobs/healthcheck\n    interval: 60s\n    conditions:\n      - \"[STATUS] == 200\"\n      - \"[BODY].status == success\"\n  - name: pods\n    group: tapis\n    url: https://tacc.tapis.io/v3/pods/healthcheck\n    interval: 60s\n    conditions:\n      # pods /healthcheck returns 400 on direct/tenant-less calls; <500 = the service answered\n      - \"[STATUS] < 500\"\n\n  # --- This very pod's public URL: tapis-auth gated, so an unauthenticated probe gets 302 ---\n  - name: peekaping-self\n    group: pods-ingress\n    url: https://peek.pods.tacc.tapis.io/\n    interval: 60s\n    client:\n      ignore-redirect: true  # don't follow the OAuth redirect - we want to SEE the 302\n    conditions:\n      - \"[STATUS] == 302\"  # 302 = ingress up + tapis-auth gating (proves routing, not the app behind it)\n\n  # --- Exotic monitor types (non-HTTP) ---\n  - name: tacc-dns\n    group: exotic\n    url: \"1.1.1.1\"  # DNS server to query\n    interval: 120s\n    dns:\n      query-name: tacc.tapis.io\n      query-type: A\n    conditions:\n      - \"[DNS_RCODE] == NOERROR\"\n  - name: tacc-tls\n    group: exotic\n    url: \"tcp://tacc.tapis.io:443\"\n    interval: 120s\n    conditions:\n      - \"[CONNECTED] == true\"\n"
+        }
+      },
+      "networking": {
+        "default": {
+          "protocol": "http",
+          "port": 8080,
+          "tapis_auth": true,
+          "tapis_auth_allowed_users": ["*"],
+          "tapis_auth_return_path": "/",
+          "tapis_ui_uri_redirect": true,
+          "tapis_ui_uri_description": "Gatus - Tapis service health dashboard"
+        }
+      },
+      "healthchecks": {
+        "readiness": {
+          "http_get_path": "/health",
+          "http_get_port": 8080,
+          "initial_delay_seconds": 5,
+          "period_seconds": 10
+        },
+        "liveness": {
+          "http_get_path": "/health",
+          "http_get_port": 8080,
+          "initial_delay_seconds": 30,
+          "period_seconds": 15
+        },
+        "networking_requires_ready": true
+      },
+      "resources": { "cpu_request": 100, "cpu_limit": 1000, "mem_request": 128, "mem_limit": 1024 }
+    },
+    "tag": "tapis-health",
+    "commit_message": "Gatus pre-seeded with Tapis health monitors: systems/apps/jobs/pods healthchecks, peek.pods self (302), exotic DNS + TCP. Real probed status codes; in-memory storage."
+  }
+}
+
+docs {
+  ## Gatus - Tapis health board (pre-seeded)
+  
+  This is what Peekaping *couldn't* do: the monitors are **baked into the config** (gatus is
+  config-file driven), so the instant the pod is up it's already watching Tapis - no UI clicking.
+  
+  ### What it monitors (status codes are real - I probed them)
+  | endpoint | type | check |
+  |----------|------|-------|
+  | systems / apps / jobs | HTTP | `200` **and** body `status == success` (content-aware) |
+  | pods | HTTP | `[STATUS] < 500` - `/v3/pods/healthcheck` returns **400** on tenant-less direct calls; <500 just means it answered |
+  | peekaping-self | HTTP | `302` with `ignore-redirect` - a tapis-auth-gated URL redirects an unauthenticated probe to OAuth; **302 proves ingress + gating, not the app behind it** |
+  | tacc-dns | **DNS** (exotic) | resolve `tacc.tapis.io A` via `1.1.1.1`, expect `NOERROR` |
+  | tacc-tls | **TCP** (exotic) | connect to `tacc.tapis.io:443`, expect `CONNECTED == true` |
+  
+  ### The tapis-auth monitoring gotcha (same as Peekaping)
+  Gatus has no Tapis JWT either, so a gated pod URL is only ever a **302** to it. The Tapis
+  `*/healthcheck` paths are public (real 200s), which is why those give a true app-level signal. To
+  health-check a gated app's *insides*, point gatus at its **in-cluster** DNS (bypasses Traefik) or
+  expose a public unauthenticated health path.
+  
+  ### Instantiate
+  `POST /pods` with `{ "template": "gatus:tapis-health", "pod_id": "tapishealth" }`
+  -> board at `tapishealth.pods.<base>` already showing all six checks.
+  
+  ### Tweak it
+  Edit `/config/config.yaml` (config_update_mode=always -> applies on restart). Add endpoints,
+  change intervals, or wire alerts (`alerting:` + `endpoints[].alerts:`). For durable history use
+  the `v5.36.0-postgres` stack tag instead of in-memory storage. Other exotic gatus types:
+  `icmp://host` (ping), `starttls://host:port`, `tls://host:port` (cert expiry via
+  `[CERTIFICATE_EXPIRATION]`).
+}
