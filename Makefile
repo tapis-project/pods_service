@@ -300,7 +300,7 @@ spec:
 	printf "  ❓ : Copy fetched spec to destination? [Y/n] " && \
 	read -r confirm && confirm=$${confirm:-Y} && \
 	if [ "$$confirm" = "Y" ] || [ "$$confirm" = "y" ]; then \
-		kubectl exec deploy/pods-api -- python3 -c 'import json,sys,yaml; print(yaml.dump(json.load(sys.stdin), sort_keys=False))' < /tmp/pods-spec.json > "$$DEST" && \
+		kubectl exec -i deploy/pods-api -- python3 -c 'import json,sys,yaml; print(yaml.dump(json.load(sys.stdin), sort_keys=False))' < /tmp/pods-spec.json > "$$DEST" && \
 		printf "  ✅ : $$DEST updated\n" && \
 		printf "  ℹ️  : Run scripts/dev-pods.sh --build in tapis-ui to rebuild and link\n"; \
 	else \
