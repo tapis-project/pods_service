@@ -1,0 +1,35 @@
+meta {
+  name: flexserv - create template
+  type: http
+  seq: 28
+}
+
+post {
+  url: {{base_url}}/pods/templates
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+body:json {
+  {
+    "template_id": "flexserv",
+    "description": "FlexServ - OpenAI-compatible LLM serving. This pod variant runs the FlexServ gateway + transformers backend in-cluster (CPU-friendly, small models); the HPC variant runs as a Tapis job on GPU nodes via FlexServ-Deployer.",
+    "metatags": ["ai", "llm", "inference", "openai", "flexserv", "transformers", "http"]
+  }
+}
+
+docs {
+  ## flexserv template (container)
+
+  Container for FlexServ pod tags. The pod variant is the CPU-bound complement to the
+  HPC job path (FlexServ-Deployer app + queued vLLM): same OpenAI-compatible gateway,
+  but always-on inside Kubernetes and sized for small models (transformers backend).
+
+  After creating, set public read so all tenant users can deploy:
+  POST /pods/templates/flexserv/permissions {"user": "**", "level": "READ"}
+}

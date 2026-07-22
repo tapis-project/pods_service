@@ -1,0 +1,94 @@
+meta {
+  name: tag: flexserv (transformers)
+  type: http
+  seq: 29
+}
+
+post {
+  url: {{base_url}}/pods/templates/flexserv/tags
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Tapis-Token: {{X-Tapis-Token}}
+}
+
+body:json {
+  {
+    "pod_definition": {
+      "description": "FlexServ gateway + transformers backend (CPU pod variant). Serves Qwen/Qwen3.5-0.8B from a mounted models volume as an OpenAI-compatible /v1 endpoint on port 8000, behind tapis_auth. Models load from the tapisvolume mounted at /app/models (private repo layout: /app/models/private/<owner>/<model>).",
+      "image": "zhangwei217245/flexserv-transformers:1.4.6",
+      "command": ["/app/flexserv/bin/flexserv-gateway"],
+      "arguments": [
+        "--manage-backend",
+        "--backend-kind", "transformers",
+        "--backend-default-model", "FLEX:PRI:Qwen/Qwen3.5-0.8B",
+        "--port", "8000",
+        "--backend-port", "8001",
+        "--backend-host", "0.0.0.0",
+        "--backend-server", "/app/flexserv/backend/backend_server.py",
+        "--flexserv-token", "",
+        "--backend-device", "auto",
+        "--backend-dtype", "bfloat16",
+        "--backend-model-timeout", "86400",
+        "--backend-quantization", "none",
+        "--backend-attn-implementation", "sdpa"
+      ],
+      "secret_map": {
+        "MODEL_NAME": "${pods:default:Qwen/Qwen3.5-0.8B:?Model id exposed via MODEL_NAME env (informational - the served default model is pinned in arguments; see docs)}"
+      },
+      "environment_variables": {
+        "MODEL_REPO": "/app/models",
+        "PRI_MODEL_REPO": "/app/models/private",
+        "PUB_MODEL_REPO": "/app/models/public",
+        "MODEL_NAME": "${pods:secrets:MODEL_NAME}",
+        "FLEXSERV_PORT": "8000",
+        "GATEWAY_BACKEND_PORT": "8001",
+        "FLEXSERV_SECRET": ""
+      },
+      "volume_mounts": {
+        "/app/models": {
+          "type": "tapisvolume",
+          "source_id": "${:?Tapis volume ID containing your models (layout: private/<user>/<model>, public/<model>)}",
+          "read_only": false
+        }
+      },
+      "networking": {
+        "default": {
+          "protocol": "http",
+          "port": 8000,
+          "tapis_auth": true,
+          "tapis_auth_allowed_users": ["*"]
+        }
+      },
+      "resources": {
+        "cpu_request": 1000,
+        "cpu_limit": 6000,
+        "mem_request": 4096,
+        "mem_limit": 16384
+      },
+      "time_to_stop_default": 86400
+    },
+    "tag": "transformers",
+    "commit_message": "flexserv transformers CPU pod - gateway + backend, models tapisvolume prompt, tapis_auth on 8000",
+    "description": "## FlexServ pod (transformers, CPU)\n\nOpenAI-compatible serving without the HPC queue: the FlexServ gateway manages a\ntransformers backend in the same pod and serves `/v1/chat/completions` on port 8000.\n\n### Deploy\n1. Create (or locate) a Tapis volume with your models: `private/<your-username>/<model>` or `public/<model>`.\n2. Deploy from this tag - the only required blank is that **models volume ID** (mounted at `/app/models`).\n3. Call it: `curl https://<pod>.pods.<tenant>/v1/chat/completions -H 'X-Tapis-Token: $JWT' -d '{\"model\": \"FLEX:PRI:Qwen/Qwen3.5-0.8B\", \"messages\": [...]}'`\n\n### Notes\n- Default served model is pinned in `arguments` (`FLEX:PRI:Qwen/Qwen3.5-0.8B`). Placeholders do not resolve inside `arguments`, so to serve a different model use **Create Pod From Tag** and edit `--backend-default-model` (and `MODEL_NAME`).\n- `tapis_auth: true` - callers pass their Tapis JWT (`X-Tapis-Token`); the gateway itself runs tokenless (`--flexserv-token \"\"`).\n- CPU-bound by design (bfloat16, sdpa attention) - fine for ~1B models; for bigger models use the FlexServ HPC job (FlexServ-Deployer).\n- `time_to_stop_default: 86400` (1 day); set -1 on the pod for always-on."
+  }
+}
+
+docs {
+  ## flexserv `transformers` - CPU pod variant
+
+  The pod complement to the FlexServ HPC path (FlexServ-Deployer Tapis app + vLLM on
+  GPU nodes). One container: flexserv-gateway supervises a transformers backend
+  (`--manage-backend`), OpenAI-compatible API on 8000, backend on 8001.
+
+  Blanks:
+  - volume_mounts["/app/models"].source_id  (REQUIRED) - tapisvolume with the models
+  - MODEL_NAME (optional, default Qwen/Qwen3.5-0.8B) - env only; the actually-served
+    default model is pinned in arguments because placeholders don't resolve there.
+
+  Derived from girishbdodda's working pod (image zhangwei217245/flexserv-transformers:1.4.6),
+  with tapis_auth turned ON (original ran tapis_auth: false) and TTL 1 day (original -1).
+}
