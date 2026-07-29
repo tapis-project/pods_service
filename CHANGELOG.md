@@ -123,6 +123,8 @@ The edge release. Pods learned to leave the cluster.
 - `scripts/smoke.sh` — one command that tells you which layer of a deployment is broken (nginx, api, traefik-config, or client) from the shape of the response.
 - bruno: stacks and stack-template-tag requests, plus example template-tag definitions (codeserver, gatus monitoring suites, onlyoffice, peekaping, phoenix, uptimekuma) to crib from.
 - flexserv pod template — transformers CPU variant with a gateway and backend.
+- **Edge nodes** begin: the cluster registry becomes a node registry, where one entry maps to one machine you own.
+- Node agent contract: claim-token join, checkin, a commands channel, and node-scoped agent tokens. The contract is HTTP-only — an edge box never needs Postgres or RabbitMQ.
 
 ### Bug fixes:
 - Permission guards return proper 4xx codes instead of bare errors that mapped to 500.

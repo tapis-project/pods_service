@@ -3,29 +3,31 @@ from tapisservice.tapisfastapi.utils import GlobalsMiddleware
 from tapisservice.tapisfastapi.auth import TapisMiddleware
 from tapisservice.config import conf
 
-import re as _re
 from starlette.requests import Request as _Request
 from starlette.types import ASGIApp as _ASGIApp, Receive as _Receive, Scope as _Scope, Send as _Send
 from tapisservice.tapisfastapi.auth import FormattedRequest as _FormattedRequest
 
-# Regex matching pod OAuth routes: /pods/<pod_id_net>/auth and /pods/<pod_id_net>/auth/callback
-_POD_AUTH_PATH_RE = _re.compile(r'^/pods/[^/]+/auth(/callback)?$')
+# Which routes skip token validation is defined ONCE in auth.py (NO_TOKEN_ROUTES /
+# AUTHN_EXEMPT_STATIC), consumed here via request_skips_token_auth (imported below).
 
 class PodsTapisMiddleware(TapisMiddleware):
-    """TapisMiddleware wrapper that skips token authentication for pod OAuth routes.
-    
-    The /pods/{pod_id_net}/auth and /pods/{pod_id_net}/auth/callback routes are browser-initiated
-    OAuth flow endpoints. Letting TapisMiddleware's core_validate_request_token run on these routes
-    can cause errors when browsers send expired/invalid token cookies, since it may raise
+    """TapisMiddleware wrapper that skips token authentication for exempt routes.
+
+    Exempt routes (auth.request_skips_token_auth): pod OAuth browser flows, pod
+    access-gate visitor flows, node agent endpoints (claim/agent-token auth in-handler),
+    and static utility paths (healthcheck/docs/...). Letting TapisMiddleware's
+    core_validate_request_token run on these can 401 callers that legitimately carry
+    no Tapis token — or worse, carry a stale token cookie, which raises
     AuthenticationError instead of NoTokenError.
-    
-    We skip only the authentication step (token validation) but still run the authorization callback,
-    which handles NEED-BASEURL tenant resolution (setting g.request_tenant_id and g.site_id).
+
+    We skip only the authentication step (token validation) but still run the authorization
+    callback, which enforces the route allowlist and handles NEED-BASEURL tenant resolution
+    (setting g.request_tenant_id and g.site_id).
     """
     async def __call__(self, scope: _Scope, receive: _Receive, send: _Send) -> None:
         if scope["type"] == "http":
             request = _Request(scope, receive)
-            if _POD_AUTH_PATH_RE.match(request.url.path):
+            if request_skips_token_auth(request.url.path, request.method):
                 # Skip token authentication but still run authorization (NEED-BASEURL tenant resolution)
                 formatted_request = _FormattedRequest(
                     headers=request.headers,
@@ -44,7 +46,7 @@ from fastapi.middleware import Middleware
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 
-from auth import authorization, authentication
+from auth import authorization, authentication, request_skips_token_auth
 from api_admin import router as router_admin
 from api_pods import router as router_pods
 from api_pods_podid import router as router_pods_podsid
@@ -68,7 +70,7 @@ from api_images_imageid import router as router_images_imageid
 from api_secrets import router as router_secrets
 from api_secrets_secretid import router as router_secrets_secretid
 from api_secrets_secretid_func import router as router_secrets_secretid_func
-from api_clusters import router as router_clusters
+from api_nodes import router as router_nodes
 from api_misc import router as router_misc
 
 
@@ -176,8 +178,8 @@ api.include_router(router_volumes_volumeid_func)
 api.include_router(router_volumes_volumeid)
 # jupyter
 api.include_router(router_pods_podsid_jupyter)
-# clusters
-#api.include_router(router_clusters)
+# nodes
+api.include_router(router_nodes)
 # secrets
 api.include_router(router_secrets)
 api.include_router(router_secrets_secretid)
