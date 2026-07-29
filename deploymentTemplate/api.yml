@@ -39,6 +39,10 @@ spec:
 #DEV        # (i.e. you should run `make autorevision`). Stripped in prod builds.
 #DEV        - name: PODS_CHECK_MIGRATIONS
 #DEV          value: 'true'
+#DEV        # Dev-only: uvicorn --reload — service/ is hostPath-mounted, so code edits go
+#DEV        # live instantly; only migrations/config changes need a redeploy.
+#DEV        - name: PODS_UVICORN_RELOAD
+#DEV          value: 'true'
         - name: SERVICE_PASSWORD
           valueFrom:
             secretKeyRef:
