@@ -125,6 +125,8 @@ The edge release. Pods learned to leave the cluster.
 - flexserv pod template — transformers CPU variant with a gateway and backend.
 - **Edge nodes** begin: the cluster registry becomes a node registry, where one entry maps to one machine you own.
 - Node agent contract: claim-token join, checkin, a commands channel, and node-scoped agent tokens. The contract is HTTP-only — an edge box never needs Postgres or RabbitMQ.
+- **pods-agent v1** — a single-file, zero-dependency Python agent: join, heartbeat, and Docker inventory over the local socket. It always dials out, so it works from behind any NAT with no inbound ports.
+- Agents on a Kubernetes box also report in-cluster inventory, gated behind an RBAC self-probe so a permission-less agent degrades quietly instead of erroring.
 
 ### Bug fixes:
 - Permission guards return proper 4xx codes instead of bare errors that mapped to 500.
