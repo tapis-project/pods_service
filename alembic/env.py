@@ -83,7 +83,7 @@ from models_volume_usage import VolumeUsageLog
 from models_templates import Template
 from models_images import Image
 from models_templates_tags import TemplateTag
-from models_cluster import Cluster
+from models_node import Node
 from models_logs import Log
 from models_secrets import Secret
 from models_stacks import Stack

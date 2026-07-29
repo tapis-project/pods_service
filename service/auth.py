@@ -23,11 +23,55 @@ from models_templates import Template
 from models_images import Image
 from models_secrets import Secret
 from models_stacks import Stack
+from models_node import Node
 from utils import check_permissions
 
 TOKEN_RE = re.compile('Bearer (.+)')
 
 WORLD_USER = 'ABACO_WORLD'
+
+# ---------------------------------------------------------------------------
+# Routes that must skip Tapis token validation entirely — SINGLE SOURCE OF TRUTH.
+# Both PodsTapisMiddleware (api.py) and authentication() below consult this via
+# request_skips_token_auth(); never add an exemption in only one place.
+#
+# These are routes where the caller cannot have a Tapis token:
+#   - pod OAuth browser flows (/auth, /auth/callback) — browsers may carry stale
+#     token cookies that would make core token validation raise instead of no-op
+#   - pod access-gate visitor flows (/gate, /gate/redeem) — shared-secret access
+#   - node agent endpoints (join/checkin/commands) — authenticated in-handler by
+#     the pods-issued claim/agent token (X-Pods-Node-Token), never a Tapis JWT
+# Each entry restricts methods (fail closed: wrong method → normal token auth,
+# which the route allowlist in check_route_permissions then rejects).
+NO_TOKEN_ROUTES = [
+    (re.compile(r'^/pods/[^/]+/auth(/callback)?$'), {"GET"}),
+    (re.compile(r'^/pods/[^/]+/gate$'), {"GET"}),
+    (re.compile(r'^/pods/[^/]+/gate/redeem$'), {"GET", "POST"}),
+    (re.compile(r'^/pods/nodes/[^/]+/join$'), {"POST"}),
+    (re.compile(r'^/pods/nodes/[^/]+/checkin$'), {"POST"}),
+    (re.compile(r'^/pods/nodes/[^/]+/commands$'), {"GET"}),
+]
+
+# Static utility paths that carry no user/tenant context (also NOT-API in the
+# route allowlist below).
+AUTHN_EXEMPT_STATIC = {
+    '/redoc', '/docs', '/openapi.json', '/traefik-config',
+    '/pod-splash', '/pod-not-found', '/healthcheck',
+}
+
+
+def request_skips_token_auth(path: str, method: str = "GET") -> bool:
+    """True when this request must bypass Tapis token validation.
+
+    Collapses duplicate slashes first so the exemption sees the same path shape
+    the router matches (e.g. //pods/x/auth cannot dodge or spoof the check).
+    """
+    path = re.sub(r'/{2,}', '/', path or '')
+    method = (method or 'GET').upper()
+    for regex, methods in NO_TOKEN_ROUTES:
+        if method in methods and regex.match(path):
+            return True
+    return path in AUTHN_EXEMPT_STATIC or path.startswith('/error-handler/')
 
 
 def get_user_sk_roles():
@@ -210,19 +254,19 @@ def check_route_permissions(request):
         ["/pods/secrets/{secret_id}", "GET", codes.READ],
         ["/pods/secrets/{secret_id}", "PUT", codes.USER],
         ["/pods/secrets/{secret_id}", "DELETE", codes.ADMIN],
-        # CLUSTERS
-        ["/pods/clusters", "GET", codes.NONE],
-        ["/pods/clusters", "POST", codes.NONE],
-        ["/pods/clusters/{cluster_id}", "GET", codes.READ],
-        ["/pods/clusters/{cluster_id}", "DELETE", codes.ADMIN],
-        ["/pods/clusters/{cluster_id}/bootstrap", "POST", codes.ADMIN],
-        ["/pods/clusters/{cluster_id}/permissions", "GET", codes.USER],
-        ["/pods/clusters/{cluster_id}/permissions/{user}", "DELETE", codes.ADMIN],
-        ["/pods/clusters/{cluster_id}/permissions", "POST", codes.ADMIN],
-        ["/pods/clusters/{cluster_id}/stats", "GET", codes.USER],
-        ["/pods/clusters/{cluster_id}/pods", "GET", codes.USER],
-         #["/pods/clusters/{cluster_id}/add_pod/{pod_id}", "POST", codes.ADMIN],
-         #["/pods/clusters/{cluster_id}/remove_pod/{pod_id}", "POST", codes.ADMIN],
+        # NODES — registered before the /pods/{pod_id} routes for the same reason as stacks.
+        ["/pods/nodes", "GET", codes.NONE],
+        # POST is codes.NONE because no object exists yet for an object-level check —
+        # it is gated IN-HANDLER on g.admin (see create_node). Not an open create.
+        ["/pods/nodes", "POST", codes.NONE],
+        ["/pods/nodes/{node_id}", "GET", codes.READ],
+        ["/pods/nodes/{node_id}", "DELETE", codes.ADMIN],
+        ["/pods/nodes/{node_id}/regenerate", "POST", codes.ADMIN],
+        # node agent endpoints — no Tapis token; handlers authenticate via the
+        # claim/agent token themselves (see NO_TOKEN_ROUTES at top of file)
+        ["/pods/nodes/{node_id}/join", "POST", "NEED-BASEURL"],
+        ["/pods/nodes/{node_id}/checkin", "POST", "NEED-BASEURL"],
+        ["/pods/nodes/{node_id}/commands", "GET", "NEED-BASEURL"],
         # STACKS — MUST be registered before the /pods/{pod_id} routes below; the {pod_id}
         # regex ([^/]+) would otherwise swallow "stacks".
         ["/pods/stacks/{stack_id}/permissions", "GET", codes.USER],
@@ -318,6 +362,16 @@ def check_route_permissions(request):
         ## Needed for auth where we need tenant/site info, but not token info.
         logger.debug(f"Matched NEED-BASEURL: g.request_tenant_id: {g.request_tenant_id}, g.username: {g.username}")
         g.cross_tenant_request = False
+        # Node agent routes carry their tenant explicitly (X-Pods-Tenant, baked into the
+        # join command at create time) — agents send no Tapis token to resolve from, and
+        # host-based resolution can't work for bare-IP / localhost-proxy dev deployments.
+        # No new exposure: the claim/agent token hash on the tenant's node row remains the
+        # credential; the header only locates the row.
+        if not g.request_tenant_id and '/nodes/' in matched_route[0]:
+            agent_tenant = request.headers.get('x-pods-tenant')
+            if agent_tenant:
+                g.request_tenant_id = agent_tenant
+                logger.debug(f"NEED-BASEURL nodes route: tenant from X-Pods-Tenant: {agent_tenant}")
         # We might not have g.request_tenant_id yet, so we need to resolve it
         if not g.request_tenant_id:
             try:
@@ -383,10 +437,10 @@ def check_route_permissions(request):
         # moves field to 3rd position
         pod = check_object_id(request, 'pod', 3)
         has_pem = check_permissions(user=g.username, object=pod, object_type="pod", level=matched_route[2] , roles=g.roles)
-    elif "clusters/{cluster_id}" in matched_route[0]:
-        logger.debug(f"Matched clusters/--cluster_id-- route. request.url.path: {request.url.path}")
-        cluster = check_object_id(request, 'cluster', 2)
-        has_pem = check_permissions(user=g.username, object=cluster, object_type="cluster", level=matched_route[2] , roles=g.roles)
+    elif "nodes/{node_id}" in matched_route[0]:
+        logger.debug(f"Matched nodes/--node_id-- route. request.url.path: {request.url.path}")
+        node = check_object_id(request, 'node', 3)
+        has_pem = check_permissions(user=g.username, object=node, object_type="node", level=matched_route[2] , roles=g.roles)
     elif "{stack_id}" in matched_route[0]:
         logger.debug(f"Matched /--stack_id-- route. request.url.path: {request.url.path}")
         stack = check_object_id(request, 'stack', 3)
@@ -431,18 +485,9 @@ def check_route_permissions(request):
 
 
 def authentication(request):
-    # Pod OAuth routes handle their own auth flow — skip token checks entirely.
-    # Regex matches /pods/<pod_id_net>/auth and /pods/<pod_id_net>/auth/callback,
-    # plus the access-gate routes /pods/<pod_id_net>/gate and /gate/redeem (visitors
-    # supply a shared secret, not a Tapis token, so token checks must be skipped).
-    if re.match(r'^/pods/[^/]+/(auth(/callback)?|gate(/redeem)?)$', request.url.path):
-        pass
-    elif (request.url.path == '/redoc' or
-        request.url.path == '/docs' or
-        request.url.path == '/openapi.json' or
-        request.url.path == '/traefik-config' or
-        request.url.path == '/pod-splash' or
-        request.url.path == '/pod-not-found' or
-        request.url.path == '/healthcheck' or
-        request.url.path.startswith('/error-handler/')):
-        pass
+    # Token validation is enforced by TapisMiddleware; PodsTapisMiddleware (api.py)
+    # skips it entirely for exempt routes. This callback mirrors the exact same
+    # predicate so the exemption has ONE definition (NO_TOKEN_ROUTES / AUTHN_EXEMPT_STATIC
+    # at the top of this file) — never let the two drift.
+    if request_skips_token_auth(request.url.path, request.method):
+        return

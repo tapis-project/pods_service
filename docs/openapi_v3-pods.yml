@@ -2073,6 +2073,254 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /pods/nodes:
+    get:
+      tags:
+      - Nodes
+      summary: list_nodes
+      description: List nodes the requesting user has READ access to.
+      operationId: list_nodes
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodesResponse'
+    post:
+      tags:
+      - Nodes
+      summary: create_node
+      description: 'Create a node and mint its single-use claim token.
+
+
+        The claim token (and the join one-liner embedding it) is returned exactly
+        once here;
+
+        only its hash is stored. Run the join command on the node before the token
+        expires.'
+      operationId: create_node
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewNode'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeCreateResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /pods/nodes/{node_id}:
+    get:
+      tags:
+      - Nodes
+      summary: get_node
+      description: Get a node's details.
+      operationId: get_node
+      parameters:
+      - name: node_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Node Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+      - Nodes
+      summary: delete_node
+      description: Delete a node. The agent's token stops working immediately.
+      operationId: delete_node
+      parameters:
+      - name: node_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Node Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeDeleteResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /pods/nodes/{node_id}/regenerate:
+    post:
+      tags:
+      - Nodes
+      summary: regenerate_node_claim
+      description: "Re-key a node: mint a fresh single-use claim token and revoke\
+        \ the current agent token.\n\nThis is the ONLY way to re-issue credentials\
+        \ \u2014 bootstrap material is never readable\nafter creation. The running\
+        \ agent (if any) is cut off until it re-joins."
+      operationId: regenerate_node_claim
+      parameters:
+      - name: node_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Node Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeCreateResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /pods/nodes/{node_id}/join:
+    post:
+      tags:
+      - Nodes
+      summary: join_node
+      description: 'Agent claim-token exchange. Authenticated by the claim token itself;
+        consumed on success.
+
+
+        Returns (exactly once) the node-scoped agent bearer token, a headscale preauth
+        key,
+
+        and the config bundle the agent needs for its checkin loop.'
+      operationId: join_node
+      parameters:
+      - name: node_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Node Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NodeJoinRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeJoinResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /pods/nodes/{node_id}/checkin:
+    post:
+      tags:
+      - Nodes
+      summary: checkin_node
+      description: 'Agent heartbeat: capabilities + status + hash-gated inventory.
+
+
+        Inventory protocol: the agent always sends inventory_hash; it includes the
+        full
+
+        inventory only when the hash changed. If central has no matching inventory
+        stored,
+
+        the response sets resync=true and the agent sends the full inventory next
+        checkin.'
+      operationId: checkin_node
+      parameters:
+      - name: node_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Node Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NodeCheckinRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeCheckinResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /pods/nodes/{node_id}/commands:
+    get:
+      tags:
+      - Nodes
+      summary: get_node_commands
+      description: 'Pending commands for this node.
+
+
+        Phase 1 stub: the response shape is the contract; there is no command dispatcher
+        yet,
+
+        so this always returns an empty list. The dispatcher (and true long-poll hold)
+        lands
+
+        with the Phase 2 agent work.'
+      operationId: get_node_commands
+      parameters:
+      - name: node_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Node Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeCommandsResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /pods/secrets:
     get:
       tags:
@@ -2662,8 +2910,10 @@ paths:
         \ ordering, use PUT /pods/stacks/{stack_id}.\n- `force` (stop/restart only)\
         \ bypasses reverse-order teardown \u2014 members stop immediately, ignoring\n\
         \  dependency order during shutdown. Startup ordering is still honored.\n\
-        - Stack USER+ inherits to all members, so no per-pod permission checks are\
-        \ needed.\n\nReturns the stack object; metadata.acted lists the pods affected."
+        - Requires stack ADMIN (parity with the direct per-pod stop/start/restart\
+        \ routes, which\n  require pod ADMIN); the grant inherits to all members,\
+        \ so no per-pod checks are needed.\n\nReturns the stack object; metadata.acted\
+        \ lists the pods affected."
       operationId: stack_action
       parameters:
       - name: stack_id
@@ -4869,6 +5119,48 @@ components:
       title: NewImage
       description: Object with fields that users are allowed to specify for the Image
         class.
+    NewNode:
+      properties:
+        node_id:
+          type: string
+          title: Node Id
+          description: Unique node identifier.
+        name:
+          type: string
+          title: Name
+          description: Human-readable name for the node.
+          default: ''
+        type:
+          type: string
+          title: Type
+          description: 'Node runtime type. One of: [''k8s'', ''docker'', ''host''].'
+        description:
+          type: string
+          title: Description
+          description: Description of the node.
+          default: ''
+        login_server:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Login Server
+          description: Headscale/Tailscale login server this node joins. Defaults
+            to the service-wide login server when unset.
+        namespace:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Namespace
+          description: Advisory Kubernetes namespace for k8s-type nodes; handed to
+            the agent in its join config bundle.
+      additionalProperties: false
+      type: object
+      required:
+      - node_id
+      - type
+      title: NewNode
+      description: Object with fields that users are allowed to specify for the Node
+        class.
     NewPod:
       properties:
         pod_id:
@@ -5262,6 +5554,522 @@ components:
       title: NewVolume
       description: Object with fields that users are allowed to specify for the Volume
         class.
+    NodeCheckinRequest:
+      properties:
+        agent_version:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Agent Version
+          description: Agent version string.
+        capabilities:
+          items:
+            type: string
+          type: array
+          title: Capabilities
+          description: Currently detected capabilities.
+          default: []
+        status:
+          additionalProperties: true
+          type: object
+          title: Status
+          description: Status snapshot (os, arch, versions, health).
+        inventory_hash:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Inventory Hash
+          description: Hash of the agent's current workload inventory.
+        inventory:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Inventory
+          description: Full workload inventory; include only when the hash changed.
+      additionalProperties: false
+      type: object
+      title: NodeCheckinRequest
+      description: 'Periodic agent heartbeat. Inventory is hash-gated: send inventory_hash
+        every time,
+
+        the full inventory only when it changed (or when the previous checkin returned
+        resync=true).'
+    NodeCheckinResponse:
+      properties:
+        message:
+          type: string
+          title: Message
+        metadata:
+          additionalProperties: true
+          type: object
+          title: Metadata
+        result:
+          $ref: '#/components/schemas/NodeCheckinResult'
+        status:
+          type: string
+          title: Status
+        version:
+          type: string
+          title: Version
+      additionalProperties: false
+      type: object
+      required:
+      - message
+      - metadata
+      - result
+      - status
+      - version
+      title: NodeCheckinResponse
+    NodeCheckinResult:
+      properties:
+        endpoints:
+          additionalProperties:
+            type: string
+          type: object
+          title: Endpoints
+          description: Current central endpoints (api_base, login_server, ...).
+        resync:
+          type: boolean
+          title: Resync
+          description: True when central wants the full inventory on the next checkin.
+          default: false
+        poll_after_seconds:
+          type: integer
+          title: Poll After Seconds
+          description: Seconds until the agent should check in again.
+        desired:
+          additionalProperties: true
+          type: object
+          title: Desired
+          description: Desired state for this node (reserved; command dispatch lands
+            with the agent).
+      additionalProperties: false
+      type: object
+      required:
+      - endpoints
+      - poll_after_seconds
+      title: NodeCheckinResult
+    NodeCommandsResponse:
+      properties:
+        message:
+          type: string
+          title: Message
+        metadata:
+          additionalProperties: true
+          type: object
+          title: Metadata
+        result:
+          $ref: '#/components/schemas/NodeCommandsResult'
+        status:
+          type: string
+          title: Status
+        version:
+          type: string
+          title: Version
+      additionalProperties: false
+      type: object
+      required:
+      - message
+      - metadata
+      - result
+      - status
+      - version
+      title: NodeCommandsResponse
+    NodeCommandsResult:
+      properties:
+        commands:
+          items:
+            additionalProperties: true
+            type: object
+          type: array
+          title: Commands
+          description: Pending commands for this node.
+          default: []
+        poll_after_seconds:
+          type: integer
+          title: Poll After Seconds
+          description: Seconds until the agent should poll again.
+      additionalProperties: false
+      type: object
+      required:
+      - poll_after_seconds
+      title: NodeCommandsResult
+    NodeCreateResponse:
+      properties:
+        message:
+          type: string
+          title: Message
+        metadata:
+          additionalProperties: true
+          type: object
+          title: Metadata
+        result:
+          $ref: '#/components/schemas/NodeCreateResult'
+        status:
+          type: string
+          title: Status
+        version:
+          type: string
+          title: Version
+      additionalProperties: false
+      type: object
+      required:
+      - message
+      - metadata
+      - result
+      - status
+      - version
+      title: NodeCreateResponse
+    NodeCreateResult:
+      properties:
+        node:
+          additionalProperties: true
+          type: object
+          title: Node
+          description: The created node.
+        claim_token:
+          type: string
+          title: Claim Token
+          description: "Single-use claim token \u2014 shown only once."
+        claim_token_expires:
+          type: string
+          format: date-time
+          title: Claim Token Expires
+          description: Claim token expiry (UTC).
+        join_command:
+          type: string
+          title: Join Command
+          description: One-liner to run on the node to join it.
+      additionalProperties: false
+      type: object
+      required:
+      - node
+      - claim_token
+      - claim_token_expires
+      - join_command
+      title: NodeCreateResult
+    NodeDeleteResponse:
+      properties:
+        message:
+          type: string
+          title: Message
+        metadata:
+          additionalProperties: true
+          type: object
+          title: Metadata
+        result:
+          type: string
+          title: Result
+        status:
+          type: string
+          title: Status
+        version:
+          type: string
+          title: Version
+      additionalProperties: false
+      type: object
+      required:
+      - message
+      - metadata
+      - result
+      - status
+      - version
+      title: NodeDeleteResponse
+    NodeJoinRequest:
+      properties:
+        claim_token:
+          type: string
+          title: Claim Token
+          description: Single-use claim token from node creation (or regenerate).
+        agent_version:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Agent Version
+          description: Agent version string.
+        capabilities:
+          items:
+            type: string
+          type: array
+          title: Capabilities
+          description: Capabilities detected by the agent at startup.
+          default: []
+      additionalProperties: false
+      type: object
+      required:
+      - claim_token
+      title: NodeJoinRequest
+      description: Agent's one-time claim-token exchange. The claim token is consumed
+        on success.
+    NodeJoinResponse:
+      properties:
+        message:
+          type: string
+          title: Message
+        metadata:
+          additionalProperties: true
+          type: object
+          title: Metadata
+        result:
+          $ref: '#/components/schemas/NodeJoinResult'
+        status:
+          type: string
+          title: Status
+        version:
+          type: string
+          title: Version
+      additionalProperties: false
+      type: object
+      required:
+      - message
+      - metadata
+      - result
+      - status
+      - version
+      title: NodeJoinResponse
+    NodeJoinResult:
+      properties:
+        node_id:
+          type: string
+          title: Node Id
+        node_token:
+          type: string
+          title: Node Token
+          description: "Node-scoped agent bearer token \u2014 shown only once; sent\
+            \ as the X-Pods-Node-Token header on checkin/commands."
+        login_server:
+          type: string
+          title: Login Server
+          description: Headscale/Tailscale login server to join.
+        ts_preauthkey:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Ts Preauthkey
+          description: Headscale preauth key for joining the tailnet (null when central
+            has no headscale API key configured).
+        central_base_url:
+          type: string
+          title: Central Base Url
+          description: Central pods API base URL for subsequent agent calls.
+        checkin_interval_seconds:
+          type: integer
+          title: Checkin Interval Seconds
+          description: How often the agent should check in.
+        namespace:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Namespace
+          description: Advisory Kubernetes namespace for k8s-type nodes.
+      additionalProperties: false
+      type: object
+      required:
+      - node_id
+      - node_token
+      - login_server
+      - central_base_url
+      - checkin_interval_seconds
+      title: NodeJoinResult
+    NodeResponse:
+      properties:
+        message:
+          type: string
+          title: Message
+        metadata:
+          additionalProperties: true
+          type: object
+          title: Metadata
+        result:
+          $ref: '#/components/schemas/NodeResponseModel'
+        status:
+          type: string
+          title: Status
+        version:
+          type: string
+          title: Version
+      additionalProperties: false
+      type: object
+      required:
+      - message
+      - metadata
+      - result
+      - status
+      - version
+      title: NodeResponse
+    NodeResponseModel:
+      properties:
+        node_id:
+          type: string
+          title: Node Id
+          description: Unique node identifier.
+        name:
+          type: string
+          title: Name
+          description: Human-readable name for the node.
+          default: ''
+        type:
+          type: string
+          title: Type
+          description: 'Node runtime type. One of: [''k8s'', ''docker'', ''host''].'
+        description:
+          type: string
+          title: Description
+          description: Description of the node.
+          default: ''
+        login_server:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Login Server
+          description: Headscale/Tailscale login server this node joins. Defaults
+            to the service-wide login server when unset.
+        namespace:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Namespace
+          description: Advisory Kubernetes namespace for k8s-type nodes; handed to
+            the agent in its join config bundle.
+        capabilities:
+          items:
+            type: string
+          type: array
+          title: Capabilities
+          description: Capabilities last reported by the agent (e.g. runtime.k8s,
+            runtime.docker, exec, tunnels, metrics).
+          default: []
+        status:
+          additionalProperties: true
+          type: object
+          title: Status
+          description: Status snapshot last reported by the agent (os, arch, versions,
+            health).
+        agent_version:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Agent Version
+          description: Agent version last reported at checkin.
+        inventory_hash:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Inventory Hash
+          description: Hash of the last stored workload inventory; agents compare
+            against this to skip resending unchanged inventory.
+        last_checkin_ts:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Last Checkin Ts
+          description: Time (UTC) of the last agent checkin.
+        claimed_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Claimed At
+          description: Time (UTC) the node was claimed by an agent via join. Null
+            = unclaimed.
+        claim_token_expires:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Claim Token Expires
+          description: Expiry of the outstanding single-use claim token, if any.
+        ts_preauthkey_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Ts Preauthkey Id
+          description: Identifier of the issued headscale preauth key.
+        ts_preauthkey_expires:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Ts Preauthkey Expires
+          description: Expiration time of the headscale preauth key.
+        ts_routes:
+          items:
+            type: string
+          type: array
+          title: Ts Routes
+          description: Subnet routes granted (metadata).
+          default: []
+        creation_ts:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Creation Ts
+          description: Time (UTC) that this node was created.
+        update_ts:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Update Ts
+          description: Time (UTC) that this node was updated.
+        liveness:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Liveness
+          description: "unclaimed | live | overdue | stale \u2014 derived from last_checkin_ts\
+            \ vs the checkin interval the server handed the agent."
+        last_checkin_age_seconds:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Last Checkin Age Seconds
+          description: Seconds since the last agent checkin; null when the node has
+            never checked in.
+        checkin_interval_seconds:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Checkin Interval Seconds
+          description: Checkin interval (seconds) the server expects agents to honor.
+      additionalProperties: false
+      type: object
+      required:
+      - node_id
+      - type
+      title: NodeResponseModel
+    NodesResponse:
+      properties:
+        message:
+          type: string
+          title: Message
+        metadata:
+          additionalProperties: true
+          type: object
+          title: Metadata
+        result:
+          items:
+            $ref: '#/components/schemas/NodeResponseModel'
+          type: array
+          title: Result
+        status:
+          type: string
+          title: Status
+        version:
+          type: string
+          title: Version
+      additionalProperties: false
+      type: object
+      required:
+      - message
+      - metadata
+      - result
+      - status
+      - version
+      title: NodesResponse
     PermissionsModel:
       properties:
         permissions:

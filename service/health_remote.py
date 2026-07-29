@@ -56,9 +56,9 @@ POSTGRES_URL = os.environ.get('POSTGRES_URL', conf.get('postgres_url', 'postgres
 def main():
     logger.info(f"Starting remote health service for env: {ENV_NAME}")
 
-    # Using tapipy we get cluster bootstrap info
-    #cluster = t.clusters.getClusterByName(ENV_NAME)
-    cluster = f"https://tacc.develop.tapis.io/pods/clusters"
+    # Using tapipy we get node bootstrap info
+    #node = t.nodes.getNodeByName(ENV_NAME)
+    node = f"https://tacc.develop.tapis.io/pods/nodes"
 
     # Connect to Tailscale
     result = setup_tailscale()
