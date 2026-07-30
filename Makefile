@@ -155,7 +155,6 @@ build: vars
 	@printf "  🏃 : Building: This part takes a while if it takes a while.\n"
 	@printf "\n"
 	minikube image build -t $(SERVICE_NAME)/pods-api:$$TAG ./
-	#minikube image build -t $(SERVICE_NAME)/pods-api-remote:$$TAG -f Dockerfile.remote ./
 	@printf "\n"
 
 
@@ -167,7 +166,6 @@ build-docker: vars
 	@printf "  🌎 : Using daemon: $(LCYAN)docker$(NC)\n"
 	@printf "\n"
 	docker build -t tapis/pods-api:$$TAG ./
-	#docker build -t tapis/pods-api-remote:$$TAG -f Dockerfile.remote ./
 	@printf "\n"
 
 
