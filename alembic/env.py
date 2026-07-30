@@ -85,6 +85,7 @@ from models_images import Image
 from models_templates_tags import TemplateTag
 from models_node import Node
 from models_node_telemetry import NodeLog, NodeMetric
+from models_node_commands import NodeCommand
 from models_routes import Route
 from models_logs import Log
 from models_secrets import Secret

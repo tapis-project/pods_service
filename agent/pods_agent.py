@@ -38,6 +38,9 @@ Telemetry (Phase 3 — pure API traffic, no host commands, so no confirmation ne
                               (per-container since-cursors persisted in state — restart
                               never re-ships what central already has)
   PODS_AGENT_LOGS_TAIL        first-contact tail per container (default 200 lines)
+  PODS_AGENT_SHARE_HOSTNAME   "false" withholds the machine hostname from status and
+                              bench reports (identity rests on the operator-chosen
+                              node_id alone)
 
 Host-command confirmation (the agent NEVER runs host commands like `tailscale up` silently):
   PODS_AGENT_HOST_CMDS        "ask" (default) | "always" | "never"
@@ -79,6 +82,15 @@ K8S_SA_DIR = "/var/run/secrets/kubernetes.io/serviceaccount"
 STARTED_AT = datetime.now(timezone.utc)
 
 _stop = {"flag": False}
+
+# Startup milestones — ALWAYS-ON (near-free) so every cold start self-documents:
+# central renders a startup waterfall from these without any special bench mode.
+MILESTONES = {"proc_start": round(STARTED_AT.timestamp(), 3)}
+
+
+def milestone(name):
+    """Record a startup milestone once (first occurrence wins)."""
+    MILESTONES.setdefault(name, round(time.time(), 3))
 
 
 # The agent's own lines double as a shippable log source ("agent" in central's
@@ -380,11 +392,18 @@ def _meminfo():
     return None
 
 
+def share_hostname():
+    """PODS_AGENT_SHARE_HOSTNAME=false keeps the machine's hostname out of
+    everything the agent ships (status, bench reports). Identity then rests on
+    the node_id alone — which the operator chose, so it is always shareable."""
+    return os.environ.get("PODS_AGENT_SHARE_HOSTNAME", "true").lower() != "false"
+
+
 def sample_status(caps, inv=None):
     status = {
         "os": platform.system().lower(),
         "arch": platform.machine(),
-        "hostname": socket.gethostname(),
+        "hostname": socket.gethostname() if share_hostname() else "(withheld)",
         "python": platform.python_version(),
         "agent_started_at": STARTED_AT.isoformat(timespec="seconds"),
         "agent_uptime_seconds": int((datetime.now(timezone.utc) - STARTED_AT).total_seconds()),
@@ -421,6 +440,7 @@ def sample_status(caps, inv=None):
         for p in k8s_pods:
             phases[p.get("phase") or "Unknown"] = phases.get(p.get("phase") or "Unknown", 0) + 1
         status["k8s_pod_phases"] = phases
+    status["startup_milestones"] = dict(MILESTONES)
     return status
 
 
@@ -661,6 +681,7 @@ def ship_pending_logs(state, headers, inv, tail, max_batch):
 
     try:
         result = ship_log_batch(state, headers, entries).get("result") or {}
+        milestone("first_logs_ack")
         commit()
         dropped = result.get("dropped") or 0
         if dropped:
@@ -678,6 +699,344 @@ def ship_pending_logs(state, headers, inv, tail, max_batch):
     except Exception as e:
         log(f"log ship failed ({getattr(e, 'reason', e)}) — retrying next pass")
     return max_batch
+
+
+def record_container_milestones():
+    """When containerized, pull the container's own Created/StartedAt from docker
+    inspect (socket permitting) so the startup waterfall begins at container
+    creation, not process start."""
+    if not os.path.exists("/.dockerenv"):
+        return
+    info = docker_get(f"/containers/{socket.gethostname()}/json")
+    if not info:
+        return
+    created = _parse_rfc3339_nano(info.get("Created", ""))
+    started = _parse_rfc3339_nano((info.get("State") or {}).get("StartedAt", ""))
+    if created:
+        MILESTONES.setdefault("container_created", round(created, 3))
+    if started:
+        MILESTONES.setdefault("container_started", round(started, 3))
+
+
+# Bench — dispatcher type=bench (research/onboarding suite) ----------------------
+# Every row measures BOTH dimensions wherever they exist: wall time AND bytes.
+# Settings arrive pre-sanitized by central (sanitize_bench_settings) — the agent
+# still treats them defensively.
+
+_BENCH_WORDS = ("request handled upstream latency queue worker cache miss hit "
+                "retry timeout connect flush batch shipped accepted stored").split()
+
+
+def synth_line(kind, size, i):
+    """One deterministic synthetic log line of exactly `size` bytes."""
+    if kind == "json":
+        base = (f'{{"ts":"2026-07-30T12:00:{i % 60:02d}Z","level":"info","seq":{i},'
+                f'"path":"/api/v1/items/{i % 997}","ms":{i % 97},"msg":"')
+        body = " ".join(_BENCH_WORDS[(i + j) % len(_BENCH_WORDS)] for j in range(max(1, size // 8)))
+        line = (base + body)[:max(len(base) + 2, size) - 2] + '"}'
+    elif kind == "entropy":
+        import base64
+        line = base64.b64encode(os.urandom(size)).decode()[:size]
+    else:  # text
+        line = " ".join(_BENCH_WORDS[(i + j) % len(_BENCH_WORDS)] for j in range(size // 4))
+    return (line[:size]).ljust(size, "x")
+
+
+def synth_corpus(kind, line_bytes, count):
+    return [synth_line(kind, line_bytes, i) for i in range(count)]
+
+
+def real_corpus(inv, max_lines=500):
+    """The node's own recent lines (containers tail + agent self-log) — the most
+    honest compression corpus there is."""
+    lines = [l for _, l in SELF_LOG_BUF[-100:]]
+    for c in (inv or {}).get("docker_containers", [])[:5]:
+        if c.get("state") != "running":
+            continue
+        raw = docker_get_bytes(f"/containers/{c.get('id')}/logs?stdout=1&stderr=1&tail=100")
+        if raw:
+            lines.extend(l for _, l in parse_docker_log_lines(demux_docker_logs(raw), None))
+        if len(lines) >= max_lines:
+            break
+    return lines[:max_lines]
+
+
+def bench_encoders(encodings):
+    """[(name, compress_fn, decompress_fn)] for the encodings this interpreter
+    supports; unsupported zstd picks are skipped (reported by omission)."""
+    out = []
+    for enc in encodings:
+        name, _, level = enc.partition(":")
+        if name == "identity":
+            out.append((enc, lambda b: b, lambda b: b))
+        elif name == "gzip":
+            lvl = int(level or 6)
+            out.append((enc,
+                        lambda b, l=lvl: gzip.compress(b, compresslevel=l),
+                        gzip.decompress))
+        elif name == "zstd":
+            try:
+                from compression import zstd as _z   # stdlib 3.14+
+                lvl = int(level or 3)
+                out.append((enc, lambda b, l=lvl: _z.compress(b, level=l), _z.decompress))
+            except ImportError:
+                continue
+    return out
+
+
+def _entries_body(lines):
+    now = time.time()
+    return json.dumps({"entries": [
+        {"source": "bench", "ts": now, "line": l} for l in lines]}).encode()
+
+
+def bench_compression(params, inv):
+    """Ratio × speed matrix over every (corpus, encoding) pair — local CPU only."""
+    corpora = {}
+    for kind in params["corpora"]:
+        if kind == "real":
+            lines = real_corpus(inv)
+            if lines:
+                corpora["real"] = lines
+        else:
+            for size in params["line_bytes"]:
+                corpora[f"{kind}@{size}B"] = synth_corpus(kind, size, params["line_counts"][0])
+    rows = []
+    for cname, lines in corpora.items():
+        raw = _entries_body(lines)
+        for enc, comp, decomp in bench_encoders(params["encodings"]):
+            t0 = time.perf_counter()
+            wire = comp(raw)
+            compress_ms = (time.perf_counter() - t0) * 1000
+            t1 = time.perf_counter()
+            decomp(wire)
+            decompress_ms = (time.perf_counter() - t1) * 1000
+            rows.append({
+                "corpus": cname, "lines": len(lines), "encoding": enc,
+                "raw_bytes": len(raw), "wire_bytes": len(wire),
+                "ratio": round(len(raw) / max(1, len(wire)), 2),
+                "compress_ms": round(compress_ms, 2),
+                "decompress_ms": round(decompress_ms, 2),
+            })
+    return rows
+
+
+def bench_ingest(params, state, headers):
+    """The full wire path per encoding × batch volume: wall time, bytes on wire,
+    and the server's own decode/insert split from the timings block. dry_run
+    (default) times everything but stores nothing."""
+    mid_size = params["line_bytes"][len(params["line_bytes"]) // 2]
+    dry = "true" if params.get("dry_run", True) else "false"
+    url_base = (state.get("log_ingest") or
+                f"{state['api_base']}/nodes/{state['node_id']}/logs")
+    rows = []
+    for count in params["line_counts"]:
+        raw = _entries_body(synth_corpus("json", mid_size, count))
+        for enc, comp, _ in bench_encoders(params["encodings"]):
+            body = comp(raw)
+            req_headers = {**headers, "Content-Type": "application/json",
+                           "User-Agent": f"pods-agent/{AGENT_VERSION}"}
+            if not enc.startswith("identity"):
+                req_headers["Content-Encoding"] = enc.partition(":")[0]
+            req = urllib.request.Request(f"{url_base}?dry_run={dry}", data=body,
+                                         method="POST", headers=req_headers)
+            ctx = ssl._create_unverified_context() if os.environ.get(
+                "PODS_AGENT_INSECURE", "").lower() == "true" else None
+            t0 = time.perf_counter()
+            try:
+                with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
+                    parsed = json.loads(resp.read().decode() or "{}")
+            except Exception as e:
+                rows.append({"encoding": enc, "lines": count, "error": str(e)[:200]})
+                continue
+            wall_ms = (time.perf_counter() - t0) * 1000
+            server = (parsed.get("result") or {}).get("timings") or {}
+            rows.append({
+                "encoding": enc, "lines": count,
+                "raw_bytes": len(raw), "wire_bytes": len(body),
+                "wall_ms": round(wall_ms, 2),
+                "server_decode_ms": server.get("decode_ms"),
+                "server_insert_ms": server.get("insert_ms"),
+                "dry_run": params.get("dry_run", True),
+            })
+    return rows
+
+
+def _pctl(vals, p):
+    if not vals:
+        return None
+    s = sorted(vals)
+    return round(s[min(len(s) - 1, int(len(s) * p / 100))], 2)
+
+
+def bench_latency(params, state, headers):
+    """Connection-leg waterfall to central (DNS/TCP/TLS/TTFB/total over a raw
+    socket — any HTTP status counts, only the legs matter) + wall-clock
+    percentiles for the authed checkin (auth + DB cost included)."""
+    from urllib.parse import urlparse
+    u = urlparse(state["api_base"])
+    host = u.hostname or "localhost"
+    port = u.port or (443 if u.scheme == "https" else 80)
+    n = params["probe_count"]
+
+    legs = {"dns_ms": [], "tcp_ms": [], "tls_ms": [], "ttfb_ms": [], "total_ms": []}
+    for _ in range(n):
+        try:
+            t0 = time.perf_counter()
+            addr = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)[0][4]
+            t1 = time.perf_counter()
+            s = socket.create_connection(addr[:2], timeout=10)
+            t2 = time.perf_counter()
+            t3 = t2
+            if u.scheme == "https":
+                sctx = ssl._create_unverified_context() if os.environ.get(
+                    "PODS_AGENT_INSECURE", "").lower() == "true" else ssl.create_default_context()
+                s = sctx.wrap_socket(s, server_hostname=host)
+                t3 = time.perf_counter()
+            s.sendall(f"GET / HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n".encode())
+            s.recv(1)
+            t4 = time.perf_counter()
+            s.close()
+            legs["dns_ms"].append((t1 - t0) * 1000)
+            legs["tcp_ms"].append((t2 - t1) * 1000)
+            legs["tls_ms"].append((t3 - t2) * 1000)
+            legs["ttfb_ms"].append((t4 - t3) * 1000)
+            legs["total_ms"].append((t4 - t0) * 1000)
+        except Exception:
+            continue
+
+    checkin_ms = []
+    for _ in range(min(n, 10)):
+        t0 = time.perf_counter()
+        try:
+            http_json("POST", f"{state['api_base']}/nodes/{state['node_id']}/checkin",
+                      body={}, headers=headers)
+            checkin_ms.append((time.perf_counter() - t0) * 1000)
+        except Exception:
+            continue
+
+    def agg(vals):
+        return {"p50": _pctl(vals, 50), "p95": _pctl(vals, 95),
+                "min": _pctl(vals, 0), "max": _pctl(vals, 100), "n": len(vals)}
+
+    return {
+        "target": f"{host}:{port}",
+        "legs": {k: agg(v) for k, v in legs.items()},
+        "checkin_wall": agg(checkin_ms),
+    }
+
+
+def bench_docker(inv, caps):
+    """Docker socket cost — time AND bytes for what the agent actually does:
+    the inventory scan and per-container log fetches."""
+    if "runtime.docker" not in caps:
+        return {"available": False}
+    t0 = time.perf_counter()
+    raw = docker_get_bytes("/containers/json?all=true")
+    scan_ms = (time.perf_counter() - t0) * 1000
+    containers = (inv or {}).get("docker_containers", [])
+    fetches = []
+    for c in [c for c in containers if c.get("state") == "running"][:5]:
+        t1 = time.perf_counter()
+        body = docker_get_bytes(f"/containers/{c.get('id')}/logs?stdout=1&stderr=1&tail=100")
+        fetches.append({
+            "container": (c.get("names") or ["?"])[0],
+            "ms": round((time.perf_counter() - t1) * 1000, 2),
+            "bytes": len(body) if body else 0,
+        })
+    return {
+        "available": True,
+        "container_count": len(containers),
+        "inventory_scan_ms": round(scan_ms, 2),
+        "inventory_scan_bytes": len(raw) if raw else 0,
+        "log_fetches": fetches,
+    }
+
+
+def bench_payload(caps, inv):
+    """Checkin payload anatomy — what each piece costs on the wire, json + gzip.
+    Proves the hash-gating discipline: steady-state vs full-inventory."""
+    status = sample_status(caps, inv)
+    h = inventory_hash(inv)
+    heartbeat = {"agent_version": AGENT_VERSION, "capabilities": caps,
+                 "status": status, "inventory_hash": h}
+    full = {**heartbeat, "inventory": inv}
+    sample = metrics_sample(caps, inv)
+    rows = {}
+    for name, obj in (("heartbeat", heartbeat), ("heartbeat_plus_inventory", full),
+                      ("one_metrics_sample", sample)):
+        raw = json.dumps(obj).encode()
+        rows[name] = {"json_bytes": len(raw), "gzip_bytes": len(gzip.compress(raw))}
+    return rows
+
+
+def bench_clock(state, headers):
+    """Agent clock vs the server's Date header — edge log timestamps ride edge
+    clocks, so skew is an operational number worth knowing."""
+    import email.utils
+    req = urllib.request.Request(
+        f"{state['api_base']}/nodes/{state['node_id']}/commands",
+        headers={**headers, "User-Agent": f"pods-agent/{AGENT_VERSION}"})
+    ctx = ssl._create_unverified_context() if os.environ.get(
+        "PODS_AGENT_INSECURE", "").lower() == "true" else None
+    t0 = time.time()
+    try:
+        with urllib.request.urlopen(req, timeout=15, context=ctx) as resp:
+            date_hdr = resp.headers.get("Date")
+        t1 = time.time()
+    except Exception as e:
+        return {"error": str(e)[:200]}
+    if not date_hdr:
+        return {"error": "no Date header"}
+    server = email.utils.parsedate_to_datetime(date_hdr).timestamp()
+    midpoint = (t0 + t1) / 2
+    return {"skew_ms": round((midpoint - server) * 1000, 1),
+            "rtt_ms": round((t1 - t0) * 1000, 1),
+            "note": "positive = agent clock ahead of server (±500ms noise: Date has 1s resolution)"}
+
+
+def run_bench_suite(params, state, headers, caps, inv):
+    """Assemble the warm-suite report. Each section is independently fault-
+    isolated — one failure records an error, never aborts the run."""
+    t0 = time.perf_counter()
+    zstd_ok = True
+    try:
+        from compression import zstd as _z  # noqa: F401
+    except ImportError:
+        zstd_ok = False
+    report = {"meta": {
+        "agent_version": AGENT_VERSION,
+        "hostname": socket.gethostname() if share_hostname() else "(withheld)",
+        "started": round(time.time(), 3),
+        "settings": params,
+        "zstd_supported": zstd_ok,
+    }}
+    sections = (
+        ("compression", lambda: bench_compression(params, inv)),
+        ("ingest", lambda: bench_ingest(params, state, headers)),
+        ("latency", lambda: bench_latency(params, state, headers)),
+        ("docker", lambda: bench_docker(inv, caps)),
+        ("payload", lambda: bench_payload(caps, inv)),
+        ("clock", lambda: bench_clock(state, headers)),
+    )
+    for name, fn in sections:
+        try:
+            report[name] = fn()
+        except Exception as e:
+            report[name] = {"error": f"{type(e).__name__}: {e}"[:300]}
+    report["meta"]["duration_ms"] = round((time.perf_counter() - t0) * 1000, 1)
+    return report
+
+
+def post_command_result(state, headers, command_id, status, result):
+    try:
+        http_json("POST",
+                  f"{state['api_base']}/nodes/{state['node_id']}/commands/{command_id}/result",
+                  body={"status": status, "result": result}, headers=headers, timeout=30)
+        return True
+    except Exception as e:
+        log(f"command result post failed for {command_id}: {getattr(e, 'reason', e)}")
+        return False
 
 
 # Commands ----------------------------------------------------------------------
@@ -706,6 +1065,8 @@ def join(url, node_id, claim_token, tenant=None):
     url = url.rstrip("/")
     log_probe_policy()
     caps = detect_capabilities()
+    milestone("caps_detected")
+    milestone("join_start")
     log(f"joining node '{node_id}' at {url} (capabilities: {caps}{', tenant: ' + tenant if tenant else ''})")
     try:
         resp = http_json(
@@ -734,6 +1095,7 @@ def join(url, node_id, claim_token, tenant=None):
         "joined_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
     save_state(state)
+    milestone("join_ok")
     log(f"joined — state saved to {state_file()}")
 
     preauthkey = result.get("ts_preauthkey")
@@ -765,6 +1127,8 @@ def _maybe_join_tailnet(preauthkey, login_server):
         rc = subprocess.run(
             ["tailscale", "up", "--authkey", preauthkey, f"--login-server={login_server}"],
             timeout=60).returncode
+        if rc == 0:
+            milestone("tailnet_join_ok")
         log("tailnet join " + ("succeeded" if rc == 0 else f"FAILED (rc={rc}) — continuing; agent works over plain API too"))
     except Exception as e:
         log(f"tailnet join errored: {e} — continuing; agent works over plain API too")
@@ -804,8 +1168,10 @@ def run():
 
     log_probe_policy()
     log(f"checkin loop starting for node '{node_id}' against {state['api_base']} (interval {interval}s)")
+    record_container_milestones()
     while not _stop["flag"]:
         caps = detect_capabilities(state.get("namespace"))
+        milestone("caps_detected")
         inv = collect_inventory(caps, state.get("namespace"))
         h = inventory_hash(inv)
 
@@ -836,7 +1202,10 @@ def run():
             send_full = bool(result.get("resync"))
             interval = int(result.get("poll_after_seconds") or interval)
             backoff = interval
+            milestone("first_checkin_ok")
             # 200 = stored (dedupe makes resends harmless) — clear what was sent.
+            if metrics_batch:
+                milestone("first_metrics_flush")
             del metrics_buf[:len(metrics_batch)]
 
             # Config-as-data: adopt central's currently-published endpoints.
@@ -857,9 +1226,22 @@ def run():
             try:
                 cmds = http_json("GET", f"{state['api_base']}/nodes/{node_id}/commands", headers=headers)
                 pending = (cmds.get("result") or {}).get("commands") or []
-                if pending:
-                    # Executor lands with command dispatch; for now visibility beats silence.
-                    log(f"received {len(pending)} command(s) — no executor in v1, ignoring: {pending}")
+                for cmd in pending:
+                    cid, ctype = cmd.get("command_id"), cmd.get("type")
+                    if ctype == "bench":
+                        log(f"bench command {cid} — running warm suite (blocks this loop pass, ~10-20s)")
+                        try:
+                            report = run_bench_suite(cmd.get("params") or {}, state, headers, caps, inv)
+                            post_command_result(state, headers, cid, "done", report)
+                            log(f"bench {cid} complete in {report['meta']['duration_ms']}ms")
+                        except Exception as e:
+                            post_command_result(state, headers, cid, "error",
+                                                {"error": f"{type(e).__name__}: {e}"[:300]})
+                            log(f"bench {cid} FAILED: {e}")
+                    else:
+                        log(f"unsupported command type '{ctype}' ({cid}) — reporting error")
+                        post_command_result(state, headers, cid, "error",
+                                            {"error": f"unsupported command type '{ctype}'"})
             except (urllib.error.HTTPError, urllib.error.URLError):
                 pass  # command poll is best-effort; next loop retries
 

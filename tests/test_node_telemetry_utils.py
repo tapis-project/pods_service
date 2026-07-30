@@ -22,8 +22,11 @@ from node_telemetry_utils import (
     normalize_metric_samples,
     clamp_window_step,
     downsample_samples,
+    sanitize_bench_settings,
     supported_encodings,
     METRIC_FIELDS,
+    BENCH_DEFAULT_ENCODINGS,
+    BENCH_DEFAULT_CORPORA,
 )
 
 NOW = datetime(2026, 7, 30, 12, 0, 0)
@@ -237,3 +240,38 @@ def test_downsample_all_fields_present():
     series = downsample_samples([], 0.0, 600, 60)
     for f in METRIC_FIELDS:
         assert series[f] == []
+
+
+# ── sanitize_bench_settings ──────────────────────────────────────────────────
+
+def test_bench_settings_defaults():
+    s = sanitize_bench_settings({})
+    assert s["encodings"] == BENCH_DEFAULT_ENCODINGS
+    assert s["corpora"] == BENCH_DEFAULT_CORPORA
+    assert s["probe_count"] == 10
+    assert s["dry_run"] is True                    # storing is the deliberate choice
+    s2 = sanitize_bench_settings("not a dict")
+    assert s2["dry_run"] is True
+
+
+def test_bench_settings_clamps_and_filters():
+    s = sanitize_bench_settings({
+        "encodings": ["gzip:9", "brotli", "identity"],   # brotli dropped
+        "corpora": ["entropy", "malware"],               # malware dropped
+        "line_bytes": [1, 512, 999999, 80, 80],          # out-of-range dropped, deduped
+        "line_counts": [5, 100, 50000],
+        "probe_count": 500,
+        "dry_run": False,
+    })
+    assert s["encodings"] == ["gzip:9", "identity"]
+    assert s["corpora"] == ["entropy"]
+    assert s["line_bytes"] == [80, 512]
+    assert s["line_counts"] == [100]
+    assert s["probe_count"] == 50
+    assert s["dry_run"] is False
+
+
+def test_bench_settings_empty_selections_fall_back():
+    s = sanitize_bench_settings({"encodings": ["nope"], "line_bytes": [1]})
+    assert s["encodings"] == BENCH_DEFAULT_ENCODINGS
+    assert len(s["line_bytes"]) == 3

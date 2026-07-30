@@ -5,6 +5,7 @@ import os
 import secrets
 import time
 
+import json
 from typing import Optional
 
 import requests
@@ -48,11 +49,20 @@ from node_telemetry_utils import (
     normalize_metric_samples,
     clamp_window_step,
     downsample_samples,
+    sanitize_bench_settings,
     supported_encodings,
     METRIC_FIELDS,
 )
+from models_node_commands import (
+    NodeCommand,
+    NodeCommandResultIn,
+    NodeBenchRequest,
+    NodeCommandResponse,
+    NodeCommandsListResponse,
+    COMMAND_RESULT_MAX_BYTES,
+)
 from models_pods import Pod
-from sqlalchemy import delete as sa_delete, select as sa_select
+from sqlalchemy import delete as sa_delete, select as sa_select, update as sa_update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from tapis_auth_utils import TapisAuthEntity, run_tapis_auth_check, run_tapis_auth_callback
 from tapisservice.tapisfastapi.utils import g, ok
@@ -314,10 +324,11 @@ async def delete_node(node_id: str):
     # Routes die with their node — they'd otherwise keep rendering into the proxy config.
     for route in Route.db_get_for_node(node_id, tenant=g.request_tenant_id, site=g.site_id):
         route.db_delete()
-    # Telemetry dies with the node too (logs + metrics rows would otherwise orphan).
+    # Telemetry + commands die with the node (rows would otherwise orphan).
     store = _telemetry_store(NodeLog)
     store.run("execute", sa_delete(NodeLog).where(NodeLog.node_id == node_id))
     store.run("execute", sa_delete(NodeMetric).where(NodeMetric.node_id == node_id))
+    store.run("execute", sa_delete(NodeCommand).where(NodeCommand.node_id == node_id))
     node.db_delete()
     return ok(result="", msg="Node deleted successfully.")
 
@@ -485,17 +496,141 @@ async def checkin_node(node_id: str, checkin: NodeCheckinRequest, request: Reque
     operation_id="get_node_commands",
     response_model=NodeCommandsResponse)
 async def get_node_commands(node_id: str, request: Request):
-    """Pending commands for this node.
+    """Pending one-shot commands for this node (dispatcher v1 — first consumer: bench).
 
-    Phase 1 stub: the response shape is the contract; there is no command dispatcher yet,
-    so this always returns an empty list. The dispatcher (and true long-poll hold) lands
-    with the Phase 2 agent work.
+    Queued commands are handed over EXACTLY ONCE (status -> delivered here); the agent
+    reports completion via POST .../commands/{command_id}/result. No redelivery in v1 —
+    a delivered-but-never-completed command stays visible in the run history as such.
     """
     node = _get_node_or_404(node_id)
     _require_agent(request, node)
+
+    store = _telemetry_store(NodeCommand)
+    stmt = (
+        sa_select(NodeCommand)
+        .where(NodeCommand.node_id == node.node_id, NodeCommand.status == "queued")
+        .order_by(NodeCommand.created_ts.asc()))
+    queued = store.run("execute", stmt, scalars=True, all=True)
+    if queued:
+        store.run("execute",
+                  sa_update(NodeCommand)
+                  .where(NodeCommand.command_id.in_([c.command_id for c in queued]))
+                  .values(status="delivered", delivered_ts=_utcnow()))
     return ok(
-        result={"commands": [], "poll_after_seconds": COMMANDS_POLL_AFTER_SECONDS},
-        msg="No pending commands.")
+        result={
+            "commands": [
+                {"command_id": c.command_id, "type": c.type, "params": c.params or {}}
+                for c in queued
+            ],
+            "poll_after_seconds": COMMANDS_POLL_AFTER_SECONDS,
+        },
+        msg=f"{len(queued)} pending command(s)." if queued else "No pending commands.")
+
+
+@router.post(
+    "/pods/nodes/{node_id}/commands/{command_id}/result",
+    tags=["Nodes"],
+    summary="post_node_command_result",
+    operation_id="post_node_command_result",
+    response_model=NodeCommandResponse)
+async def post_node_command_result(node_id: str, command_id: str, body: NodeCommandResultIn, request: Request):
+    """Agent completion report for a delivered command (X-Pods-Node-Token auth)."""
+    node = _get_node_or_404(node_id)
+    _require_agent(request, node)
+
+    if body.status not in ("done", "error"):
+        raise ResourceError(f"Command result status must be done|error, got '{body.status}'.", 400)
+    result = body.result or {}
+    if len(json.dumps(result)) > COMMAND_RESULT_MAX_BYTES:
+        raise ResourceError(f"Command result exceeds {COMMAND_RESULT_MAX_BYTES} bytes.", 400)
+
+    store = _telemetry_store(NodeCommand)
+    cmd = store.run(
+        "execute",
+        sa_select(NodeCommand).where(
+            NodeCommand.command_id == command_id, NodeCommand.node_id == node.node_id),
+        scalars=True, first=True)
+    if not cmd or cmd.status not in ("queued", "delivered"):
+        raise ResourceError(f"Command '{command_id}' not found or already completed.", 404)
+    store.run("execute",
+              sa_update(NodeCommand)
+              .where(NodeCommand.command_id == command_id)
+              .values(status=body.status, result=result, completed_ts=_utcnow()))
+    return ok(result={"command_id": command_id, "status": body.status},
+              msg="Command result recorded.")
+
+
+# Bench — the dispatcher's first consumer (user-triggered edge benchmark) ------
+
+@router.post(
+    "/pods/nodes/{node_id}/bench",
+    tags=["Nodes"],
+    summary="trigger_node_bench",
+    operation_id="trigger_node_bench",
+    response_model=NodeCommandResponse)
+async def trigger_node_bench(node_id: str, bench: NodeBenchRequest):
+    """Queue a benchmark run on this node (node USER permission).
+
+    Settings are sanitized/clamped server-side; the agent picks the command up on its
+    next command poll (within one checkin interval) and posts the report back. One
+    bench at a time per node — a still-active run rejects new triggers.
+    """
+    node = _get_node_or_404(node_id)
+
+    store = _telemetry_store(NodeCommand)
+    active = store.run(
+        "execute",
+        sa_select(NodeCommand).where(
+            NodeCommand.node_id == node.node_id,
+            NodeCommand.type == "bench",
+            NodeCommand.status.in_(["queued", "delivered"])),
+        scalars=True, all=True)
+    # Stale actives (agent died mid-run / never picked up) auto-expire so one bad
+    # run can't lock benching forever.
+    fresh_cutoff = _utcnow() - datetime.timedelta(minutes=15)
+    if any(c.created_ts and c.created_ts > fresh_cutoff for c in active):
+        raise ResourceError("A benchmark is already queued or running on this node — wait for it to finish (or up to 15 minutes for a dead run to expire).", 409)
+    if active:
+        store.run("execute",
+                  sa_update(NodeCommand)
+                  .where(NodeCommand.command_id.in_([c.command_id for c in active]))
+                  .values(status="error",
+                          result={"error": "expired — never completed within 15 minutes"},
+                          completed_ts=_utcnow()))
+
+    cmd = NodeCommand(
+        command_id=_mint_token("nc"),
+        node_id=node.node_id,
+        type="bench",
+        params=sanitize_bench_settings(bench.dict(exclude_unset=True)),
+        status="queued",
+        requested_by=getattr(g, 'username', '') or '',
+        created_ts=_utcnow(),
+        tenant_id=node.tenant_id,
+        site_id=node.site_id,
+    )
+    cmd.db_create()
+    return ok(result=cmd.display(),
+              msg="Benchmark queued — the agent picks it up on its next command poll (within one checkin interval).")
+
+
+@router.get(
+    "/pods/nodes/{node_id}/bench",
+    tags=["Nodes"],
+    summary="list_node_bench_runs",
+    operation_id="list_node_bench_runs",
+    response_model=NodeCommandsListResponse)
+async def list_node_bench_runs(node_id: str):
+    """Bench run history for a node (node READ permission), newest first."""
+    node = _get_node_or_404(node_id)
+    store = _telemetry_store(NodeCommand)
+    stmt = (
+        sa_select(NodeCommand)
+        .where(NodeCommand.node_id == node.node_id, NodeCommand.type == "bench")
+        .order_by(NodeCommand.created_ts.desc())
+        .limit(20))
+    runs = store.run("execute", stmt, scalars=True, all=True)
+    return ok(result=[c.display() for c in runs], msg=f"Retrieved {len(runs)} bench run(s).")
 
 
 # Telemetry — Phase 3: agent-shipped logs + metrics history -------------------
@@ -542,19 +677,25 @@ def _log_retention_info() -> dict:
     summary="ingest_node_logs",
     operation_id="ingest_node_logs",
     response_model=NodeLogIngestResponse)
-async def ingest_node_logs(node_id: str, request: Request):
+async def ingest_node_logs(
+    node_id: str,
+    request: Request,
+    dry_run: bool = Query(False, description="Decode, validate, and TIME the batch through the full path but store nothing — the bench suite's default mode, so benchmarks never pollute real logs or churn retention."),
+):
     """Agent log shipping (X-Pods-Node-Token auth — same path as checkin).
 
     Body (identity/gzip/zstd per Content-Encoding): {"entries": [{"source", "ts", "line"}]}.
     source = container name or "agent"; ts = epoch seconds or ISO-8601 (falls back to
     receipt time). Batches are clamped (batch size, line length, decompressed body
     bytes) and per-node retention (rows + age) is applied immediately — the response
-    reports accepted/dropped/truncated plus the caps so agents can adapt.
+    reports accepted/dropped/truncated plus the caps so agents can adapt. `timings`
+    (decode/insert ms) lets benchmarks split wall-clock into network vs server time.
     """
     node = _get_node_or_404(node_id)
     _require_agent(request, node)
 
     body = await request.body()
+    t0 = time.monotonic()
     try:
         raw = decode_payload(body, request.headers.get("content-encoding"), NODES_LOGS_MAX_BODY_BYTES)
         payload = parse_json_payload(raw)
@@ -562,19 +703,26 @@ async def ingest_node_logs(node_id: str, request: Request):
             payload.get("entries"), _utcnow(), NODES_LOGS_MAX_BATCH, NODES_LOGS_MAX_LINE_CHARS)
     except ValueError as e:
         raise ResourceError(f"Log ingest rejected: {e}", 400)
+    decode_ms = round((time.monotonic() - t0) * 1000, 2)
 
-    if rows:
+    insert_ms = None
+    if rows and not dry_run:
         now = _utcnow()
         values = [{**r, "node_id": node.node_id, "ingest_ts": now,
                    "tenant_id": node.tenant_id, "site_id": node.site_id} for r in rows]
         store = _telemetry_store(NodeLog)
+        t1 = time.monotonic()
         store.run("execute", pg_insert(NodeLog).values(values))
+        insert_ms = round((time.monotonic() - t1) * 1000, 2)
         _prune_telemetry(store, NodeLog, node.node_id, NODES_LOGS_MAX_ROWS, NODES_LOGS_MAX_AGE_DAYS)
 
     return ok(
         result={"accepted": len(rows), "dropped": dropped, "truncated": truncated,
+                "dry_run": dry_run,
+                "timings": {"decode_ms": decode_ms, "insert_ms": insert_ms,
+                            "wire_bytes": len(body), "decoded_bytes": len(raw)},
                 "retention": _log_retention_info()},
-        msg=f"Stored {len(rows)} log line(s).")
+        msg=f"{'Timed (dry run, not stored)' if dry_run else 'Stored'} {len(rows)} log line(s).")
 
 
 @router.get(
