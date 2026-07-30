@@ -166,9 +166,15 @@ def start_generic_pod(input_pod, revision: int, resolved_secrets: dict = None):
                         interpolated_content = interpolate_config_content(config_content, resolved_secrets, fail_on_missing=False)
                         interpolated_content = interpolate_legacy_secrets(interpolated_content, pods_env)
                         
-                        # Determine config filename
+                        # Determine config filename. The write path must mirror the k8s mount's
+                        # nfs_sub_path — a sub_path mount exposes only that subdirectory, so a
+                        # root-level write would never appear at mount_path (and once-mode would
+                        # probe the wrong file).
                         cfg_filename = config_filename or os.path.basename(mount_path)
-                        config_file_path = f"volumes/{source_id}/{cfg_filename}"
+                        if sub_path:
+                            config_file_path = f"volumes/{source_id}/{sub_path}/{cfg_filename}"
+                        else:
+                            config_file_path = f"volumes/{source_id}/{cfg_filename}"
                         
                         logger.info(f"Config file path: '{config_file_path}', tenant_id: '{pod.tenant_id}'")
                         
