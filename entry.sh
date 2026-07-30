@@ -10,8 +10,10 @@ if [ $PODS_COMPONENT = "api" ]; then
     python3 -u /home/tapis/service/auto_openapi_writer.py
     # Set up stores during init.
     python3 -u /home/tapis/service/stores.py
-    # Start API with 5 worker processes
-    cd /home/tapis/service; uvicorn api:api --workers ${PODS_UVICORN_WORKERS:-1} --host 0.0.0.0 --port 8000
+    # Start API. PODS_UVICORN_RELOAD=true (dev only, #DEV-gated in api.yml) adds --reload:
+    # with the dev hostPath mount of service/, code edits go live without a pod restart —
+    # only migrations/config changes need a redeploy. Note: --reload forces single-process.
+    cd /home/tapis/service; uvicorn api:api --workers ${PODS_UVICORN_WORKERS:-1} --host 0.0.0.0 --port 8000 $([ "$PODS_UVICORN_RELOAD" = "true" ] && echo "--reload")
     # prod - https://www.uvicorn.org/deployment/
     # gunicorn uvicorn.worker stuff
 elif [ $PODS_COMPONENT = "health" ]; then
