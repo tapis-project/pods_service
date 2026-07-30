@@ -25,6 +25,7 @@ from kubernetes_utils import get_current_k8_services, get_current_k8_pods, rm_co
 from codes import AVAILABLE, DELETING, STOPPED, ERROR, REQUESTED, COMPLETE, RESTART, ON, OFF
 from stores import pg_store, SITE_TENANT_DICT
 from models_pods import Pod
+from models_routes import Route
 from models_templates_utils import combine_pod_and_template_recursively
 from models_volumes import Volume
 from models_snapshots import Snapshot
@@ -459,6 +460,15 @@ def _is_pod_networking_live(pod, input_pod) -> bool:
     return bool(status_container.get('ready', False))
 
 
+# Smart defaults: already-compressed formats where re-compression wastes CPU.
+# Shared by pod networking entries and node routes.
+_COMPRESSION_EXCLUDED_DEFAULTS = [
+    'application/gzip', 'application/zip', 'application/zstd', 'application/x-tar',
+    'application/x-bzip2', 'application/x-xz', 'application/x-7z-compressed',
+    'image/png', 'image/jpeg', 'image/webp', 'image/gif',
+    'video/mp4', 'video/webm', 'audio/mpeg', 'audio/ogg']
+
+
 def set_traefik_proxy():
     all_pods = []
     stmt = select(Pod)
@@ -574,11 +584,7 @@ def set_traefik_proxy():
                 "proxy_compression": net_info.get('proxy_compression', True),
                 "proxy_compression_encodings": net_info.get('proxy_compression_encodings', ['zstd', 'br', 'gzip']),
                 "proxy_compression_excluded_content_types": list(set(
-                    # Smart defaults: already-compressed formats where re-compression wastes CPU
-                    ['application/gzip', 'application/zip', 'application/zstd', 'application/x-tar',
-                     'application/x-bzip2', 'application/x-xz', 'application/x-7z-compressed',
-                     'image/png', 'image/jpeg', 'image/webp', 'image/gif',
-                     'video/mp4', 'video/webm', 'audio/mpeg', 'audio/ogg']
+                    _COMPRESSION_EXCLUDED_DEFAULTS
                     + net_info.get('proxy_compression_excluded_content_types', [])
                 )),
                 "proxy_compression_min_response_body_bytes": net_info.get('proxy_compression_min_response_body_bytes', 1024),
@@ -633,6 +639,48 @@ def set_traefik_proxy():
                 case "local_only":
                     # when users only need networking to connect to other pods in the same namespace
                     pass
+
+    # Node routes (publish v0) — extra http entries alongside pods. k8_service can be ANY
+    # host reachable from central (tailnet IP/name, or a dev gateway like
+    # host.minikube.internal); the template renders http://<backend_host>:<port> either way.
+    # forwardAuth reuses the shared tapis_auth flow at /pods/routes/{route_id}/auth.
+    all_routes = []
+    route_stmt = select(Route)
+    for tenant in SITE_TENANT_DICT[conf.site_id]:
+        try:
+            all_routes += pg_store[conf.site_id][tenant].run("execute", route_stmt, scalars=True, all=True)
+        except Exception as e:
+            logger.error(f"Error fetching node routes for tenant {tenant}: {e}")
+    for route in all_routes:
+        try:
+            if not route.url or not route.backend_host:
+                logger.warning(f"Skipping route '{route.route_id}': url or backend_host unset — not rendering it into the proxy config.")
+                continue
+            tapis_domain = route.url.split('.pods.', 1)[1]
+            template_info = {
+                "routing_port": route.port,
+                "url": route.url,
+                "k8_service": route.backend_host,
+                "splash_mode": False,
+                "ip_allow_list": [],
+                "proxy_compression": True,
+                "proxy_compression_encodings": ['zstd', 'br', 'gzip'],
+                "proxy_compression_excluded_content_types": list(_COMPRESSION_EXCLUDED_DEFAULTS),
+                "proxy_compression_min_response_body_bytes": 1024,
+                "custom_domain": "",
+                "custom_domain_verified": False,
+            }
+            if route.tapis_auth:
+                template_info.update({
+                    "tapis_auth": True,
+                    "auth_url": f"https://{tapis_domain}/v3/pods/routes/{route.route_id}/auth",
+                    "tapis_auth_response_headers": route.tapis_auth_response_headers or {},
+                    "tapis_auth_excluded_paths": route.tapis_auth_excluded_paths or [],
+                    "tapis_auth_excluded_path_regex": route.tapis_auth_excluded_path_regex or [],
+                })
+            http_proxy_info[route.traefik_service_name()] = template_info
+        except Exception as e:
+            logger.error(f"Error rendering route '{getattr(route, 'route_id', '?')}' into proxy config. Skipping. e: {e}")
 
     # This functions only updates if config is out of date.
     update_traefik_configmap(tcp_proxy_info, http_proxy_info, postgres_proxy_info)
