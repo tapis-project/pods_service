@@ -45,6 +45,7 @@ WORLD_USER = 'ABACO_WORLD'
 # which the route allowlist in check_route_permissions then rejects).
 NO_TOKEN_ROUTES = [
     (re.compile(r'^/pods/[^/]+/auth(/callback)?$'), {"GET"}),
+    (re.compile(r'^/pods/routes/[^/]+/auth(/callback)?$'), {"GET"}),
     (re.compile(r'^/pods/[^/]+/gate$'), {"GET"}),
     (re.compile(r'^/pods/[^/]+/gate/redeem$'), {"GET", "POST"}),
     (re.compile(r'^/pods/nodes/[^/]+/join$'), {"POST"}),
@@ -262,6 +263,19 @@ def check_route_permissions(request):
         ["/pods/nodes/{node_id}", "GET", codes.READ],
         ["/pods/nodes/{node_id}", "DELETE", codes.ADMIN],
         ["/pods/nodes/{node_id}/regenerate", "POST", codes.ADMIN],
+        # node routes (publish v0) — CRUD gated by NODE permissions (the nodes/{node_id}
+        # branch below resolves the object at path idx 3)
+        ["/pods/nodes/{node_id}/routes", "GET", codes.READ],
+        ["/pods/nodes/{node_id}/routes", "POST", codes.ADMIN],
+        ["/pods/nodes/{node_id}/routes/{route_id}", "GET", codes.READ],
+        ["/pods/nodes/{node_id}/routes/{route_id}", "DELETE", codes.ADMIN],
+        # probe = central dials the route's backend (direct + via traefik) and reports
+        # reachability — it can reach anything the rendered route itself would expose,
+        # so it sits at USER, above read-only
+        ["/pods/nodes/{node_id}/routes/{route_id}/probe", "GET", codes.USER],
+        # route forwardAuth browser flow — like pod /auth, tenant from host, no token
+        ["/pods/routes/{route_id}/auth", "GET", "NEED-BASEURL"],
+        ["/pods/routes/{route_id}/auth/callback", "GET", "NEED-BASEURL"],
         # node agent endpoints — no Tapis token; handlers authenticate via the
         # claim/agent token themselves (see NO_TOKEN_ROUTES at top of file)
         ["/pods/nodes/{node_id}/join", "POST", "NEED-BASEURL"],
@@ -297,6 +311,9 @@ def check_route_permissions(request):
         ["/pods/{pod_id}/restart", "GET", codes.ADMIN],
         ["/pods/admin/health", "GET", codes.ADMIN],
         ["/pods/admin/debug-traffic", "GET", codes.ADMIN],
+        # live traefik dynamic config (ingress alias) — discloses every pod/route
+        # hostname + middleware shape, so admin-gated (flat admin check, no object)
+        ["/pods/traefik-config", "GET", codes.ADMIN],
         ["/pods/{pod_id}/traffic", "GET", codes.READ],
         ["/pods/{pod_id}/log-runs", "GET", codes.READ],
         ["/pods/{pod_id}/log-runs/{run_index}", "GET", codes.READ],

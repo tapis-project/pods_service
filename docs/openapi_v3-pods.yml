@@ -27,10 +27,32 @@ paths:
       tags:
       - Misc
       summary: traefik_config
-      description: "Supplies traefik-config to service. Returns json traefik-config\
-        \ object for\ntraefik to use with the http provider. Dynamic configs don't\
-        \ work well in \nKubernetes."
+      description: 'Supplies traefik-config to service. Returns json traefik-config
+        object for
+
+        traefik to use with the http provider. Dynamic configs don''t work well in
+
+        Kubernetes.'
       operationId: traefik_config
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /pods/traefik-config:
+    get:
+      tags:
+      - Misc
+      summary: traefik_config_public
+      description: 'Ingress-reachable alias of /traefik-config (the bare path never
+        matches the public
+
+        PathPrefix(/v3/pods) router). Same NOT-API/tokenless posture; used by the
+        TapisUI
+
+        Routing panel as the missing traefik dashboard.'
+      operationId: traefik_config_public
       responses:
         '200':
           description: Successful Response
@@ -2315,6 +2337,195 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/NodeCommandsResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /pods/nodes/{node_id}/routes:
+    get:
+      tags:
+      - Nodes
+      summary: list_node_routes
+      description: List routes published from this node.
+      operationId: list_node_routes
+      parameters:
+      - name: node_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Node Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoutesResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    post:
+      tags:
+      - Nodes
+      summary: create_node_route
+      description: "Publish a node port: create a route at https://<route_id>.pods.<tenant-domain>.\n\
+        \nbackend_host must be reachable FROM central (a tailnet IP/name, or a dev\
+        \ gateway\nlike host.minikube.internal). With tapis_auth=true the route is\
+        \ gated by the same\nforwardAuth flow pods use, configured entirely per-route\
+        \ (allowed users/groups,\nresponse headers, excluded paths). Takes effect\
+        \ on the next proxy render (\u2264 ~2 min)."
+      operationId: create_node_route
+      parameters:
+      - name: node_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Node Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewRoute'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RouteResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /pods/nodes/{node_id}/routes/{route_id}:
+    get:
+      tags:
+      - Nodes
+      summary: get_node_route
+      description: Get one route's details.
+      operationId: get_node_route
+      parameters:
+      - name: node_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Node Id
+      - name: route_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Route Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RouteResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+      - Nodes
+      summary: delete_node_route
+      description: "Delete a route. It disappears from the proxy on the next render\
+        \ pass (\u2264 ~2 min)."
+      operationId: delete_node_route
+      parameters:
+      - name: node_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Node Id
+      - name: route_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Route Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RouteDeleteResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /pods/routes/{route_id}/auth:
+    get:
+      tags:
+      - Nodes
+      summary: route_auth
+      description: "forwardAuth endpoint for tapis_auth-gated routes \u2014 same flow\
+        \ as pod auth\n(validate an attached Tapis token, else bounce browsers through\
+        \ the tenant OAuth2\nlogin), driven by the route's own tapis_auth config and\
+        \ permissions."
+      operationId: route_auth
+      parameters:
+      - name: route_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Route Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RouteResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /pods/routes/{route_id}/auth/callback:
+    get:
+      tags:
+      - Nodes
+      summary: route_auth_callback
+      description: "OAuth2 callback for tapis_auth-gated routes \u2014 exchanges the\
+        \ code, validates the\ntoken + allowed users, sets cookies, and redirects\
+        \ to the route's return path."
+      operationId: route_auth_callback
+      parameters:
+      - name: route_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Route Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RouteResponse'
         '422':
           description: Validation Error
           content:
@@ -5315,6 +5526,83 @@ components:
       title: NewPod
       description: Object with fields that users are allowed to specify for the Pod
         class.
+    NewRoute:
+      properties:
+        route_id:
+          type: string
+          title: Route Id
+          description: "Unique route identifier \u2014 becomes the public hostname:\
+            \ <route_id>.pods.<tenant-domain>."
+        port:
+          type: integer
+          title: Port
+          description: Backend port the published service listens on.
+        backend_host:
+          type: string
+          title: Backend Host
+          description: "Host/IP traefik dials for this route (an address reachable\
+            \ FROM central \u2014 e.g. a tailnet IP/name, or host.minikube.internal\
+            \ in dev). v0: explicit; later prefilled from the node's checkin address."
+          default: ''
+        description:
+          type: string
+          title: Description
+          description: Description of the route.
+          default: ''
+        tapis_auth:
+          type: boolean
+          title: Tapis Auth
+          description: If true, will require Tapis auth to access the route.
+          default: false
+        tapis_auth_response_headers:
+          additionalProperties:
+            type: string
+          type: object
+          title: Tapis Auth Response Headers
+          description: Specification of headers to forward to the backend when using
+            Tapis auth.
+          default: {}
+        tapis_auth_allowed_users:
+          items:
+            type: string
+          type: array
+          title: Tapis Auth Allowed Users
+          description: 'List of users allowed to access the route when using Tapis
+            auth. Supports literal usernames, ''*'' (all users), and permission-based
+            groups: ''AUTHORIZED_READS'' (READ+), ''AUTHORIZED_USERS'' (USER+), ''AUTHORIZED_ADMINS''
+            (ADMIN+, includes APPROVEDADMIN). Groups resolve against the route''s
+            permissions list.'
+          default:
+          - AUTHORIZED_USERS
+        tapis_auth_return_path:
+          type: string
+          title: Tapis Auth Return Path
+          description: Path to redirect to after authenticating via Tapis auth.
+          default: /
+        tapis_auth_excluded_paths:
+          items:
+            type: string
+          type: array
+          title: Tapis Auth Excluded Paths
+          description: List of PathPrefix patterns to exclude from Tapis auth (no
+            forwardAuth). ex. ['/assets', '/static']
+          default: []
+        tapis_auth_excluded_path_regex:
+          items:
+            type: string
+          type: array
+          title: Tapis Auth Excluded Path Regex
+          description: List of PathRegexp patterns to exclude from Tapis auth. ex.
+            ['\\.(js|css|ico|png)$']
+          default: []
+      additionalProperties: false
+      type: object
+      required:
+      - route_id
+      - port
+      title: NewRoute
+      description: Object with fields that users are allowed to specify for the Route
+        class.
     NewSecret:
       properties:
         secret_id:
@@ -6880,6 +7168,187 @@ components:
         override). Only valid for template-backed pods. Whole-field granularity:
 
         resetting `volume_mounts` reverts ALL of the pod''s mounts to the template.'
+    RouteDeleteResponse:
+      properties:
+        message:
+          type: string
+          title: Message
+        metadata:
+          additionalProperties: true
+          type: object
+          title: Metadata
+        result:
+          type: string
+          title: Result
+        status:
+          type: string
+          title: Status
+        version:
+          type: string
+          title: Version
+      additionalProperties: false
+      type: object
+      required:
+      - message
+      - metadata
+      - result
+      - status
+      - version
+      title: RouteDeleteResponse
+    RouteResponse:
+      properties:
+        message:
+          type: string
+          title: Message
+        metadata:
+          additionalProperties: true
+          type: object
+          title: Metadata
+        result:
+          $ref: '#/components/schemas/RouteResponseModel'
+        status:
+          type: string
+          title: Status
+        version:
+          type: string
+          title: Version
+      additionalProperties: false
+      type: object
+      required:
+      - message
+      - metadata
+      - result
+      - status
+      - version
+      title: RouteResponse
+    RouteResponseModel:
+      properties:
+        route_id:
+          type: string
+          title: Route Id
+          description: "Unique route identifier \u2014 becomes the public hostname:\
+            \ <route_id>.pods.<tenant-domain>."
+        port:
+          type: integer
+          title: Port
+          description: Backend port the published service listens on.
+        backend_host:
+          type: string
+          title: Backend Host
+          description: "Host/IP traefik dials for this route (an address reachable\
+            \ FROM central \u2014 e.g. a tailnet IP/name, or host.minikube.internal\
+            \ in dev). v0: explicit; later prefilled from the node's checkin address."
+          default: ''
+        description:
+          type: string
+          title: Description
+          description: Description of the route.
+          default: ''
+        tapis_auth:
+          type: boolean
+          title: Tapis Auth
+          description: If true, will require Tapis auth to access the route.
+          default: false
+        tapis_auth_response_headers:
+          additionalProperties:
+            type: string
+          type: object
+          title: Tapis Auth Response Headers
+          description: Specification of headers to forward to the backend when using
+            Tapis auth.
+          default: {}
+        tapis_auth_allowed_users:
+          items:
+            type: string
+          type: array
+          title: Tapis Auth Allowed Users
+          description: 'List of users allowed to access the route when using Tapis
+            auth. Supports literal usernames, ''*'' (all users), and permission-based
+            groups: ''AUTHORIZED_READS'' (READ+), ''AUTHORIZED_USERS'' (USER+), ''AUTHORIZED_ADMINS''
+            (ADMIN+, includes APPROVEDADMIN). Groups resolve against the route''s
+            permissions list.'
+          default:
+          - AUTHORIZED_USERS
+        tapis_auth_return_path:
+          type: string
+          title: Tapis Auth Return Path
+          description: Path to redirect to after authenticating via Tapis auth.
+          default: /
+        tapis_auth_excluded_paths:
+          items:
+            type: string
+          type: array
+          title: Tapis Auth Excluded Paths
+          description: List of PathPrefix patterns to exclude from Tapis auth (no
+            forwardAuth). ex. ['/assets', '/static']
+          default: []
+        tapis_auth_excluded_path_regex:
+          items:
+            type: string
+          type: array
+          title: Tapis Auth Excluded Path Regex
+          description: List of PathRegexp patterns to exclude from Tapis auth. ex.
+            ['\\.(js|css|ico|png)$']
+          default: []
+        node_id:
+          type: string
+          title: Node Id
+          description: Node this route publishes from. Set from the request path.
+          default: ''
+        url:
+          type: string
+          title: Url
+          description: Public URL host for this route. Generated by service.
+          default: ''
+        creation_ts:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Creation Ts
+          description: Time (UTC) that this route was created.
+        update_ts:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Update Ts
+          description: Time (UTC) that this route was updated.
+      additionalProperties: false
+      type: object
+      required:
+      - route_id
+      - port
+      title: RouteResponseModel
+    RoutesResponse:
+      properties:
+        message:
+          type: string
+          title: Message
+        metadata:
+          additionalProperties: true
+          type: object
+          title: Metadata
+        result:
+          items:
+            $ref: '#/components/schemas/RouteResponseModel'
+          type: array
+          title: Result
+        status:
+          type: string
+          title: Status
+        version:
+          type: string
+          title: Version
+      additionalProperties: false
+      type: object
+      required:
+      - message
+      - metadata
+      - result
+      - status
+      - version
+      title: RoutesResponse
     SaveStackAsTemplateRequest:
       properties:
         template_id:

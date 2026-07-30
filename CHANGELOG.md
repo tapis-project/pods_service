@@ -128,6 +128,7 @@ The edge release. Pods learned to leave the cluster.
 - **pods-agent v1** — a single-file, zero-dependency Python agent: join, heartbeat, and Docker inventory over the local socket. It always dials out, so it works from behind any NAT with no inbound ports.
 - Agents on a Kubernetes box also report in-cluster inventory, gated behind an RBAC self-probe so a permission-less agent degrades quietly instead of erroring.
 - Dev: `PODS_UVICORN_RELOAD` makes service code changes go live without a pod restart.
+- **Publish a node port** at `<route>.pods.<domain>` through central Traefik, with the full per-route Tapis auth stack (allowed users/groups, response headers, excluded paths). A central-side probe tests the backend both directly and through Traefik, since browsers can't resolve route hostnames yet.
 
 ### Bug fixes:
 - Permission guards return proper 4xx codes instead of bare errors that mapped to 500.

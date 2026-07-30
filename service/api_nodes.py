@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import os
 import secrets
+import time
 
 import requests
 from fastapi import APIRouter, Request
@@ -22,6 +23,16 @@ from models_node import (
     NodeCommandsResponse,
     NodeDeleteResponse,
 )
+from models_routes import (
+    Route,
+    NewRoute,
+    RoutesResponse,
+    RouteResponse,
+    RouteDeleteResponse,
+    RouteProbeResponse,
+)
+from models_pods import Pod
+from tapis_auth_utils import TapisAuthEntity, run_tapis_auth_check, run_tapis_auth_callback
 from tapisservice.tapisfastapi.utils import g, ok
 from tapisservice.logs import get_logger
 
@@ -263,6 +274,9 @@ async def delete_node(node_id: str):
     logger.info(f"DELETE /pods/nodes/{node_id} - Top of delete_node.")
     node = _get_node_or_404(node_id)
     # TODO Phase 2: expire the headscale node/preauth key so the machine leaves the tailnet.
+    # Routes die with their node — they'd otherwise keep rendering into the proxy config.
+    for route in Route.db_get_for_node(node_id, tenant=g.request_tenant_id, site=g.site_id):
+        route.db_delete()
     node.db_delete()
     return ok(result="", msg="Node deleted successfully.")
 
@@ -419,3 +433,217 @@ async def get_node_commands(node_id: str, request: Request):
     return ok(
         result={"commands": [], "poll_after_seconds": COMMANDS_POLL_AFTER_SECONDS},
         msg="No pending commands.")
+
+
+# Routes — publish v0 (Tapis JWT auth, node-permission gated) -----------------
+# A route publishes one node port at https://<route_id>.pods.<tenant-domain> through
+# central traefik. Rendering happens on the health-central pass (+ kubelet configmap
+# sync), so create/delete take effect within ~2 minutes — same cadence as pods.
+
+def _get_route_or_404(node_id: str, route_id: str) -> Route:
+    route = Route.db_get_with_pk(route_id, tenant=g.request_tenant_id, site=getattr(g, 'site_id', None))
+    if not route or route.node_id != node_id:
+        raise ResourceError(f"Route '{route_id}' not found on node '{node_id}'.", 404)
+    return route
+
+
+def _check_route_hostname_free(route_id: str):
+    """Routes share the <x>.pods.<domain> hostname namespace with pod networking urls —
+    reject a route_id that would collide with an existing pod hostname. Best-effort at
+    create time (pods have no reciprocal check yet); pod_ids cannot contain hyphens, so
+    only two shapes can clash: bare pod_id, or pod_id-<networking_name>."""
+    clash = Pod.db_get_with_pk(route_id, tenant=g.request_tenant_id, site=g.site_id)
+    if clash:
+        raise ResourceError(f"route_id '{route_id}' collides with an existing pod's hostname.", 400)
+    if '-' in route_id:
+        prefix, net_name = route_id.split('-', 1)
+        pod = Pod.db_get_with_pk(prefix, tenant=g.request_tenant_id, site=g.site_id)
+        if pod and net_name in (pod.networking or {}):
+            raise ResourceError(f"route_id '{route_id}' collides with pod '{prefix}' networking '{net_name}' hostname.", 400)
+
+
+@router.get(
+    "/pods/nodes/{node_id}/routes",
+    tags=["Nodes"],
+    summary="list_node_routes",
+    operation_id="list_node_routes",
+    response_model=RoutesResponse)
+async def list_node_routes(node_id: str):
+    """List routes published from this node."""
+    logger.info(f"GET /pods/nodes/{node_id}/routes - Top of list_node_routes.")
+    _get_node_or_404(node_id)
+    routes = Route.db_get_for_node(node_id, tenant=g.request_tenant_id, site=g.site_id)
+    return ok(result=[route.display() for route in routes], msg="Routes retrieved successfully.")
+
+
+@router.post(
+    "/pods/nodes/{node_id}/routes",
+    tags=["Nodes"],
+    summary="create_node_route",
+    operation_id="create_node_route",
+    response_model=RouteResponse)
+async def create_node_route(node_id: str, new_route: NewRoute):
+    """Publish a node port: create a route at https://<route_id>.pods.<tenant-domain>.
+
+    backend_host must be reachable FROM central (a tailnet IP/name, or a dev gateway
+    like host.minikube.internal). With tapis_auth=true the route is gated by the same
+    forwardAuth flow pods use, configured entirely per-route (allowed users/groups,
+    response headers, excluded paths). Takes effect on the next proxy render (≤ ~2 min).
+    """
+    logger.info(f"POST /pods/nodes/{node_id}/routes - Top of create_node_route.")
+    node = _get_node_or_404(node_id)
+    _check_route_hostname_free(new_route.route_id)
+    if Route.db_get_with_pk(new_route.route_id, tenant=g.request_tenant_id, site=g.site_id):
+        raise ResourceError(f"Route with route_id '{new_route.route_id}' already exists.", 400)
+
+    route = Route(**new_route.dict(), node_id=node.node_id)
+    route.db_create()
+    node.log_action(f"route '{route.route_id}' published (port {route.port}, backend {route.backend_host or 'unset'}, tapis_auth={route.tapis_auth}) by '{g.username}'")
+    node.db_update()
+    return ok(result=route.display(), msg="Route created. It goes live on the next proxy render pass (up to ~2 minutes).")
+
+
+@router.get(
+    "/pods/nodes/{node_id}/routes/{route_id}",
+    tags=["Nodes"],
+    summary="get_node_route",
+    operation_id="get_node_route",
+    response_model=RouteResponse)
+async def get_node_route(node_id: str, route_id: str):
+    """Get one route's details."""
+    logger.info(f"GET /pods/nodes/{node_id}/routes/{route_id} - Top of get_node_route.")
+    route = _get_route_or_404(node_id, route_id)
+    return ok(result=route.display(), msg="Route retrieved successfully.")
+
+
+@router.delete(
+    "/pods/nodes/{node_id}/routes/{route_id}",
+    tags=["Nodes"],
+    summary="delete_node_route",
+    operation_id="delete_node_route",
+    response_model=RouteDeleteResponse)
+async def delete_node_route(node_id: str, route_id: str):
+    """Delete a route. It disappears from the proxy on the next render pass (≤ ~2 min)."""
+    logger.info(f"DELETE /pods/nodes/{node_id}/routes/{route_id} - Top of delete_node_route.")
+    node = _get_node_or_404(node_id)
+    route = _get_route_or_404(node_id, route_id)
+    route.db_delete()
+    node.log_action(f"route '{route_id}' deleted by '{g.username}'")
+    node.db_update()
+    return ok(result="", msg="Route deleted. It leaves the proxy on the next render pass (up to ~2 minutes).")
+
+
+# In-cluster traefik service the probe dials to exercise the full public path without
+# DNS/TLS (Host header carries the route's public hostname).
+TRAEFIK_SERVICE = os.environ.get("PODS_TRAEFIK_SERVICE", "pods-traefik")
+PROBE_TIMEOUT_SECONDS = float(os.environ.get("NODES_ROUTE_PROBE_TIMEOUT", "4"))
+
+
+def _probe_http(url: str, host_header: str = None) -> dict:
+    """One probe leg: GET url, no redirects followed (a 302 on an authed route is the
+    auth gate working, and that's exactly what we want to report). Returns the
+    RouteProbeCheck shape."""
+    headers = {"Host": host_header} if host_header else {}
+    start = time.monotonic()
+    try:
+        resp = requests.get(url, headers=headers, timeout=PROBE_TIMEOUT_SECONDS,
+                            allow_redirects=False, stream=True)
+    except requests.RequestException as e:
+        return {"ok": False, "status_code": None, "latency_ms": None,
+                "error": f"{type(e).__name__}: {e}"[:300], "snippet": None}
+    latency_ms = int((time.monotonic() - start) * 1000)
+    try:
+        raw = next(resp.iter_content(chunk_size=240), b"") or b""
+    except requests.RequestException:
+        raw = b""
+    finally:
+        resp.close()
+    snippet = "".join(c for c in raw.decode("utf-8", "replace") if c.isprintable() or c in "\n\t")[:240]
+    return {"ok": True, "status_code": resp.status_code, "latency_ms": latency_ms,
+            "error": None, "snippet": snippet}
+
+
+@router.get(
+    "/pods/nodes/{node_id}/routes/{route_id}/probe",
+    tags=["Nodes"],
+    summary="probe_node_route",
+    operation_id="probe_node_route",
+    response_model=RouteProbeResponse)
+async def probe_node_route(node_id: str, route_id: str):
+    """Central-side reachability test for a route — the UI can't test routes itself
+    (TapisUI runs in the browser; route hostnames don't resolve in dev deployments).
+
+    Two legs: `direct` dials backend_host:port from central (is the backend up?);
+    `via_proxy` dials the in-cluster traefik with the route's public Host header (is
+    the public path rendered and routing? — a 302 on an auth-gated route means the
+    login redirect is working, a 404 usually means the render pass hasn't run yet).
+    The probe can only reach what the rendered route itself exposes publicly.
+    """
+    logger.info(f"GET /pods/nodes/{node_id}/routes/{route_id}/probe - Top of probe_node_route.")
+    _get_node_or_404(node_id)
+    route = _get_route_or_404(node_id, route_id)
+
+    direct = _probe_http(f"http://{route.backend_host}:{route.port}/")
+    via_proxy = _probe_http(f"http://{TRAEFIK_SERVICE}/", host_header=route.url)
+
+    if direct["ok"] and via_proxy["ok"]:
+        msg = "Probe complete — backend reachable and the public path is responding."
+    elif direct["ok"]:
+        msg = "Backend is reachable, but the public path isn't routing yet — the proxy render pass runs every ~2 minutes."
+    else:
+        msg = "Backend unreachable from central — check backend_host/port and that the service is listening on a reachable interface."
+    return ok(
+        result={
+            "route_id": route.route_id,
+            "url": route.url,
+            "tapis_auth": route.tapis_auth,
+            "direct": direct,
+            "via_proxy": via_proxy,
+        },
+        msg=msg)
+
+
+# Route auth endpoints (no Tapis token — browser forwardAuth flow; see NO_TOKEN_ROUTES
+# and NEED-BASEURL entries in auth.py) ----------------------------------------
+
+def _route_auth_entity(route_id: str) -> TapisAuthEntity:
+    route = Route.db_get_with_pk(route_id, tenant=g.request_tenant_id, site=getattr(g, 'site_id', None))
+    if not route:
+        raise ResourceError(f"Route '{route_id}' not found.", 404)
+    return TapisAuthEntity(
+        auth_cfg=route.dict(),
+        permissions=route.get_permissions(),
+        public_url=route.url,
+        auth_path=f"pods/routes/{route.route_id}/auth",
+        client_id=f"PODS-SERVICE-{route.traefik_service_name()}",
+        label=f"route '{route.route_id}'",
+    )
+
+
+@router.get(
+    "/pods/routes/{route_id}/auth",
+    tags=["Nodes"],
+    summary="route_auth",
+    operation_id="route_auth",
+    response_model=RouteResponse)
+async def route_auth(route_id: str, request: Request):
+    """forwardAuth endpoint for tapis_auth-gated routes — same flow as pod auth
+    (validate an attached Tapis token, else bounce browsers through the tenant OAuth2
+    login), driven by the route's own tapis_auth config and permissions."""
+    logger.debug(f"GET /pods/routes/{route_id}/auth - Top of route_auth.")
+    entity = _route_auth_entity(route_id)
+    return run_tapis_auth_check(request, entity)
+
+
+@router.get(
+    "/pods/routes/{route_id}/auth/callback",
+    tags=["Nodes"],
+    summary="route_auth_callback",
+    operation_id="route_auth_callback",
+    response_model=RouteResponse)
+async def route_auth_callback(route_id: str, request: Request):
+    """OAuth2 callback for tapis_auth-gated routes — exchanges the code, validates the
+    token + allowed users, sets cookies, and redirects to the route's return path."""
+    logger.debug(f"GET /pods/routes/{route_id}/auth/callback - Top of route_auth_callback.")
+    entity = _route_auth_entity(route_id)
+    return run_tapis_auth_callback(request, entity)

@@ -16,12 +16,25 @@ router = APIRouter()
 async def api_traefik_config():
     """
     Supplies traefik-config to service. Returns json traefik-config object for
-    traefik to use with the http provider. Dynamic configs don't work well in 
+    traefik to use with the http provider. Dynamic configs don't work well in
     Kubernetes.
     """
     config = get_traefik_configmap()
     yaml_config = yaml.safe_load(config.to_dict()['data']['traefik.yml'])
     return yaml_config
+
+
+@router.get("/pods/traefik-config",
+    tags=["Misc"],
+    summary="traefik_config_public",
+    operation_id="traefik_config_public")
+async def api_traefik_config_public():
+    """
+    Ingress-reachable alias of /traefik-config (the bare path never matches the public
+    PathPrefix(/v3/pods) router). Same NOT-API/tokenless posture; used by the TapisUI
+    Routing panel as the missing traefik dashboard.
+    """
+    return await api_traefik_config()
 
 # ── Pod status landing page (splash / not-found) ──────────────────────────────
 # One anonymized page that reflects the *actual* pod status so a stopped/errored/
