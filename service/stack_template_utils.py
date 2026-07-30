@@ -57,8 +57,15 @@ def match_live_member_pod_ids(
     Pass 1 claims pods whose id follows the convention. Pass 2 reconciles leftovers:
     a member that PERSISTS or is REMOVED (kind != 'add') but whose conventional pod is
     absent is matched to an unclaimed live pod, preferring an equal image; a single
-    remaining candidate is taken outright. 'add' members are never leftover-matched —
-    they legitimately have no live pod yet.
+    remaining candidate is taken outright ONLY when its pod_id still starts with the
+    stack_id (the drifted-convention family, incl. the legacy bare-stack_id pod).
+    'add' members are never leftover-matched — they legitimately have no live pod yet.
+
+    ADOPTED pods (joined via POST /pods/{pod_id}/stack — foreign pod_id, arbitrary
+    image) must never be claimed as a template member here: an unmatched member would
+    otherwise "adopt the adoptee" and update would patch/remove a pod the template
+    knows nothing about. Unclaimed pods are simply unmanaged members — plans leave
+    them alone.
     """
     names = set(member_images)
     name_to_pid: Dict[str, str] = {}
@@ -79,7 +86,7 @@ def match_live_member_pod_ids(
             break
         want = member_images.get(nm) or ""
         match = next((p for p in cands if (getattr(p, "image", "") or "") == want), None)
-        if match is None and len(cands) == 1:
+        if match is None and len(cands) == 1 and cands[0].pod_id.startswith(stack_id):
             match = cands[0]
         if match is not None:
             name_to_pid[nm] = match.pod_id

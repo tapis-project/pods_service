@@ -410,7 +410,12 @@ async def pod_join_stack(pod_id, join_stack: JoinStackRequest):
     _stack_log(stack, f"'{g.username}' added pod '{pod_id}' to stack")
     stack.db_update()
 
-    return ok(result=pod.display(), msg=f"Pod '{pod_id}' added to stack '{stack.stack_id}'.")
+    return ok(
+        result=pod.display(),
+        msg=(f"Pod '{pod_id}' added to stack '{stack.stack_id}' as an unmanaged member. "
+             f"It can reference the stack's shared secrets and be wired into start ordering "
+             f"(depends_on works in both directions with any same-stack pod); template-driven "
+             f"stack updates leave it alone."))
 
 
 @router.delete(
@@ -432,13 +437,33 @@ async def pod_leave_stack(pod_id):
     pod.depends_on = None
     pod.db_update(f"'{g.username}' removed pod from stack '{old_stack_id}'")
 
+    # Prune dangling depends_on references on the pods left behind. The start
+    # gate treats a MISSING dependency as blocking (stack_runner.gate_start:
+    # `dep is None` blocks), so a dangling ref doesn't just linger — it wedges
+    # the dependent's next start forever in an ordered stack.
+    pruned = []
     if old_stack_id:
+        from stack_utils import find_dependents
+        for dep_pod in (find_dependents(pod_id, tenant=g.request_tenant_id, site=g.site_id) or []):
+            if dep_pod.stack_id != old_stack_id:
+                continue
+            dep_pod.depends_on = [d for d in (dep_pod.depends_on or []) if d != pod_id] or None
+            dep_pod.db_update(
+                f"depends_on pruned: '{pod_id}' left stack '{old_stack_id}' "
+                f"(a missing dependency would block this pod's start)")
+            pruned.append(dep_pod.pod_id)
         stack = Stack.db_get_with_pk(old_stack_id, tenant=g.request_tenant_id, site=g.site_id)
         if stack:
-            _stack_log(stack, f"'{g.username}' removed pod '{pod_id}' from stack")
+            _stack_log(stack, f"'{g.username}' removed pod '{pod_id}' from stack"
+                       + (f"; pruned depends_on on: {', '.join(pruned)}" if pruned else ""))
             stack.db_update()
 
-    return ok(result=pod.display(), msg=f"Pod '{pod_id}' removed from stack.")
+    msg = f"Pod '{pod_id}' removed from stack."
+    if pruned:
+        msg += (f" Heads up: {', '.join(pruned)} depended on it — those references were removed "
+                f"(a missing dependency would have blocked their next start). Re-wire their "
+                f"depends_on if the ordering still matters.")
+    return ok(result=pod.display(), msg=msg, metadata={"pruned_depends_on": pruned} if pruned else {})
 
 
 #### /pods/stacks/from-template — instantiate a kind='stack' template tag
@@ -957,8 +982,16 @@ async def update_stack_from_template(stack_id, body: StackUpdateRequest, dry_run
                 elif f == "volume_mounts":
                     pod.volume_mounts = vm if vm is not None else m.get("volume_mounts")
                 elif f == "depends_on":
-                    pod.depends_on = [pod_id_by_name[d] for d in (m.get("depends_on") or [])
-                                      if d in pod_id_by_name] or None
+                    # Rebuild from the template, but PRESERVE manual edges to
+                    # non-template pods (adopted/unmanaged members) — the template
+                    # can't name them, and dropping them would silently sever
+                    # start-ordering the user wired by hand.
+                    template_deps = [pod_id_by_name[d] for d in (m.get("depends_on") or [])
+                                     if d in pod_id_by_name]
+                    template_ids = set(pod_id_by_name.values())
+                    manual_deps = [d for d in (pod.depends_on or [])
+                                   if d not in template_ids and d not in template_deps]
+                    pod.depends_on = (template_deps + manual_deps) or None
                 elif f == "ready_condition":
                     pod.ready_condition = m.get("ready_condition") or "available"
                 elif hasattr(pod, f) and m.get(f) is not None:
