@@ -130,6 +130,7 @@ The edge release. Pods learned to leave the cluster.
 - Dev: `PODS_UVICORN_RELOAD` makes service code changes go live without a pod restart.
 - **Publish a node port** at `<route>.pods.<domain>` through central Traefik, with the full per-route Tapis auth stack (allowed users/groups, response headers, excluded paths). A central-side probe tests the backend both directly and through Traefik, since browsers can't resolve route hostnames yet.
 - `${stack:...}` references work inside mounted config files, not just environment variables — so a stack member's config can point at another member by name. Saving a stack as a template un-bakes those hostnames back into references.
+- **Node telemetry** — the agent ships container logs and CPU/memory metrics with an offline buffer, so a box that loses network backfills its history on reconnect instead of leaving a hole. Metrics graphs omit empty buckets rather than interpolating, so an outage stays visible.
 
 ### Bug fixes:
 - Permission guards return proper 4xx codes instead of bare errors that mapped to 500.

@@ -222,6 +222,7 @@ class NodeCheckinRequest(TapisApiModel):
     status: Dict[str, Any] = Field(default_factory=dict, description="Status snapshot (os, arch, versions, health).")
     inventory_hash: Optional[str] = Field(None, description="Hash of the agent's current workload inventory.")
     inventory: Optional[Dict[str, Any]] = Field(None, description="Full workload inventory; include only when the hash changed.")
+    metrics_samples: Optional[List[Dict[str, Any]]] = Field(None, description="Batched metrics samples buffered since the last successful checkin — each {ts, load1, cpu_count, mem_used_bytes, mem_total_bytes, root_disk_pct, docker_running, docker_total, k8s_running, k8s_total}. Stored into per-node metrics history, deduped on (node_id, ts); a 200 response means the agent can clear its buffer.")
 
 
 class NodeCreateResult(TapisApiModel):
