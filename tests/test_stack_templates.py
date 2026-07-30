@@ -384,12 +384,16 @@ def test_match_bare_stack_id_drift_reuses_pod_by_image():
     assert out == {"db": "vartbdb", "app": "vartb"}
 
 
-def test_match_single_leftover_taken_even_without_image_match():
+def test_match_single_leftover_not_taken_without_prefix_or_image():
+    # CONTRACT CHANGE with adopted-pod support: a lone leftover with a foreign id
+    # AND a different image is indistinguishable from an adopted pod, so it is NOT
+    # claimed (previously it was taken outright). The member derives a fresh id
+    # downstream; the foreign pod stays an unmanaged member.
     live = [_P("vartbdb", "postgres:17"), _P("weirdname", "someimage")]
     out = stu.match_live_member_pod_ids(
         "vartb", {"db": "postgres:17", "app": "gatus:v5"},
         {"db": "unchanged", "app": "patch"}, live)
-    assert out == {"db": "vartbdb", "app": "weirdname"}
+    assert out == {"db": "vartbdb"}
 
 
 def test_match_add_member_never_leftover_matched():
@@ -504,3 +508,21 @@ def test_residual_refs_other_tenant_prefix_ignored():
     members = [{"name": "app",
                 "environment_variables": {"X": "pods-other-site-thing"}}]
     assert stu.find_residual_host_refs(members, "tacc", "dev") == []
+
+
+def test_match_adopted_pod_never_outright_claimed():
+    # An adopted pod (foreign id via pod_join_stack, different image) must NOT be
+    # claimed for a drifted member — it's an unmanaged member, plans leave it alone.
+    live = [_P("myoldservice", "some/other:img")]
+    out = stu.match_live_member_pod_ids(
+        "vartb", {"db": "postgres:17"}, {"db": "patch"}, live)
+    assert out == {}
+
+
+def test_match_legacy_bare_stack_id_still_claimed():
+    # The original motivating case: legacy member whose pod_id IS the bare stack_id
+    # (prefix matches) is still taken outright when it's the only candidate.
+    live = [_P("vartb", "gatus:v5")]
+    out = stu.match_live_member_pod_ids(
+        "vartb", {"app": "gatus:v9-new"}, {"app": "patch"}, live)
+    assert out == {"app": "vartb"}
