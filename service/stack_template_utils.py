@@ -226,6 +226,11 @@ def validate_stack_definition(
         blobs: List[Any] = []
         blobs += list((m.get("environment_variables") or {}).values())
         blobs += list((m.get("secret_map") or {}).values())
+        # config_content supports the same ${stack:...} refs (lowered at instantiation
+        # by compile_refs_in_volume_mounts) — validate them here too.
+        for mount in (m.get("volume_mounts") or {}).values():
+            if isinstance(mount, dict) and isinstance(mount.get("config_content"), str):
+                blobs.append(mount["config_content"])
         for val in blobs:
             if not isinstance(val, str):
                 continue
@@ -304,27 +309,15 @@ def unbake_host_refs(s: Any, k8_to_ref: Dict[str, str]) -> Any:
     return s
 
 
-def compile_member_stack_refs(
-    env: Optional[Dict[str, str]],
-    secret_map: Optional[Dict[str, str]],
+def make_member_ref_substituter(
     pod_id_by_name: Dict[str, str],
     member_net_by_name: Dict[str, Dict[str, Any]],
     site_id: str,
     tenant_id: str,
     url_by_pod: Optional[Dict[str, str]] = None,
-) -> Tuple[Dict[str, str], Dict[str, str]]:
-    """Lower one member's ${stack:...} references into ordinary pod primitives.
-
-    - ${stack:<member>:host|url|port|protocol|pod_id} -> literal (host = in-cluster k8 name).
-    - ${stack:secrets:KEY} appearing in env is normalized: the reference is moved into the member's
-      secret_map (secret_map[KEY] = "${stack:secrets:KEY}") and env switched to ${pods:secrets:KEY},
-      so the resulting pod uses only conventional primitives. The pod thus stores a *reference*,
-      never the resolved secret value.
-
-    Returns (new_env, new_secret_map).
-    """
-    env = dict(env or {})
-    secret_map = dict(secret_map or {})
+):
+    """Build the ${stack:<member>:field} -> literal substituter shared by env,
+    secret_map, and volume_mounts config_content lowering."""
     url_by_pod = url_by_pod or {}
 
     def sub_member_refs(s: str) -> str:
@@ -347,6 +340,114 @@ def compile_member_stack_refs(
                 return str(default.get("protocol", ""))
             return match.group(0)
         return STACK_MEMBER_REF.sub(repl, s)
+
+    return sub_member_refs
+
+
+def compile_refs_in_volume_mounts(
+    volume_mounts: Optional[Dict[str, Any]],
+    secret_map: Dict[str, str],
+    pod_id_by_name: Dict[str, str],
+    member_net_by_name: Dict[str, Dict[str, Any]],
+    site_id: str,
+    tenant_id: str,
+    url_by_pod: Optional[Dict[str, str]] = None,
+) -> Tuple[Optional[Dict[str, Any]], Dict[str, str]]:
+    """Lower ${stack:...} references inside volume_mounts config_content.
+
+    Same semantics as env lowering in compile_member_stack_refs:
+    - ${stack:<member>:host|url|port|protocol|pod_id} -> literal at instantiation
+      (refs are stable once pod_ids are resolved, exactly like env values).
+    - ${stack:secrets:KEY} -> ${pods:secrets:KEY} + the reference moves into the
+      member's secret_map, so the start-time config interpolation (which only
+      understands ${pods:secrets:...}) resolves it. The stored definition keeps
+      a reference, never a resolved secret value.
+
+    Returns (new_volume_mounts, new_secret_map); volume_mounts passes through
+    unchanged (same object) when there is nothing to lower.
+    """
+    if not isinstance(volume_mounts, dict):
+        return volume_mounts, secret_map
+    sub = make_member_ref_substituter(
+        pod_id_by_name, member_net_by_name, site_id, tenant_id, url_by_pod
+    )
+    out: Dict[str, Any] = {}
+    changed = False
+    for mount_path, mount in volume_mounts.items():
+        content = mount.get("config_content") if isinstance(mount, dict) else None
+        if isinstance(content, str) and ("${stack:" in content):
+            content = sub(content)
+            for key in STACK_SECRET_REF.findall(content):
+                secret_map.setdefault(key, "${stack:secrets:" + key + "}")
+                content = content.replace(
+                    "${stack:secrets:" + key + "}", "${pods:secrets:" + key + "}"
+                )
+            mount = {**mount, "config_content": content}
+            changed = True
+        out[mount_path] = mount
+    return (out if changed else volume_mounts), secret_map
+
+
+def find_residual_host_refs(
+    member_defs: List[Dict[str, Any]],
+    site_id: str,
+    tenant_id: str,
+) -> List[str]:
+    """Scan template member defs for in-cluster hostnames that survived un-baking.
+
+    unbake_host_refs only rewrites hostnames attributable to a CURRENT member;
+    anything else that still matches pods-<site>-<tenant>-* (another stack's
+    service, a pasted host, an ex-member) is being saved literally and will only
+    resolve where those exact services exist. Returns one human-readable line per
+    affected member naming the fields, for response messages/metadata.
+    """
+    residual_prefix = f"pods-{site_id}-{tenant_id}-"
+    warnings: List[str] = []
+    for member in member_defs:
+        hits = []
+        fields = [
+            (f"environment_variables.{k}", v)
+            for k, v in (member.get("environment_variables") or {}).items()
+        ] + [
+            (f"secret_map.{k}", v)
+            for k, v in (member.get("secret_map") or {}).items()
+        ] + [
+            (f"volume_mounts['{mp}'].config_content", mnt.get("config_content"))
+            for mp, mnt in (member.get("volume_mounts") or {}).items()
+            if isinstance(mnt, dict)
+        ]
+        for where, val in fields:
+            if isinstance(val, str) and residual_prefix in val:
+                hits.append(where)
+        if hits:
+            warnings.append(f"member '{member.get('name')}': {', '.join(sorted(hits))}")
+    return warnings
+
+
+def compile_member_stack_refs(
+    env: Optional[Dict[str, str]],
+    secret_map: Optional[Dict[str, str]],
+    pod_id_by_name: Dict[str, str],
+    member_net_by_name: Dict[str, Dict[str, Any]],
+    site_id: str,
+    tenant_id: str,
+    url_by_pod: Optional[Dict[str, str]] = None,
+) -> Tuple[Dict[str, str], Dict[str, str]]:
+    """Lower one member's ${stack:...} references into ordinary pod primitives.
+
+    - ${stack:<member>:host|url|port|protocol|pod_id} -> literal (host = in-cluster k8 name).
+    - ${stack:secrets:KEY} appearing in env is normalized: the reference is moved into the member's
+      secret_map (secret_map[KEY] = "${stack:secrets:KEY}") and env switched to ${pods:secrets:KEY},
+      so the resulting pod uses only conventional primitives. The pod thus stores a *reference*,
+      never the resolved secret value.
+
+    Returns (new_env, new_secret_map).
+    """
+    env = dict(env or {})
+    secret_map = dict(secret_map or {})
+    sub_member_refs = make_member_ref_substituter(
+        pod_id_by_name, member_net_by_name, site_id, tenant_id, url_by_pod
+    )
 
     for k, v in list(env.items()):
         if isinstance(v, str):
