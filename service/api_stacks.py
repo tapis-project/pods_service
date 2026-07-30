@@ -22,6 +22,7 @@ from stack_template_utils import (
     resolve_member_pod_ids, validate_stack_definition, topo_order, compile_member_stack_refs, k8_name,
     sanitize_member_networking, placeholderize_secret_value, unbake_host_refs, compute_stack_member_plan,
     minimize_member_networking, minimize_resources, match_live_member_pod_ids,
+    compile_refs_in_volume_mounts, find_residual_host_refs,
 )
 from api_pods_podid import delete_pod_resources
 from codes import ON, OFF, RESTART, READ, USER, ADMIN, PERMISSION_LEVELS
@@ -536,6 +537,12 @@ async def create_stack_from_template(body: StackFromTemplateRequest):
                 merged.get("secret_map") or {},
                 pod_id_by_name, net_by_name, g.site_id, g.request_tenant_id,
             )
+            vm, secret_map = compile_refs_in_volume_mounts(
+                merged.get("volume_mounts"), secret_map,
+                pod_id_by_name, net_by_name, g.site_id, g.request_tenant_id,
+            )
+            if vm is not None:
+                merged["volume_mounts"] = vm
             dep_ids = [pod_id_by_name[d] for d in (merged.get("depends_on") or [])]
 
             pod_kwargs = {}
@@ -680,6 +687,17 @@ async def save_stack_as_template(stack_id, body: SaveStackAsTemplateRequest):
             member["environment_variables"] = {k: unbake_host_refs(v, k8_to_ref) for k, v in member["environment_variables"].items()}
         if member.get("secret_map"):
             member["secret_map"] = {k: placeholderize_secret_value(unbake_host_refs(v, k8_to_ref)) for k, v in member["secret_map"].items()}
+        # config_content: un-bake in-cluster hostnames back into ${stack:<member>:host}
+        # refs so the saved template stays deployable under any stack_id. (Stored
+        # config_content holds ${pods:secrets:...} references, never resolved values,
+        # so no secret scrubbing is needed here.)
+        if member.get("volume_mounts"):
+            member["volume_mounts"] = {
+                mp: ({**mnt, "config_content": unbake_host_refs(mnt["config_content"], k8_to_ref)}
+                     if isinstance(mnt, dict) and isinstance(mnt.get("config_content"), str)
+                     else mnt)
+                for mp, mnt in member["volume_mounts"].items()
+            }
         # keep ready_condition / depends_on only when non-default / non-empty
         rc = pod.ready_condition or "available"
         if rc != "available":
@@ -688,6 +706,10 @@ async def save_stack_as_template(stack_id, body: SaveStackAsTemplateRequest):
         if deps:
             member["depends_on"] = deps
         member_defs.append(member)
+
+    # Un-bake only rewrites hostnames it can attribute to a CURRENT member —
+    # surface anything left literal so the author reviews before reuse.
+    unbake_warnings = find_residual_host_refs(member_defs, g.site_id, g.request_tenant_id)
 
     # Stack-level shared secrets become required placeholders (keys preserved, values scrubbed).
     stack_secret_map = {k: "${:?provide shared secret '" + k + "'}" for k in (stack.secret_map or {}).keys()}
@@ -703,7 +725,20 @@ async def save_stack_as_template(stack_id, body: SaveStackAsTemplateRequest):
         commit_message=body.commit_message or f"Snapshot of stack '{stack_id}'",
         tag=body.tag,
     )
-    return await add_template_tag(body.template_id, new_tag)
+    resp = await add_template_tag(body.template_id, new_tag)
+    if unbake_warnings and isinstance(resp, dict):
+        warn = (
+            "Heads up: some in-cluster hostnames could not be un-baked into "
+            "${stack:<member>:host} references and were saved literally. This "
+            "template will only work where those exact services exist — review "
+            "and replace them with refs (or public URLs) if this should be "
+            "reusable. Left as-is in: " + "; ".join(unbake_warnings)
+        )
+        resp["message"] = f"{resp.get('message', '')} {warn}".strip()
+        meta = resp.get("metadata") or {}
+        meta["unbake_warnings"] = unbake_warnings
+        resp["metadata"] = meta
+    return resp
 
 
 #### /pods/stacks/{stack_id}/update — reviewed update from a newer stack-template tag
@@ -730,6 +765,12 @@ def _build_member_new_pod(merged, pid, stack_id, pod_id_by_name, net_by_name):
         merged.get("secret_map") or {},
         pod_id_by_name, net_by_name, g.site_id, g.request_tenant_id,
     )
+    vm, secret_map = compile_refs_in_volume_mounts(
+        merged.get("volume_mounts"), secret_map,
+        pod_id_by_name, net_by_name, g.site_id, g.request_tenant_id,
+    )
+    if vm is not None:
+        merged["volume_mounts"] = vm
     dep_ids = [pod_id_by_name[d] for d in (merged.get("depends_on") or []) if d in pod_id_by_name]
     pod_kwargs = {}
     for k, v in merged.items():
@@ -904,11 +945,17 @@ async def update_stack_from_template(stack_id, body: StackUpdateRequest, dry_run
                 m.get("environment_variables") or {}, m.get("secret_map") or {},
                 pod_id_by_name, net_by_name, g.site_id, g.request_tenant_id,
             )
+            vm, secret_map = compile_refs_in_volume_mounts(
+                m.get("volume_mounts"), secret_map,
+                pod_id_by_name, net_by_name, g.site_id, g.request_tenant_id,
+            )
             for f in p["changed_fields"]:
                 if f == "environment_variables":
                     pod.environment_variables = env
                 elif f == "secret_map":
                     pod.secret_map = secret_map
+                elif f == "volume_mounts":
+                    pod.volume_mounts = vm if vm is not None else m.get("volume_mounts")
                 elif f == "depends_on":
                     pod.depends_on = [pod_id_by_name[d] for d in (m.get("depends_on") or [])
                                       if d in pod_id_by_name] or None

@@ -418,3 +418,89 @@ def test_match_ambiguous_leftovers_left_unmatched():
         "vartb", {"app": "gatus:v5", "api": "flask:1"},
         {"app": "patch", "api": "patch"}, live)
     assert out == {}  # neither forced; downstream derives fresh ids (surfaced, not silently wrong)
+
+
+# ── compile_refs_in_volume_mounts ────────────────────────────────────────────────
+
+def _vm(content):
+    return {"/etc/app": {"type": "tapisvolume", "source_id": "cfg",
+                         "config_content": content, "config_update_mode": "once"}}
+
+
+def test_vm_refs_host_ref_lowered_in_config_content():
+    vm, sm = stu.compile_refs_in_volume_mounts(
+        _vm("db_host: ${stack:db:host}\ndb_port: ${stack:db:port}\n"), {},
+        {"db": "myappdb"}, {"db": {"default": {"port": 5432, "protocol": "postgres"}}},
+        "tacc", "dev")
+    content = vm["/etc/app"]["config_content"]
+    assert "db_host: pods-tacc-dev-myappdb" in content
+    assert "db_port: 5432" in content
+
+
+def test_vm_refs_stack_secret_normalized_into_secret_map():
+    vm, sm = stu.compile_refs_in_volume_mounts(
+        _vm("password: ${stack:secrets:PG}\n"), {}, {}, {}, "tacc", "dev")
+    # config switches to the start-time-resolvable ${pods:secrets:KEY};
+    # the member's secret_map gains the stack reference (never a value).
+    assert vm["/etc/app"]["config_content"] == "password: ${pods:secrets:PG}\n"
+    assert sm["PG"] == "${stack:secrets:PG}"
+
+
+def test_vm_refs_existing_secret_map_entry_not_clobbered():
+    vm, sm = stu.compile_refs_in_volume_mounts(
+        _vm("password: ${stack:secrets:PG}\n"), {"PG": "${secret:me:custom:key}"},
+        {}, {}, "tacc", "dev")
+    assert sm["PG"] == "${secret:me:custom:key}"
+
+
+def test_vm_refs_no_refs_passthrough_same_object():
+    mounts = _vm("plain: yaml\n")
+    vm, sm = stu.compile_refs_in_volume_mounts(mounts, {}, {"db": "x"}, {}, "tacc", "dev")
+    assert vm is mounts  # unchanged input passes through untouched
+
+
+def test_vm_refs_none_and_missing_content_tolerated():
+    vm, sm = stu.compile_refs_in_volume_mounts(None, {}, {}, {}, "tacc", "dev")
+    assert vm is None
+    mounts = {"/data": {"type": "tapisvolume", "source_id": "vol"}}
+    vm, sm = stu.compile_refs_in_volume_mounts(mounts, {}, {}, {}, "tacc", "dev")
+    assert vm is mounts
+
+
+def test_validate_config_content_refs_checked():
+    members = [{"name": "a", "depends_on": [], "ready_condition": "available",
+                "volume_mounts": {"/etc/app": {"type": "tapisvolume", "source_id": "cfg",
+                                               "config_content": "x: ${stack:ghost:host}\ny: ${stack:secrets:NOPE}"}}}]
+    errors = stu.validate_stack_definition(members, [])
+    assert any("no member 'ghost'" in e for e in errors)
+    assert any("no key 'NOPE'" in e for e in errors)
+
+
+# ── find_residual_host_refs ──────────────────────────────────────────────────────
+
+def test_residual_refs_clean_members_no_warnings():
+    members = [{"name": "app",
+                "environment_variables": {"DB": "${stack:db:host}"},
+                "volume_mounts": {"/etc/app": {"config_content": "host: ${stack:db:host}"}}}]
+    assert stu.find_residual_host_refs(members, "tacc", "dev") == []
+
+
+def test_residual_refs_found_across_fields():
+    members = [{"name": "app",
+                "environment_variables": {"DB": "pods-tacc-dev-otherstackdb"},
+                "secret_map": {"S": "pods-tacc-dev-x"},
+                "volume_mounts": {"/etc/app": {"config_content": "url: http://pods-tacc-dev-legacy:80"}}}]
+    warnings = stu.find_residual_host_refs(members, "tacc", "dev")
+    assert len(warnings) == 1
+    w = warnings[0]
+    assert "member 'app'" in w
+    assert "environment_variables.DB" in w
+    assert "secret_map.S" in w
+    assert "volume_mounts['/etc/app'].config_content" in w
+
+
+def test_residual_refs_other_tenant_prefix_ignored():
+    # A hostname from a DIFFERENT site/tenant isn't ours to warn about.
+    members = [{"name": "app",
+                "environment_variables": {"X": "pods-other-site-thing"}}]
+    assert stu.find_residual_host_refs(members, "tacc", "dev") == []
