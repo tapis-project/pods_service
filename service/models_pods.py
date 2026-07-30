@@ -33,6 +33,13 @@ from models_volume_mounts_utils import (
     validate_and_convert_volume_mounts,
     interpolate_config_content
 )
+from tapis_auth_utils import (
+    validate_tapis_auth_response_headers,
+    validate_tapis_auth_return_path,
+    validate_tapis_auth_allowed_users,
+    validate_tapis_auth_excluded_paths,
+    validate_tapis_auth_excluded_path_regex,
+)
 from models_templates import Template
 from models_templates_tags import TemplateTag, derive_template_info
 from models_base import TapisModel, TapisApiModel, HealthcheckProbe, PodHealthchecks
@@ -149,80 +156,26 @@ class Networking(TapisModel):
                 raise ValueError(f"networking.*.url length must be below 128 characters. Inputted length: {len(v)}")
         return v
     
+    # tapis_auth field validation is shared with node routes — see tapis_auth_utils.
     @validator('tapis_auth_response_headers')
     def check_tapis_auth_response_headers(cls, v):
-        if v:
-            if not isinstance(v, dict):
-                raise TypeError(f"networking.tapis_auth_response_headers must be dict. Got '{type(v).__name__}'.")
-            for header_name, header_val in v.items():
-                if not isinstance(header_name, str):
-                    raise TypeError(f"networking.tapis_auth_response_headers key type must be str. Got '{type(header_name).__name__}', key: '{header_name}'.")
-                if not isinstance(header_val, str):
-                    raise TypeError(f"networking.tapis_auth_response_headers val type must be str. Got '{type(header_val).__name__}', value: '{header_val}'.")
-        return v
-    
+        return validate_tapis_auth_response_headers(v, prefix="networking")
+
     @validator('tapis_auth_return_path')
     def check_tapis_auth_return_path(cls, v):
-        if v:
-            if not v.startswith('/'):
-                raise ValueError(f"networking.tapis_auth_return_path should start with '/'. Got {v}")
-            # Regex match to ensure url is safe with only [A-z0-9.-/] chars.
-            res = re.fullmatch(r'(?:[A-Za-z0-9.\-_\/]+)', v)
-            if not res:
-                raise ValueError(f"networking.tapis_auth_return_path should start with '/' and can contain alphanumeric characters, periods, forward-slash, underscores, and hyphens. Got {v}")
-            if len(v) > 180:
-                raise ValueError(f"networking.tapis_auth_return_path length must be below 180 characters. Got length: {len(v)}")
-        return v
+        return validate_tapis_auth_return_path(v, prefix="networking")
 
     @validator('tapis_auth_allowed_users')
     def check_tapis_auth_allowed_users(cls, v):
-        if v:
-            if not isinstance(v, list):
-                raise TypeError(f"networking.apis_auth_allowed_users must be list. Got '{type(v).__name__}'.")
-            for user in v:
-                if not isinstance(user, str):
-                    raise TypeError(f"networking.tapis_auth_allowed_users must be list of str. Got '{type(user).__name__}'.")
-        return v
+        return validate_tapis_auth_allowed_users(v, prefix="networking")
 
     @validator('tapis_auth_excluded_paths')
     def check_tapis_auth_excluded_paths(cls, v):
-        if v:
-            if not isinstance(v, list):
-                raise TypeError(f"networking.tapis_auth_excluded_paths must be list. Got '{type(v).__name__}'.")
-            if len(v) > 50:
-                raise ValueError(f"networking.tapis_auth_excluded_paths must have at most 50 entries. Got {len(v)}.")
-            for path in v:
-                if not isinstance(path, str):
-                    raise TypeError(f"networking.tapis_auth_excluded_paths must be list of str. Got '{type(path).__name__}'.")
-                if not path.startswith('/'):
-                    raise ValueError(f"networking.tapis_auth_excluded_paths values must start with '/'. Got '{path}'.")
-                if not path.isascii():
-                    raise ValueError(f"networking.tapis_auth_excluded_paths values must be ASCII. Got '{path}'.")
-                if len(path) > 256:
-                    raise ValueError(f"networking.tapis_auth_excluded_paths values must be less than 256 characters. Got length {len(path)}.")
-        return v
+        return validate_tapis_auth_excluded_paths(v, prefix="networking")
 
     @validator('tapis_auth_excluded_path_regex')
     def check_tapis_auth_excluded_path_regex(cls, v):
-        if v:
-            if not isinstance(v, list):
-                raise TypeError(f"networking.tapis_auth_excluded_path_regex must be list. Got '{type(v).__name__}'.")
-            if len(v) > 20:
-                raise ValueError(f"networking.tapis_auth_excluded_path_regex must have at most 20 entries. Got {len(v)}.")
-            for pattern in v:
-                if not isinstance(pattern, str):
-                    raise TypeError(f"networking.tapis_auth_excluded_path_regex must be list of str. Got '{type(pattern).__name__}'.")
-                if not pattern.isascii():
-                    raise ValueError(f"networking.tapis_auth_excluded_path_regex values must be ASCII. Got '{pattern}'.")
-                if len(pattern) > 512:
-                    raise ValueError(f"networking.tapis_auth_excluded_path_regex values must be less than 512 characters. Got length {len(pattern)}.")
-                # Validate the regex compiles
-                try:
-                    import re as _re
-                    _re.compile(pattern)
-                except _re.error as e:
-                    raise ValueError(f"networking.tapis_auth_excluded_path_regex contains invalid regex '{pattern}': {e}")
-        return v
+        return validate_tapis_auth_excluded_path_regex(v, prefix="networking")
 
     @validator('tapis_ui_uri')
     def check_tapis_ui_uri(cls, v):
