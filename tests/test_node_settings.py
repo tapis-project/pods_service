@@ -102,3 +102,28 @@ def test_settings_require_admin(regular_headers):
     assert rsp.status_code != 200
     rsp = client.get(f"/pods/nodes/{NODE_ID}/ledger", headers=regular_headers)
     assert rsp.status_code != 200
+
+
+def test_checkin_rejects_oversize_blobs():
+    # A valid agent token is not licence to OOM/bloat central — status/inventory
+    # bytes and capability count are capped at checkin (413), not silently trimmed.
+    big_status = {"os": "linux", "junk": "x" * (256 * 1024 + 10)}
+    rsp = client.post(f"/pods/nodes/{NODE_ID}/checkin",
+                      data=json.dumps({"status": big_status}), headers=agent_headers())
+    assert rsp.status_code == 413, f"oversize status should 413, got {rsp.status_code}"
+
+    big_inv = {"docker_containers": ["c" * 1024] * 1025}  # > 1 MiB
+    rsp = client.post(f"/pods/nodes/{NODE_ID}/checkin",
+                      data=json.dumps({"inventory": big_inv, "inventory_hash": "h"}),
+                      headers=agent_headers())
+    assert rsp.status_code == 413, f"oversize inventory should 413, got {rsp.status_code}"
+
+    rsp = client.post(f"/pods/nodes/{NODE_ID}/checkin",
+                      data=json.dumps({"capabilities": [f"cap.{i}" for i in range(200)]}),
+                      headers=agent_headers())
+    assert rsp.status_code == 413, f"too many capabilities should 413, got {rsp.status_code}"
+
+    # a normal-size checkin still succeeds right after
+    basic_response_checks(client.post(
+        f"/pods/nodes/{NODE_ID}/checkin",
+        data=json.dumps({"status": {"os": "linux"}}), headers=agent_headers()))

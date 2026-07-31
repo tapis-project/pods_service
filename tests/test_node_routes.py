@@ -207,3 +207,38 @@ def test_node_delete_cascades_routes(headers):
     rsp = client.get(f"/pods/nodes/{NODE_ID}/routes", headers=headers)
     result = basic_response_checks(rsp)
     assert result == []
+
+
+def test_non_admin_cannot_create_a_node(regular_headers):
+    """Node creation is admin-gated (see create_node).
+
+    NewNode carries login_server, which join uses as the target for a bearer request
+    carrying the headscale ADMIN key — so until that field is validated against an
+    allowlist, an open create would let any authenticated user harvest it. This is the
+    negative test that was missing when the gate was added.
+    """
+    rsp = client.post(
+        "/pods/nodes",
+        data=json.dumps({"node_id": "routetest-nonadmin", "type": "host",
+                         "description": "should be refused"}),
+        headers=regular_headers)
+    assert rsp.status_code == 403, f"expected 403 for non-admin node create, got {rsp.status_code}"
+    assert "requires admin" in rsp.text
+
+
+def test_internal_backend_guard_rejects_cluster_internal_hosts():
+    """SSRF containment on publish, exercised directly against the guard.
+
+    This previously ran end-to-end as a regular user on their own node. Node creation
+    is now admin-gated and there are still no node permission endpoints, so a non-admin
+    cannot own a node to publish from — the guard is unreachable through the API for the
+    exact user class it targets until on-behalf-of minting lands (roadmap R28 + R8).
+    Testing the guard directly keeps the containment covered rather than losing it.
+    """
+    from api_nodes import _backend_host_is_internal
+
+    for bad in ("pods-api", "pods-api.pods.svc.cluster.local", "something.svc",
+                "127.0.0.1", "169.254.169.254", "10.96.0.1", "192.168.5.5",
+                "172.16.4.4", "100.64.1.1", "metadata.google.internal", "foo.internal"):
+        assert _backend_host_is_internal(bad) is True, f"{bad!r} should be treated as internal"
+    assert _backend_host_is_internal("8.8.8.8") is False
