@@ -283,6 +283,9 @@ def check_route_permissions(request):
         # bench (command dispatcher v1) — trigger runs work on the edge box, so USER
         ["/pods/nodes/{node_id}/bench", "POST", codes.USER],
         ["/pods/nodes/{node_id}/bench", "GET", codes.READ],
+        # settings channel + audit ledger — settings control data collection: ADMIN
+        ["/pods/nodes/{node_id}/settings", "PUT", codes.ADMIN],
+        ["/pods/nodes/{node_id}/ledger", "GET", codes.READ],
         # route forwardAuth browser flow — like pod /auth, tenant from host, no token
         ["/pods/routes/{route_id}/auth", "GET", "NEED-BASEURL"],
         ["/pods/routes/{route_id}/auth/callback", "GET", "NEED-BASEURL"],

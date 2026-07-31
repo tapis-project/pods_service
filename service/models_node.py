@@ -38,6 +38,10 @@ class NodeBase(TapisApiModel):
 
 
 class NodeBaseRead(NodeBase):
+    # Central-stored agent settings (sparse overlay — absent key = agent default),
+    # carried to the agent in every checkin response; edited via PUT .../settings.
+    # Env vars on the box always win over these (the operator pins locally).
+    agent_settings: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON), description="Per-node agent settings (sharing profile, container filters, intervals, log encoding preference). Sparse: absent keys mean agent defaults; env vars on the node override these.")
     # Provided — agent-reported at join/checkin
     capabilities: List[str] = Field([], description="Capabilities last reported by the agent (e.g. runtime.k8s, runtime.docker, exec, tunnels, metrics).", sa_column=Column(ARRAY(String)))
     status: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON), description="Status snapshot last reported by the agent (os, arch, versions, health).")
@@ -87,6 +91,9 @@ class NodeBaseFull(NodeBaseRead):
 
     def display(self):
         display = self.dict()
+        # Rows created before the settings migration hold NULL — the API contract
+        # (and every consumer) wants the sparse-overlay dict, so coerce here.
+        display['agent_settings'] = display.get('agent_settings') or {}
         display.pop('action_logs', None)
         display.pop('tenant_id', None)
         display.pop('site_id', None)
@@ -152,7 +159,10 @@ class Node(TapisNodeBaseFull, table=True, validate=True):
 
     @validator('action_logs')
     def check_action_logs(cls, v):
-        return [f"{datetime.utcnow().strftime('%y/%m/%d %H:%M')}: Node object created by '{g.username}'"]
+        # validate_assignment=True re-runs this on EVERY assignment — including
+        # log_action() appends — so only seed the creation entry when empty,
+        # never clobber an existing ledger.
+        return v or [f"{datetime.utcnow().strftime('%y/%m/%d %H:%M')}: Node object created by '{g.username}'"]
 
     @validator('permissions')
     def check_permissions(cls, v):
@@ -249,6 +259,7 @@ class NodeCheckinResult(TapisApiModel):
     resync: bool = Field(False, description="True when central wants the full inventory on the next checkin.")
     poll_after_seconds: int = Field(..., description="Seconds until the agent should check in again.")
     desired: Dict[str, Any] = Field(default_factory=dict, description="Desired state for this node (reserved; command dispatch lands with the agent).")
+    settings: Dict[str, Any] = Field(default_factory=dict, description="Central-stored agent settings (sparse overlay) — the agent adopts these each heartbeat; env vars on the box win over them.")
 
 
 class NodeCommandsResult(TapisApiModel):
@@ -320,5 +331,13 @@ class NodeDeleteResponse(TapisApiModel):
     message: str
     metadata: Dict
     result: str
+    status: str
+    version: str
+
+
+class NodeLedgerResponse(TapisApiModel):
+    message: str
+    metadata: Dict
+    result: List[str]
     status: str
     version: str

@@ -2312,16 +2312,11 @@ paths:
       tags:
       - Nodes
       summary: get_node_commands
-      description: 'Pending commands for this node.
-
-
-        Phase 1 stub: the response shape is the contract; there is no command dispatcher
-        yet,
-
-        so this always returns an empty list. The dispatcher (and true long-poll hold)
-        lands
-
-        with the Phase 2 agent work.'
+      description: "Pending one-shot commands for this node (dispatcher v1 \u2014\
+        \ first consumer: bench).\n\nQueued commands are handed over EXACTLY ONCE\
+        \ (status -> delivered here); the agent\nreports completion via POST .../commands/{command_id}/result.\
+        \ No redelivery in v1 \u2014\na delivered-but-never-completed command stays\
+        \ visible in the run history as such."
       operationId: get_node_commands
       parameters:
       - name: node_id
@@ -2337,6 +2332,356 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/NodeCommandsResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /pods/nodes/{node_id}/commands/{command_id}/result:
+    post:
+      tags:
+      - Nodes
+      summary: post_node_command_result
+      description: Agent completion report for a delivered command (X-Pods-Node-Token
+        auth).
+      operationId: post_node_command_result
+      parameters:
+      - name: node_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Node Id
+      - name: command_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Command Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NodeCommandResultIn'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeCommandResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /pods/nodes/{node_id}/bench:
+    post:
+      tags:
+      - Nodes
+      summary: trigger_node_bench
+      description: "Queue a benchmark run on this node (node USER permission).\n\n\
+        Settings are sanitized/clamped server-side; the agent picks the command up\
+        \ on its\nnext command poll (within one checkin interval) and posts the report\
+        \ back. One\nbench at a time per node \u2014 a still-active run rejects new\
+        \ triggers."
+      operationId: trigger_node_bench
+      parameters:
+      - name: node_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Node Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NodeBenchRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeCommandResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    get:
+      tags:
+      - Nodes
+      summary: list_node_bench_runs
+      description: Bench run history for a node (node READ permission), newest first.
+      operationId: list_node_bench_runs
+      parameters:
+      - name: node_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Node Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeCommandsListResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /pods/nodes/{node_id}/settings:
+    put:
+      tags:
+      - Nodes
+      summary: update_node_settings
+      description: "Replace this node's central agent settings (node ADMIN permission).\n\
+        \nThe dict is a SPARSE overlay \u2014 absent keys mean agent defaults. Unknown\
+        \ or\ninvalid keys are ignored (reported in the response message). The agent\n\
+        adopts changes on its next heartbeat; env vars on the box always win over\n\
+        these, and the agent reports env-pinned keys back in its status. Every\nchange\
+        \ (and every agent adoption) lands in the node's action ledger."
+      operationId: update_node_settings
+      parameters:
+      - name: node_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Node Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              title: Settings
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /pods/nodes/{node_id}/ledger:
+    get:
+      tags:
+      - Nodes
+      summary: get_node_ledger
+      description: "The node's action ledger, newest first (node READ permission)\
+        \ \u2014 creation,\nre-keys, settings changes + agent adoptions, bench triggers."
+      operationId: get_node_ledger
+      parameters:
+      - name: node_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Node Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeLedgerResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /pods/nodes/{node_id}/logs:
+    post:
+      tags:
+      - Nodes
+      summary: ingest_node_logs
+      description: "Agent log shipping (X-Pods-Node-Token auth \u2014 same path as\
+        \ checkin).\n\nBody (identity/gzip/zstd per Content-Encoding): {\"entries\"\
+        : [{\"source\", \"ts\", \"line\"}]}.\nsource = container name or \"agent\"\
+        ; ts = epoch seconds or ISO-8601 (falls back to\nreceipt time). Batches are\
+        \ clamped (batch size, line length, decompressed body\nbytes) and per-node\
+        \ retention (rows + age) is applied immediately \u2014 the response\nreports\
+        \ accepted/dropped/truncated plus the caps so agents can adapt. `timings`\n\
+        (decode/insert ms) lets benchmarks split wall-clock into network vs server\
+        \ time."
+      operationId: ingest_node_logs
+      parameters:
+      - name: node_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Node Id
+      - name: dry_run
+        in: query
+        required: false
+        schema:
+          type: boolean
+          description: "Decode, validate, and TIME the batch through the full path\
+            \ but store nothing \u2014 the bench suite's default mode, so benchmarks\
+            \ never pollute real logs or churn retention."
+          default: false
+          title: Dry Run
+        description: "Decode, validate, and TIME the batch through the full path but\
+          \ store nothing \u2014 the bench suite's default mode, so benchmarks never\
+          \ pollute real logs or churn retention."
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeLogIngestResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    get:
+      tags:
+      - Nodes
+      summary: get_node_logs
+      description: 'Stored log lines for a node (node READ permission).
+
+
+        Returns the NEWEST `limit` lines matching the filters, oldest-first for display,
+
+        plus the distinct source list (viewer filter chips) and has_more for paging
+        back.'
+      operationId: get_node_logs
+      parameters:
+      - name: node_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Node Id
+      - name: source
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Only lines from this source (container name or 'agent').
+          title: Source
+        description: Only lines from this source (container name or 'agent').
+      - name: since
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: "Only lines after this time (epoch seconds or ISO-8601) \u2014\
+            \ tail-follow with the newest ts you have."
+          title: Since
+        description: "Only lines after this time (epoch seconds or ISO-8601) \u2014\
+          \ tail-follow with the newest ts you have."
+      - name: before
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: "Only lines before this time \u2014 page back from a previous\
+            \ page's oldest ts."
+          title: Before
+        description: "Only lines before this time \u2014 page back from a previous\
+          \ page's oldest ts."
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 5000
+          minimum: 1
+          description: Max lines returned (newest window of the match, oldest-first
+            in the response).
+          default: 500
+          title: Limit
+        description: Max lines returned (newest window of the match, oldest-first
+          in the response).
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeLogsResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /pods/nodes/{node_id}/metrics:
+    get:
+      tags:
+      - Nodes
+      summary: get_node_metrics
+      description: "Metrics history series for a node (node READ permission) \u2014\
+        \ chart food.\n\nBuckets with no samples are OMITTED (never interpolated),\
+        \ and start_ts/end_ts\nframe the requested window regardless of where samples\
+        \ exist \u2014 so charts can\nanchor a full-window x-axis and render off periods\
+        \ honestly. `caps` carries the\nlatest-known cpu_count / mem_total_bytes for\
+        \ static y-axis scaling."
+      operationId: get_node_metrics
+      parameters:
+      - name: node_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Node Id
+      - name: window_s
+        in: query
+        required: false
+        schema:
+          type: integer
+          description: "History window in seconds (600..2592000 \u2014 up to 30 days)."
+          default: 3600
+          title: Window S
+        description: "History window in seconds (600..2592000 \u2014 up to 30 days)."
+      - name: step_s
+        in: query
+        required: false
+        schema:
+          type: integer
+          description: Bucket step in seconds (>=30; raised automatically to cap points
+            at 500).
+          default: 60
+          title: Step S
+        description: Bucket step in seconds (>=30; raised automatically to cap points
+          at 500).
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeMetricsResponse'
         '422':
           description: Validation Error
           content:
@@ -2467,6 +2812,46 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RouteDeleteResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /pods/nodes/{node_id}/routes/{route_id}/probe:
+    get:
+      tags:
+      - Nodes
+      summary: probe_node_route
+      description: "Central-side reachability test for a route \u2014 the UI can't\
+        \ test routes itself\n(TapisUI runs in the browser; route hostnames don't\
+        \ resolve in dev deployments).\n\nTwo legs: `direct` dials backend_host:port\
+        \ from central (is the backend up?);\n`via_proxy` dials the in-cluster traefik\
+        \ with the route's public Host header (is\nthe public path rendered and routing?\
+        \ \u2014 a 302 on an auth-gated route means the\nlogin redirect is working,\
+        \ a 404 usually means the render pass hasn't run yet).\nThe probe can only\
+        \ reach what the rendered route itself exposes publicly."
+      operationId: probe_node_route
+      parameters:
+      - name: node_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Node Id
+      - name: route_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Route Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RouteProbeResponse'
         '422':
           description: Validation Error
           content:
@@ -5842,6 +6227,63 @@ components:
       title: NewVolume
       description: Object with fields that users are allowed to specify for the Volume
         class.
+    NodeBenchRequest:
+      properties:
+        encodings:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Encodings
+          description: 'Encodings to test: identity, gzip:1|6|9, zstd:3|9 (zstd skipped
+            agent-side when unsupported).'
+        corpora:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Corpora
+          description: 'Corpus kinds: real (node''s recent log lines), json, text,
+            entropy.'
+        line_bytes:
+          anyOf:
+          - items:
+              type: integer
+            type: array
+          - type: 'null'
+          title: Line Bytes
+          description: Synthetic line sizes to test (bytes/line).
+        line_counts:
+          anyOf:
+          - items:
+              type: integer
+            type: array
+          - type: 'null'
+          title: Line Counts
+          description: Batch volumes to test (lines/batch).
+        probe_count:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Probe Count
+          description: Latency probes per target (default 10, max 50).
+        dry_run:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Dry Run
+          description: "Default TRUE: benchmark ingest POSTs are decoded+timed but\
+            \ NOT stored. False stores bench lines in your node's real logs (they\
+            \ count against retention and can push out real lines) \u2014 visualization-only\
+            \ data, only flip this deliberately."
+      additionalProperties: false
+      type: object
+      title: NodeBenchRequest
+      description: "User-facing bench trigger. Every field optional \u2014 server\
+        \ sanitizes/clamps\ninto the stored params so the agent only ever sees valid\
+        \ settings."
     NodeCheckinRequest:
       properties:
         agent_version:
@@ -5875,6 +6317,19 @@ components:
           - type: 'null'
           title: Inventory
           description: Full workload inventory; include only when the hash changed.
+        metrics_samples:
+          anyOf:
+          - items:
+              additionalProperties: true
+              type: object
+            type: array
+          - type: 'null'
+          title: Metrics Samples
+          description: "Batched metrics samples buffered since the last successful\
+            \ checkin \u2014 each {ts, load1, cpu_count, mem_used_bytes, mem_total_bytes,\
+            \ root_disk_pct, docker_running, docker_total, k8s_running, k8s_total}.\
+            \ Stored into per-node metrics history, deduped on (node_id, ts); a 200\
+            \ response means the agent can clear its buffer."
       additionalProperties: false
       type: object
       title: NodeCheckinRequest
@@ -5932,12 +6387,93 @@ components:
           title: Desired
           description: Desired state for this node (reserved; command dispatch lands
             with the agent).
+        settings:
+          additionalProperties: true
+          type: object
+          title: Settings
+          description: "Central-stored agent settings (sparse overlay) \u2014 the\
+            \ agent adopts these each heartbeat; env vars on the box win over them."
       additionalProperties: false
       type: object
       required:
       - endpoints
       - poll_after_seconds
       title: NodeCheckinResult
+    NodeCommandResponse:
+      properties:
+        message:
+          type: string
+          title: Message
+        metadata:
+          additionalProperties: true
+          type: object
+          title: Metadata
+        result:
+          additionalProperties: true
+          type: object
+          title: Result
+        status:
+          type: string
+          title: Status
+        version:
+          type: string
+          title: Version
+      additionalProperties: false
+      type: object
+      required:
+      - message
+      - metadata
+      - result
+      - status
+      - version
+      title: NodeCommandResponse
+    NodeCommandResultIn:
+      properties:
+        status:
+          type: string
+          title: Status
+          description: done | error
+        result:
+          additionalProperties: true
+          type: object
+          title: Result
+          description: Result payload (bench report, error detail, ...).
+      additionalProperties: false
+      type: object
+      required:
+      - status
+      title: NodeCommandResultIn
+      description: Agent's completion report for a delivered command.
+    NodeCommandsListResponse:
+      properties:
+        message:
+          type: string
+          title: Message
+        metadata:
+          additionalProperties: true
+          type: object
+          title: Metadata
+        result:
+          items:
+            additionalProperties: true
+            type: object
+          type: array
+          title: Result
+        status:
+          type: string
+          title: Status
+        version:
+          type: string
+          title: Version
+      additionalProperties: false
+      type: object
+      required:
+      - message
+      - metadata
+      - result
+      - status
+      - version
+      title: NodeCommandsListResponse
     NodeCommandsResponse:
       properties:
         message:
@@ -6160,6 +6696,244 @@ components:
       - central_base_url
       - checkin_interval_seconds
       title: NodeJoinResult
+    NodeLedgerResponse:
+      properties:
+        message:
+          type: string
+          title: Message
+        metadata:
+          additionalProperties: true
+          type: object
+          title: Metadata
+        result:
+          items:
+            type: string
+          type: array
+          title: Result
+        status:
+          type: string
+          title: Status
+        version:
+          type: string
+          title: Version
+      additionalProperties: false
+      type: object
+      required:
+      - message
+      - metadata
+      - result
+      - status
+      - version
+      title: NodeLedgerResponse
+    NodeLogEntry:
+      properties:
+        source:
+          type: string
+          title: Source
+        ts:
+          type: string
+          format: date-time
+          title: Ts
+        line:
+          type: string
+          title: Line
+      additionalProperties: false
+      type: object
+      required:
+      - source
+      - ts
+      - line
+      title: NodeLogEntry
+    NodeLogIngestResponse:
+      properties:
+        message:
+          type: string
+          title: Message
+        metadata:
+          additionalProperties: true
+          type: object
+          title: Metadata
+        result:
+          $ref: '#/components/schemas/NodeLogIngestResult'
+        status:
+          type: string
+          title: Status
+        version:
+          type: string
+          title: Version
+      additionalProperties: false
+      type: object
+      required:
+      - message
+      - metadata
+      - result
+      - status
+      - version
+      title: NodeLogIngestResponse
+    NodeLogIngestResult:
+      properties:
+        accepted:
+          type: integer
+          title: Accepted
+          description: Log lines stored (or timed, when dry_run).
+        dropped:
+          type: integer
+          title: Dropped
+          description: Entries discarded (malformed, empty, or over the batch cap).
+          default: 0
+        truncated:
+          type: integer
+          title: Truncated
+          description: Lines cut to the per-line character cap.
+          default: 0
+        dry_run:
+          type: boolean
+          title: Dry Run
+          description: True when the batch was decoded+timed but not stored (bench
+            mode).
+          default: false
+        timings:
+          additionalProperties: true
+          type: object
+          title: Timings
+          description: 'Server-side split for benchmarks: decode_ms, insert_ms (null
+            when dry_run), wire_bytes, decoded_bytes.'
+        retention:
+          additionalProperties: true
+          type: object
+          title: Retention
+          description: Server retention caps (rows/age per node) so agents can size
+            their buffers.
+      additionalProperties: false
+      type: object
+      required:
+      - accepted
+      title: NodeLogIngestResult
+    NodeLogsResponse:
+      properties:
+        message:
+          type: string
+          title: Message
+        metadata:
+          additionalProperties: true
+          type: object
+          title: Metadata
+        result:
+          $ref: '#/components/schemas/NodeLogsResult'
+        status:
+          type: string
+          title: Status
+        version:
+          type: string
+          title: Version
+      additionalProperties: false
+      type: object
+      required:
+      - message
+      - metadata
+      - result
+      - status
+      - version
+      title: NodeLogsResponse
+    NodeLogsResult:
+      properties:
+        entries:
+          items:
+            $ref: '#/components/schemas/NodeLogEntry'
+          type: array
+          title: Entries
+          description: Log lines, oldest first within the returned page.
+          default: []
+        sources:
+          items:
+            type: string
+          type: array
+          title: Sources
+          description: Distinct sources stored for this node (viewer filter chips).
+          default: []
+        has_more:
+          type: boolean
+          title: Has More
+          description: True when older lines exist before the returned page (page
+            back with before_ts).
+          default: false
+      additionalProperties: false
+      type: object
+      title: NodeLogsResult
+    NodeMetricsResponse:
+      properties:
+        message:
+          type: string
+          title: Message
+        metadata:
+          additionalProperties: true
+          type: object
+          title: Metadata
+        result:
+          $ref: '#/components/schemas/NodeMetricsResult'
+        status:
+          type: string
+          title: Status
+        version:
+          type: string
+          title: Version
+      additionalProperties: false
+      type: object
+      required:
+      - message
+      - metadata
+      - result
+      - status
+      - version
+      title: NodeMetricsResponse
+    NodeMetricsResult:
+      properties:
+        series:
+          additionalProperties:
+            items:
+              items:
+                type: number
+              type: array
+            type: array
+          type: object
+          title: Series
+          description: Per-field [[epoch_ts, mean], ...]; empty buckets are omitted
+            (off periods stay visible as gaps).
+        window_s:
+          type: integer
+          title: Window S
+          description: Actual window used (after clamping).
+        step_s:
+          type: integer
+          title: Step S
+          description: Actual bucket step used (after clamping).
+        start_ts:
+          type: number
+          title: Start Ts
+          description: "Epoch of the window start \u2014 the UI anchors the x-axis\
+            \ here regardless of where samples exist."
+        end_ts:
+          type: number
+          title: End Ts
+          description: Epoch of the window end.
+        caps:
+          additionalProperties: true
+          type: object
+          title: Caps
+          description: 'Latest-known static y-axis caps: cpu_count, mem_total_bytes.'
+        sample_count:
+          type: integer
+          title: Sample Count
+          description: Raw samples inside the window before downsampling.
+          default: 0
+      additionalProperties: false
+      type: object
+      required:
+      - window_s
+      - step_s
+      - start_ts
+      - end_ts
+      title: NodeMetricsResult
     NodeResponse:
       properties:
         message:
@@ -6220,6 +6994,13 @@ components:
           title: Namespace
           description: Advisory Kubernetes namespace for k8s-type nodes; handed to
             the agent in its join config bundle.
+        agent_settings:
+          additionalProperties: true
+          type: object
+          title: Agent Settings
+          description: 'Per-node agent settings (sharing profile, container filters,
+            intervals, log encoding preference). Sparse: absent keys mean agent defaults;
+            env vars on the node override these.'
         capabilities:
           items:
             type: string
@@ -7195,6 +7976,99 @@ components:
       - status
       - version
       title: RouteDeleteResponse
+    RouteProbeCheck:
+      properties:
+        ok:
+          type: boolean
+          title: Ok
+          description: True when an HTTP response came back (any status). False =
+            could not connect.
+        status_code:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Status Code
+          description: HTTP status returned, when ok.
+        latency_ms:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Latency Ms
+          description: Round-trip time in milliseconds, when ok.
+        error:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Error
+          description: Connection error string, when not ok.
+        snippet:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Snippet
+          description: First bytes of the response body (sanitized), when ok.
+      additionalProperties: false
+      type: object
+      required:
+      - ok
+      title: RouteProbeCheck
+    RouteProbeResponse:
+      properties:
+        message:
+          type: string
+          title: Message
+        metadata:
+          additionalProperties: true
+          type: object
+          title: Metadata
+        result:
+          $ref: '#/components/schemas/RouteProbeResult'
+        status:
+          type: string
+          title: Status
+        version:
+          type: string
+          title: Version
+      additionalProperties: false
+      type: object
+      required:
+      - message
+      - metadata
+      - result
+      - status
+      - version
+      title: RouteProbeResponse
+    RouteProbeResult:
+      properties:
+        route_id:
+          type: string
+          title: Route Id
+        url:
+          type: string
+          title: Url
+          description: Public hostname for the route.
+        tapis_auth:
+          type: boolean
+          title: Tapis Auth
+          description: Whether the route is auth-gated (a 302 on via_proxy then means
+            the auth gate is working).
+        direct:
+          $ref: '#/components/schemas/RouteProbeCheck'
+          description: "Central dialing backend_host:port directly \u2014 is the backend\
+            \ itself up?"
+        via_proxy:
+          $ref: '#/components/schemas/RouteProbeCheck'
+          description: "Central dialing traefik with the route's public Host header\
+            \ \u2014 is the full public path rendered and routing?"
+      additionalProperties: false
+      type: object
+      required:
+      - route_id
+      - url
+      - tapis_auth
+      - direct
+      - via_proxy
+      title: RouteProbeResult
     RouteResponse:
       properties:
         message:
