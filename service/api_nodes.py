@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 import hashlib
 import hmac
@@ -100,6 +101,32 @@ NODES_METRICS_MAX_AGE_DAYS = int(os.environ.get("NODES_METRICS_MAX_AGE_DAYS", "3
 # Tapis token middleware never tries to parse it as a JWT.
 AGENT_TOKEN_HEADER = "X-Pods-Node-Token"
 
+# Long-poll (transport discipline #3): the agent's ordinary GET /commands is
+# answered SLOWLY on purpose — held up to commands_wait seconds, returning
+# EARLY the moment a command is queued or the settings overlay changes. The
+# direction never changes (edges are behind NAT; the agent always initiates);
+# central just takes its time saying "nothing yet". Correctness rests on a
+# ~1 s DB re-check inside the hold (replica-safe); the in-process wake below is
+# purely a latency optimization for the common single-worker case.
+COMMANDS_MAX_WAIT = int(os.environ.get("NODES_COMMANDS_MAX_WAIT", "20"))
+
+_COMMAND_WAKES: Dict[str, "asyncio.Event"] = {}
+
+
+def _wake_key(node) -> str:
+    return f"{node.site_id}:{node.tenant_id}:{node.node_id}"
+
+
+def wake_commands_poll(node):
+    """Wake a held commands poll for this node (best effort — same-process
+    only; other workers/replicas catch up on their next 1 s DB re-check)."""
+    try:
+        ev = _COMMAND_WAKES.get(_wake_key(node))
+        if ev:
+            ev.set()
+    except Exception:
+        pass
+
 
 # Token helpers ---------------------------------------------------------------
 # Raw tokens are returned exactly once (create/regenerate → claim, join → agent token);
@@ -167,6 +194,10 @@ def _agent_endpoints(request: Request, node: Node) -> dict:
         # (same endpoint, same X-Pods-Node-Token header, config-only opt-in).
         "log_ingest": f"{base}/pods/nodes/{node.node_id}/logs",
         "log_encodings": ",".join(supported_encodings()),
+        # Long-poll capability: agents that understand it hold GET /commands
+        # open this many seconds between heartbeats; older agents ignore the
+        # key and keep classic polling — config-as-data, no flag day.
+        "commands_wait": COMMANDS_MAX_WAIT,
     }
     # Agent self-update: advertise the source central can serve, with the exact
     # sha256 the agent must verify before exec'ing it. Keys are simply absent
@@ -638,36 +669,73 @@ async def checkin_node(node_id: str, checkin: NodeCheckinRequest, request: Reque
     summary="get_node_commands",
     operation_id="get_node_commands",
     response_model=NodeCommandsResponse)
-async def get_node_commands(node_id: str, request: Request):
+async def get_node_commands(
+    node_id: str,
+    request: Request,
+    wait: int = Query(0, description="Long-poll hold in seconds (0 = classic immediate poll; clamped to the advertised commands_wait). While held, the server re-checks ~1/s and answers EARLY on a new command or a settings change — in-process triggers wake it instantly."),
+):
     """Pending one-shot commands for this node (dispatcher v1 — first consumer: bench).
 
     Queued commands are handed over EXACTLY ONCE (status -> delivered here); the agent
     reports completion via POST .../commands/{command_id}/result. No redelivery in v1 —
     a delivered-but-never-completed command stays visible in the run history as such.
+
+    With ?wait=N this becomes a LONG POLL: an empty queue holds the request open up to
+    N seconds, so a standing "call me when you have something" line exists made purely
+    of agent-initiated GETs — queue semantics unchanged, only WHEN the dequeue attempt
+    happens moves. The response always piggybacks the current settings overlay, and a
+    settings change ends the hold early — command delivery AND settings adoption both
+    drop to sub-second on long-polling agents.
     """
     node = _get_node_or_404(node_id)
     _require_agent(request, node)
+    wait = max(0, min(int(wait), COMMANDS_MAX_WAIT))
+    deadline = time.monotonic() + wait
+    settings_at_hold = json.dumps(node.agent_settings or {}, sort_keys=True)
 
     store = _telemetry_store(NodeCommand)
-    stmt = (
-        sa_select(NodeCommand)
-        .where(NodeCommand.node_id == node.node_id, NodeCommand.status == "queued")
-        .order_by(NodeCommand.created_ts.asc()))
-    queued = store.run("execute", stmt, scalars=True, all=True)
-    if queued:
-        store.run("execute",
-                  sa_update(NodeCommand)
-                  .where(NodeCommand.command_id.in_([c.command_id for c in queued]))
-                  .values(status="delivered", delivered_ts=_utcnow()))
-    return ok(
-        result={
-            "commands": [
-                {"command_id": c.command_id, "type": c.type, "params": c.params or {}}
-                for c in queued
-            ],
-            "poll_after_seconds": COMMANDS_POLL_AFTER_SECONDS,
-        },
-        msg=f"{len(queued)} pending command(s)." if queued else "No pending commands.")
+    while True:
+        stmt = (
+            sa_select(NodeCommand)
+            .where(NodeCommand.node_id == node.node_id, NodeCommand.status == "queued")
+            .order_by(NodeCommand.created_ts.asc()))
+        queued = store.run("execute", stmt, scalars=True, all=True)
+        if queued:
+            store.run("execute",
+                      sa_update(NodeCommand)
+                      .where(NodeCommand.command_id.in_([c.command_id for c in queued]))
+                      .values(status="delivered", delivered_ts=_utcnow()))
+        settings_changed = (
+            json.dumps(node.agent_settings or {}, sort_keys=True) != settings_at_hold)
+        if queued or settings_changed or time.monotonic() >= deadline:
+            return ok(
+                result={
+                    "commands": [
+                        {"command_id": c.command_id, "type": c.type, "params": c.params or {}}
+                        for c in queued
+                    ],
+                    "poll_after_seconds": COMMANDS_POLL_AFTER_SECONDS,
+                    "settings": node.agent_settings or {},
+                },
+                msg=(f"{len(queued)} pending command(s)." if queued
+                     else "Settings changed while polling." if settings_changed
+                     else "No pending commands."))
+
+        # Hold: an in-process wake (instant) or the 1 s tick (replica-safe floor).
+        # The sleep is async — held requests cost no threads and ~zero CPU.
+        key = _wake_key(node)
+        ev = _COMMAND_WAKES.get(key)
+        if ev is None or ev.is_set():
+            ev = asyncio.Event()
+            _COMMAND_WAKES[key] = ev
+        try:
+            await asyncio.wait_for(ev.wait(), timeout=1.0)
+        except asyncio.TimeoutError:
+            pass
+        # Re-resolve from the DB each tick: cross-worker settings changes are
+        # seen here, and a node deleted mid-hold ends the poll with the 404
+        # the agent's park logic already understands.
+        node = _get_node_or_404(node_id)
 
 
 @router.post(
@@ -779,6 +847,7 @@ async def trigger_node_bench(node_id: str, bench: NodeBenchRequest):
         site_id=node.site_id,
     )
     cmd.db_create()
+    wake_commands_poll(node)  # a held long-poll delivers this sub-second
     node.log_action(f"bench queued by '{getattr(g, 'username', '?')}' ({cmd.command_id[:14]}…, dry_run={cmd.params.get('dry_run', True)})")
     node.db_update(user_update=False)
     return ok(result=cmd.display(),
@@ -830,6 +899,7 @@ def _queue_lifecycle_command(node: Node, cmd_type: str, params: Dict[str, Any]) 
         site_id=node.site_id,
     )
     cmd.db_create()
+    wake_commands_poll(node)  # a held long-poll delivers this sub-second
     return cmd
 
 
@@ -878,8 +948,9 @@ async def trigger_node_restart(node_id: str):
     node.log_action(f"agent restart queued by '{getattr(g, 'username', '?')}' ({cmd.command_id[:14]}…)")
     node.db_update(user_update=False)
     return ok(result=cmd.display(),
-              msg="Restart queued — the agent picks it up on its next command poll "
-                  "(within one checkin interval), acks, and re-execs in place.")
+              msg="Restart queued — a long-polling (0.5.0+) agent picks it up within "
+                  "seconds, older agents within one checkin interval; it acks, then "
+                  "re-execs in place.")
 
 
 @router.post(
@@ -933,9 +1004,10 @@ async def trigger_node_update(node_id: str):
         f"{running} -> {info['version']} (sha {info['sha256'][:12]}…, {cmd.command_id[:14]}…)")
     node.db_update(user_update=False)
     return ok(result=cmd.display(),
-              msg=f"Self-update to {info['version']} queued{note} — the agent verifies the "
-                  f"sha256, compile-checks, keeps the previous copy as fallback, and re-execs. "
-                  f"Watch the ledger for the completion entry.")
+              msg=f"Self-update to {info['version']} queued{note} — picked up within seconds "
+                  f"by long-polling (0.5.0+) agents, within one checkin interval otherwise. "
+                  f"The agent verifies the sha256, compile-checks, keeps the previous copy as "
+                  f"fallback, and re-execs. Watch the ledger for the completion entry.")
 
 
 @router.get(
@@ -970,9 +1042,11 @@ async def update_node_settings(node_id: str, settings: Dict[str, Any] = Body(...
 
     The dict is a SPARSE overlay — absent keys mean agent defaults. Unknown or
     invalid keys are ignored (reported in the response message). The agent
-    adopts changes on its next heartbeat; env vars on the box always win over
-    these, and the agent reports env-pinned keys back in its status. Every
-    change (and every agent adoption) lands in the node's action ledger.
+    adopts changes within seconds on long-polling (0.5.0+) agents — the change
+    wakes any held commands poll, which piggybacks the new overlay — and on the
+    next heartbeat otherwise; env vars on the box always win over these, and
+    the agent reports env-pinned keys back in its status. Every change (and
+    every agent adoption) lands in the node's action ledger.
     """
     node = _get_node_or_404(node_id)
     clean, ignored = sanitize_agent_settings(settings)
@@ -980,6 +1054,9 @@ async def update_node_settings(node_id: str, settings: Dict[str, Any] = Body(...
     node.agent_settings = clean
     node.log_action(f"agent settings changed by '{getattr(g, 'username', '?')}': {changes}")
     node.db_update(user_update=False)
+    # A held long-poll ends early on settings changes (piggybacked in its
+    # response) — adoption drops from one-heartbeat to sub-second.
+    wake_commands_poll(node)
     msg = "Agent settings updated — the agent adopts them on its next heartbeat (env vars on the box still win)."
     if ignored:
         msg += f" Ignored unknown/invalid keys: {ignored}."
