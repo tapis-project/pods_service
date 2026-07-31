@@ -65,6 +65,7 @@ import http.client
 import json
 import os
 import platform
+import re
 import shutil
 import signal
 import socket
@@ -111,12 +112,14 @@ _SETTING_ENVS = {
     "containers_exclude": "PODS_AGENT_CONTAINERS_EXCLUDE",
     "container_label_optin": "PODS_AGENT_CONTAINER_LABEL_OPTIN",
     "log_encoding": "PODS_AGENT_LOG_ENCODING",
+    "watch_paths": "PODS_AGENT_WATCH_PATHS",
 }
 _SETTING_DEFAULTS = {
     "share_hostname": True, "metrics": True, "check_docker": True, "check_k8s": True,
     "ship_logs": True, "metrics_interval": 60, "logs_tail": 200,
     "containers": [], "containers_exclude": [], "container_label_optin": False,
     "log_encoding": "auto",
+    "watch_paths": [],
 }
 
 
@@ -125,6 +128,8 @@ def setting(key):
     env = os.environ.get(_SETTING_ENVS[key])
     default = _SETTING_DEFAULTS[key]
     if env not in (None, ""):
+        if key == "watch_paths":
+            return parse_watch_env(env)
         if isinstance(default, bool):
             if key == "container_label_optin":
                 return env.lower() == "true"
@@ -513,6 +518,9 @@ def sample_status(caps, inv=None):
     status["startup_milestones"] = dict(MILESTONES)
     status["applied_settings"] = applied_settings()
     status["env_pinned"] = env_pinned_settings()
+    watches = watch_status_blob()
+    if watches:
+        status["watches"] = watches
     return status
 
 
@@ -585,7 +593,263 @@ def metrics_sample(caps, inv):
     if k8s_pods is not None:
         sample["k8s_running"] = sum(1 for p in k8s_pods if p.get("phase") == "Running")
         sample["k8s_total"] = len(k8s_pods)
+    extras = {**watch_extras(), **agent_self_metrics()}
+    if extras:
+        sample["extras"] = extras
     return sample
+
+
+# Storage watch --------------------------------------------------------------
+# Per-path disk watching, configured via the settings channel (structured
+# objects, sanitized server-side) or PODS_AGENT_WATCH_PATHS (JSON blob, or the
+# hand-typeable compact form "path[:90%|:200G],path"). Deliberately slow and
+# I/O-respectful: filesystem-level statvfs is free and refreshes every loop
+# pass; the per-directory du walk runs at most ONE path per pass, on its own
+# interval (default 900 s), with a hard time budget — a huge tree yields a
+# partial (flagged) size rather than a long scan. No threshold = graph-only.
+
+WATCH_DU_BUDGET_MS = 2000
+WATCH_INTERVAL_DEFAULT_S = 900
+WATCH_CLEAR_FRACTION = 0.95   # hysteresis: warn at threshold, clear below 95% of it
+_WATCH_THRESH_RE = re.compile(r"^(\d+(?:\.\d+)?)\s*(%|[KMGT]i?B?|B)$", re.IGNORECASE)
+_WATCH_MULT = {"K": 1024, "M": 1024 ** 2, "G": 1024 ** 3, "T": 1024 ** 4}
+
+# path -> {"total","fs_used","used","warn_state","last_walk_mono","partial",
+#          "scan_ms","scanned_at","du","threshold"}
+WATCH_STATE = {}
+
+
+def parse_watch_threshold(raw):
+    """'90%' -> ('pct', 90.0); '200G' -> ('bytes', n); None if invalid."""
+    m = _WATCH_THRESH_RE.match(raw.strip()) if isinstance(raw, str) else None
+    if not m:
+        return None
+    num, unit = float(m.group(1)), m.group(2).upper()
+    if unit == "%":
+        return ("pct", num) if 0 < num <= 100 else None
+    if unit == "B":
+        return ("bytes", num)
+    return ("bytes", num * _WATCH_MULT[unit[0]])
+
+
+def parse_watch_env(raw):
+    """PODS_AGENT_WATCH_PATHS: a JSON list of objects, or compact
+    "path[:threshold],path" — the suffix only parses as a threshold when it
+    matches the strict size/pct pattern, so colons in paths stay paths."""
+    raw = raw.strip()
+    if raw.startswith("["):
+        try:
+            parsed = json.loads(raw)
+            return [e for e in parsed if isinstance(e, dict) and
+                    isinstance(e.get("path"), str) and e["path"].startswith("/")]
+        except ValueError:
+            log(f"PODS_AGENT_WATCH_PATHS: invalid JSON — ignoring ({raw[:60]}...)")
+            return []
+    entries = []
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        path, sep, suffix = item.rpartition(":")
+        if sep and parse_watch_threshold(suffix):
+            entries.append({"path": path, "warn": suffix})
+        else:
+            entries.append({"path": item})
+    return [e for e in entries if e["path"].startswith("/")]
+
+
+def _human_bytes(n):
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if abs(n) < 1024 or unit == "TB":
+            return f"{n:.1f} {unit}" if unit != "B" else f"{int(n)} B"
+        n /= 1024
+
+
+def du_walk(path, budget_ms):
+    """Apparent-size directory walk (st_size, no symlink follow, permission
+    errors skipped) with a hard wall-clock budget. Returns
+    (bytes, truncated, duration_ms)."""
+    deadline = time.monotonic() + budget_ms / 1000.0
+    total, truncated = 0, False
+    stack = [path]
+    t0 = time.monotonic()
+    while stack:
+        if time.monotonic() > deadline:
+            truncated = True
+            break
+        current = stack.pop()
+        try:
+            with os.scandir(current) as it:
+                for entry in it:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            stack.append(entry.path)
+                        elif entry.is_file(follow_symlinks=False):
+                            total += entry.stat(follow_symlinks=False).st_size
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+    return total, truncated, round((time.monotonic() - t0) * 1000, 1)
+
+
+def scan_watches(state):
+    """One loop-pass update of WATCH_STATE from setting('watch_paths').
+
+    Every configured path gets fresh filesystem-level numbers (statvfs — free).
+    Directory walks are rationed: only paths with du enabled (default) walk, at
+    most one per pass, the most-overdue first. Warn evaluation is hysteretic
+    and per-path warn states persist across restarts so a value sitting in the
+    hysteresis band cannot flap the ledger on every agent restart.
+    """
+    entries = setting("watch_paths") or []
+    configured = set()
+    persisted = state.get("watch_states") or {}
+    walk_candidates = []
+    for entry in entries:
+        path = (entry.get("path") or "").rstrip("/") or "/"
+        if not path.startswith("/"):
+            continue
+        configured.add(path)
+        w = WATCH_STATE.setdefault(path, {"warn_state": persisted.get(path, "ok"),
+                                          "last_walk_mono": 0.0})
+        w["du"] = entry.get("du", True)
+        w["threshold"] = entry.get("warn")
+        try:
+            fs = shutil.disk_usage(path)
+            w["total"], w["fs_used"] = fs.total, fs.used
+            w.pop("error", None)
+        except OSError as e:
+            # Report, don't vanish — a containerized agent only sees mounted
+            # paths, and a typo'd path should be visible in the UI, not silent.
+            w["error"] = f"{type(e).__name__}: {e}"[:120]
+            w.pop("total", None)
+            w.pop("fs_used", None)
+            continue
+        if not w["du"]:
+            w["used"] = w["fs_used"]
+            w["scanned_at"] = round(time.time(), 1)
+            w.pop("partial", None)
+        else:
+            interval = entry.get("interval_s") or WATCH_INTERVAL_DEFAULT_S
+            overdue = time.monotonic() - w["last_walk_mono"] - interval
+            if overdue >= 0:
+                walk_candidates.append((overdue, path))
+    for path in [p for p in list(WATCH_STATE) if p not in configured]:
+        del WATCH_STATE[path]
+
+    if walk_candidates:
+        _, path = max(walk_candidates)
+        w = WATCH_STATE[path]
+        used, truncated, ms = du_walk(path, WATCH_DU_BUDGET_MS)
+        w.update({"used": used, "partial": truncated, "scan_ms": ms,
+                  "scanned_at": round(time.time(), 1),
+                  "last_walk_mono": time.monotonic()})
+        if truncated:
+            log(f"watch scan {path}: PARTIAL {_human_bytes(used)} in {ms}ms "
+                f"(budget {WATCH_DU_BUDGET_MS}ms hit — size is a floor, not a total)")
+        milestone("first_watch_scan")
+
+    # Warn evaluation on whatever is freshest; persist states only on change.
+    changed = False
+    for path, w in WATCH_STATE.items():
+        thresh = parse_watch_threshold(w.get("threshold") or "")
+        used, total = w.get("used"), w.get("total")
+        if not thresh or used is None or not total:
+            w["warn_state"] = "ok" if not thresh else w.get("warn_state", "ok")
+            continue
+        kind, limit = thresh
+        value = (used / total * 100.0) if kind == "pct" else float(used)
+        prev = w.get("warn_state", "ok")
+        if value >= limit:
+            w["warn_state"] = "warn"
+        elif value < limit * WATCH_CLEAR_FRACTION:
+            w["warn_state"] = "ok"
+        # else: inside the hysteresis band — hold the previous state
+        if w["warn_state"] != prev:
+            log(f"watch {path}: {prev} -> {w['warn_state']} "
+                f"({_human_bytes(used)} used, threshold {w.get('threshold')})")
+            changed = True
+    if changed or set(persisted) != configured:
+        state["watch_states"] = {p: w.get("warn_state", "ok") for p, w in WATCH_STATE.items()}
+        save_state(state)
+
+
+def watch_extras():
+    """extras gauges for the current metrics sample: disk:<path>:used/:total.
+    Values are the last completed scan carried at sample cadence — bounded-stale
+    by each path's interval (scanned_at in the status blob keeps that honest)."""
+    extras = {}
+    for path, w in WATCH_STATE.items():
+        if w.get("used") is not None and w.get("total"):
+            extras[f"disk:{path}:used"] = w["used"]
+            extras[f"disk:{path}:total"] = w["total"]
+    return extras
+
+
+def watch_status_blob():
+    """Per-path watch detail for checkin status — central ledgers state EDGES
+    (ok->warn, warn->ok) from this, and the UI renders the live table."""
+    out = {}
+    for path, w in WATCH_STATE.items():
+        used, total = w.get("used"), w.get("total")
+        entry = {"state": w.get("warn_state", "ok"), "du": w.get("du", True)}
+        if w.get("threshold"):
+            entry["threshold"] = w["threshold"]
+        if used is not None and total:
+            entry.update({
+                "used": used, "total": total,
+                "used_h": _human_bytes(used),
+                "pct": round(used / total * 100.0, 1),
+            })
+        for k in ("partial", "scan_ms", "scanned_at", "error"):
+            if w.get(k) is not None:
+                entry[k] = w[k]
+        out[path] = entry
+    return out
+
+
+# Agent self-metrics -----------------------------------------------------------
+# The watcher's own footprint, from /proc (Linux; keys are simply absent
+# elsewhere) — proof at a glance that the agent stays tiny. Rides the same
+# extras rail as storage watch: agent:rss_bytes (data-scaled), agent:cpu_pct
+# (static cap = 100% of one core), agent:fds with the soft ulimit as its
+# natural static cap. Gated by the same 'metrics' setting as everything else.
+
+_AGENT_CPU = {"last_total": None, "last_mono": None}
+
+
+def agent_self_metrics():
+    extras = {}
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    extras["agent:rss_bytes"] = int(line.split()[1]) * 1024
+                    break
+    except (OSError, ValueError, IndexError):
+        pass
+    try:
+        with open("/proc/self/stat") as f:
+            parts = f.read().rsplit(")", 1)[1].split()  # skip comm (may hold spaces)
+        total = (int(parts[11]) + int(parts[12])) / os.sysconf("SC_CLK_TCK")
+        now = time.monotonic()
+        last_t, last_m = _AGENT_CPU["last_total"], _AGENT_CPU["last_mono"]
+        _AGENT_CPU["last_total"], _AGENT_CPU["last_mono"] = total, now
+        if last_t is not None and now > last_m:
+            extras["agent:cpu_pct"] = round(
+                min(100.0, max(0.0, (total - last_t) / (now - last_m) * 100.0)), 2)
+    except (OSError, ValueError, IndexError):
+        pass
+    try:
+        extras["agent:fds"] = len(os.listdir("/proc/self/fd"))
+        import resource
+        soft, _ = resource.getrlimit(resource.RLIMIT_NOFILE)
+        if soft and soft != resource.RLIM_INFINITY:
+            extras["agent:fds:total"] = soft
+    except (OSError, ImportError, ValueError):
+        pass
+    return extras
 
 
 def docker_get_bytes(path):
@@ -1247,6 +1511,13 @@ def run():
         milestone("caps_detected")
         inv = collect_inventory(caps, state.get("namespace"))
         h = inventory_hash(inv)
+
+        # Storage watch: statvfs refresh every pass (free), at most one budgeted
+        # du walk per pass on its own interval — see scan_watches.
+        try:
+            scan_watches(state)
+        except Exception as e:
+            log(f"watch scan error (non-fatal): {e}")
 
         # Sample on cadence (one per loop pass at most — during offline backoff the
         # cadence stretches with the loop, and the resulting gaps are honest data:

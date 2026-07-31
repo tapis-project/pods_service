@@ -15,7 +15,7 @@ Read paths: GET .../logs and GET .../metrics, node-READ gated.
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import BigInteger, DateTime, Float, Index, Integer, UniqueConstraint
+from sqlalchemy import BigInteger, DateTime, Float, Index, Integer, JSON, UniqueConstraint
 from sqlmodel import Field, Column, String
 from models_base import TapisModel, TapisApiModel
 
@@ -59,6 +59,7 @@ class NodeMetric(TapisModel, table=True):
     docker_total: Optional[int] = Field(None, sa_column=Column(Integer, nullable=True), description="Total docker containers.")
     k8s_running: Optional[int] = Field(None, sa_column=Column(Integer, nullable=True), description="Running k8s pods (agent namespace scope).")
     k8s_total: Optional[int] = Field(None, sa_column=Column(Integer, nullable=True), description="Total k8s pods (agent namespace scope).")
+    extras: Optional[Dict[str, float]] = Field(None, sa_column=Column(JSON, nullable=True), description="Open-ended numeric gauges (storage watch disk:<path>:used/:total, agent self-metrics later) — new series without new columns; ':total' keys are y-axis caps.")
     tenant_id: str = Field("", description="Tapis tenant of the parent node.")
     site_id: str = Field("", description="Tapis site of the parent node.")
 

@@ -16,6 +16,8 @@ Transport notes:
     compressed bomb cannot balloon in memory.
 """
 import json
+import math
+import re
 import zlib
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -160,6 +162,29 @@ METRIC_FIELDS = (
     "k8s_running", "k8s_total",
 )
 
+# Open-ended numeric gauges ride a per-sample `extras` dict instead of new
+# columns — storage-watch series today ("disk:<path>:used" / "disk:<path>:total"),
+# agent self-metrics later, zero migrations per new series. Keys ending in
+# ":total" are y-axis caps (latest value wins), everything else is a series.
+EXTRAS_MAX_KEYS = 32
+EXTRAS_KEY_MAX_LEN = 128
+
+
+def _clean_extras(value: Any) -> Optional[Dict[str, float]]:
+    """Whitelist an extras dict: str keys, finite numbers, capped count/length."""
+    if not isinstance(value, dict):
+        return None
+    clean: Dict[str, float] = {}
+    for k, v in value.items():
+        if len(clean) >= EXTRAS_MAX_KEYS:
+            break
+        if not isinstance(k, str) or not k or len(k) > EXTRAS_KEY_MAX_LEN:
+            continue
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+            continue
+        clean[k] = float(v)
+    return clean or None
+
 
 def normalize_metric_samples(
     samples: Any,
@@ -193,6 +218,9 @@ def normalize_metric_samples(
                 row[field] = None
                 continue
             row[field] = v
+            has_value = True
+        row["extras"] = _clean_extras(sample.get("extras"))
+        if row["extras"]:
             has_value = True
         if not has_value:
             dropped += 1
@@ -250,6 +278,93 @@ def sanitize_bench_settings(req: Any) -> Dict[str, Any]:
 # these central settings > agent defaults. The server whitelists/clamps here so
 # a bad payload can never instruct an agent into nonsense.
 
+# ── Storage watch (per-path disk watching, settings-channel config) ──────────
+
+WATCH_MAX_PATHS = 16
+WATCH_INTERVAL_MIN_S = 300      # deliberately slow floor — a du walk is real I/O
+WATCH_INTERVAL_MAX_S = 86400
+WATCH_INTERVAL_DEFAULT_S = 900
+WATCH_PATH_MAX_LEN = 256
+
+# "90%" or "200G"/"1.5TiB" (K/M/G/T are 1024-based). Strict match — anything
+# else is rejected, so a stray colon in a compact env string can never turn a
+# path fragment into a threshold.
+_SIZE_OR_PCT_RE = re.compile(r"^(\d+(?:\.\d+)?)\s*(%|[KMGT]i?B?|B)$", re.IGNORECASE)
+_SIZE_MULT = {"K": 1024, "M": 1024**2, "G": 1024**3, "T": 1024**4}
+
+
+def parse_size_or_pct(value: Any) -> Optional[Tuple[str, float]]:
+    """Parse a warn threshold string -> ("pct", 0..100) | ("bytes", n) | None."""
+    if not isinstance(value, str):
+        return None
+    m = _SIZE_OR_PCT_RE.match(value.strip())
+    if not m:
+        return None
+    num = float(m.group(1))
+    unit = m.group(2).upper()
+    if unit == "%":
+        return ("pct", num) if 0 < num <= 100 else None
+    if unit == "B":
+        return ("bytes", num)
+    return ("bytes", num * _SIZE_MULT[unit[0]])
+
+
+def sanitize_watch_paths(value: Any) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """Validate a watch_paths list of objects. Returns (clean, ignored_notes).
+
+    Each entry: {"path": "/abs" (required), "warn": "90%"|"200G" (optional —
+    absent = graph-only, never warns), "interval_s": 300..86400 (optional),
+    "du": bool (optional — false = mount-level statvfs only, no walk)}.
+    Unknown/invalid sub-fields are dropped and reported; duplicate paths keep
+    the first entry.
+    """
+    if not isinstance(value, list):
+        return [], ["watch_paths (not a list)"]
+    clean: List[Dict[str, Any]] = []
+    ignored: List[str] = []
+    seen_paths = set()
+    for i, entry in enumerate(value):
+        if len(clean) >= WATCH_MAX_PATHS:
+            ignored.append(f"watch_paths[{i}] (over {WATCH_MAX_PATHS}-path cap)")
+            continue
+        if not isinstance(entry, dict):
+            ignored.append(f"watch_paths[{i}] (not an object)")
+            continue
+        path = entry.get("path")
+        if not isinstance(path, str) or not path.startswith("/") or len(path) > WATCH_PATH_MAX_LEN:
+            ignored.append(f"watch_paths[{i}].path")
+            continue
+        path = path.rstrip("/") or "/"
+        if path in seen_paths:
+            ignored.append(f"watch_paths[{i}] (duplicate path)")
+            continue
+        seen_paths.add(path)
+        row: Dict[str, Any] = {"path": path}
+        for key, raw in entry.items():
+            if key == "path":
+                continue
+            elif key == "warn":
+                if parse_size_or_pct(raw):
+                    row["warn"] = raw.strip()
+                else:
+                    ignored.append(f"watch_paths[{i}].warn")
+            elif key == "interval_s":
+                if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+                    row["interval_s"] = max(WATCH_INTERVAL_MIN_S,
+                                            min(int(raw), WATCH_INTERVAL_MAX_S))
+                else:
+                    ignored.append(f"watch_paths[{i}].interval_s")
+            elif key == "du":
+                if isinstance(raw, bool):
+                    row["du"] = raw
+                else:
+                    ignored.append(f"watch_paths[{i}].du")
+            else:
+                ignored.append(f"watch_paths[{i}].{key}")
+        clean.append(row)
+    return clean, ignored
+
+
 AGENT_SETTING_DEFS = {
     # key: (kind, validator/clamp)
     "share_hostname": "bool",
@@ -266,6 +381,8 @@ AGENT_SETTING_DEFS = {
     "container_label_optin": "bool",
     # preferred wire encoding; agent still honors central's advertised set
     "log_encoding": ("enum", ["auto", "identity", "gzip", "zstd"]),
+    # storage watch: structured per-path entries (see sanitize_watch_paths)
+    "watch_paths": "watches",
 }
 
 
@@ -302,17 +419,28 @@ def sanitize_agent_settings(req: Any) -> Tuple[Dict[str, Any], List[str]]:
                 clean[key] = value
             else:
                 ignored.append(key)
+        elif spec == "watches":
+            watches, watch_ignored = sanitize_watch_paths(value)
+            clean[key] = watches
+            ignored.extend(watch_ignored)
     return clean, ignored
 
 
 def diff_settings(old: Dict[str, Any], new: Dict[str, Any]) -> str:
-    """Human ledger line for a settings change: 'key: old -> new, ...'."""
+    """Human ledger line for a settings change: 'key: old -> new, ...'.
+    Structured values (watch_paths) are compacted so one change can't turn a
+    ledger line into a JSON dump."""
+    def show(v):
+        if v is None:
+            return "(default)"
+        s = json.dumps(v, sort_keys=True) if isinstance(v, (dict, list)) else str(v)
+        return s if len(s) <= 120 else s[:117] + "..."
     keys = sorted(set(old or {}) | set(new or {}))
     parts = []
     for k in keys:
         o, n = (old or {}).get(k), (new or {}).get(k)
         if o != n:
-            parts.append(f"{k}: {o if o is not None else '(default)'} -> {n if n is not None else '(default)'}")
+            parts.append(f"{k}: {show(o)} -> {show(n)}")
     return ", ".join(parts) or "no changes"
 
 
@@ -349,6 +477,11 @@ def downsample_samples(
     Buckets with NO samples are OMITTED — never interpolated — so consumers can
     render off periods honestly (the UI draws a gap/band instead of a line
     sailing across downtime). Bucket timestamp = bucket start.
+
+    Rows may carry an `extras` dict of open-ended numeric gauges (storage watch,
+    agent self-metrics); those keys become series alongside the fixed fields —
+    except keys ending in ":total", which are static y-axis caps, not series
+    (read them with latest_extras_caps).
     """
     n_buckets = max(1, window_s // step_s)
     sums: Dict[str, Dict[int, List[float]]] = {f: {} for f in fields}
@@ -360,18 +493,37 @@ def downsample_samples(
         bucket = int((epoch - start_epoch) // step_s)
         if bucket < 0 or bucket >= n_buckets:
             continue
-        for f in fields:
-            v = row.get(f)
+        extras = row.get("extras")
+        extra_items = (
+            [(k, v) for k, v in extras.items() if not k.endswith(":total")]
+            if isinstance(extras, dict) else [])
+        for f, v in [(f, row.get(f)) for f in fields] + extra_items:
             if isinstance(v, bool) or not isinstance(v, (int, float)):
                 continue
-            acc = sums[f].setdefault(bucket, [0.0, 0.0])
+            acc = sums.setdefault(f, {}).setdefault(bucket, [0.0, 0.0])
             acc[0] += float(v)
             acc[1] += 1.0
     series: Dict[str, List[List[float]]] = {}
-    for f in fields:
+    for f in sums:
         pts = []
         for bucket in sorted(sums[f]):
             total, count = sums[f][bucket]
             pts.append([start_epoch + bucket * step_s, round(total / count, 4)])
         series[f] = pts
     return series
+
+
+def latest_extras_caps(rows: List[Dict[str, Any]]) -> Dict[str, float]:
+    """Latest-known value for every extras key ending in ":total" — the static
+    y-axis caps for extras series (e.g. disk:/scratch:total = filesystem size),
+    same role cpu_count/mem_total_bytes play for the fixed gauges."""
+    caps: Dict[str, float] = {}
+    for row in reversed(rows):
+        extras = row.get("extras")
+        if not isinstance(extras, dict):
+            continue
+        for k, v in extras.items():
+            if k.endswith(":total") and k not in caps and isinstance(v, (int, float)) \
+                    and not isinstance(v, bool):
+                caps[k] = float(v)
+    return caps
