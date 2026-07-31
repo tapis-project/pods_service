@@ -638,7 +638,9 @@ class Pod(TapisPodBaseFull, table=True, validate=True):
 
     @validator('action_logs')
     def check_action_logs(cls, v):
-        return [f"{datetime.utcnow().strftime('%y/%m/%d %H:%M')}: Pod object created by '{g.username}'"]
+        # Seed only when empty — validate_assignment=True re-runs this on every
+        # assignment, so an unconditional return clobbers appended entries.
+        return v or [f"{datetime.utcnow().strftime('%y/%m/%d %H:%M')}: Pod object created by '{g.username}'"]
 
     @validator('permissions')
     def check_permissions(cls, v):
