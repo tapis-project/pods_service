@@ -68,9 +68,11 @@ class NodeMetric(TapisModel, table=True):
 # ---------------------------------------------------------------------------
 
 class NodeLogIngestResult(TapisApiModel):
-    accepted: int = Field(..., description="Log lines stored.")
+    accepted: int = Field(..., description="Log lines stored (or timed, when dry_run).")
     dropped: int = Field(0, description="Entries discarded (malformed, empty, or over the batch cap).")
     truncated: int = Field(0, description="Lines cut to the per-line character cap.")
+    dry_run: bool = Field(False, description="True when the batch was decoded+timed but not stored (bench mode).")
+    timings: Dict[str, Any] = Field(default_factory=dict, description="Server-side split for benchmarks: decode_ms, insert_ms (null when dry_run), wire_bytes, decoded_bytes.")
     retention: Dict[str, Any] = Field(default_factory=dict, description="Server retention caps (rows/age per node) so agents can size their buffers.")
 
 

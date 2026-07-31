@@ -201,6 +201,49 @@ def normalize_metric_samples(
     return rows, dropped
 
 
+# ── Bench settings sanitization (command dispatcher, type=bench) ─────────────
+# The server clamps everything at trigger time so the agent only ever receives
+# valid settings — an edge box must never trust a raw user payload to size its
+# own workload.
+
+BENCH_ENCODINGS = ["identity", "gzip:1", "gzip:6", "gzip:9", "zstd:3", "zstd:9"]
+BENCH_CORPORA = ["real", "json", "text", "entropy"]
+BENCH_DEFAULT_ENCODINGS = ["identity", "gzip:6", "zstd:3"]
+BENCH_DEFAULT_CORPORA = ["real", "json", "text"]
+BENCH_DEFAULT_LINE_BYTES = [80, 512, 4096]
+BENCH_DEFAULT_LINE_COUNTS = [100, 1000]
+
+
+def sanitize_bench_settings(req: Any) -> Dict[str, Any]:
+    """Clamp a NodeBenchRequest-shaped dict into safe stored params.
+    Unknown values are dropped; empty selections fall back to defaults."""
+    req = req if isinstance(req, dict) else {}
+
+    def pick(values, allowed, default):
+        if not isinstance(values, list):
+            return list(default)
+        out = [v for v in values if v in allowed]
+        return out or list(default)
+
+    def clamp_ints(values, lo, hi, default, max_len=4):
+        if not isinstance(values, list):
+            return list(default)
+        out = sorted({int(v) for v in values if isinstance(v, (int, float))
+                      and not isinstance(v, bool) and lo <= int(v) <= hi})
+        return out[:max_len] or list(default)
+
+    probe = req.get("probe_count")
+    probe = int(probe) if isinstance(probe, (int, float)) and not isinstance(probe, bool) else 10
+    return {
+        "encodings": pick(req.get("encodings"), BENCH_ENCODINGS, BENCH_DEFAULT_ENCODINGS),
+        "corpora": pick(req.get("corpora"), BENCH_CORPORA, BENCH_DEFAULT_CORPORA),
+        "line_bytes": clamp_ints(req.get("line_bytes"), 16, 8192, BENCH_DEFAULT_LINE_BYTES),
+        "line_counts": clamp_ints(req.get("line_counts"), 10, 2000, BENCH_DEFAULT_LINE_COUNTS),
+        "probe_count": max(3, min(probe, 50)),
+        "dry_run": req.get("dry_run") is not False,   # default TRUE — storing is the deliberate choice
+    }
+
+
 # ── Series downsampling (metrics read path) ──────────────────────────────────
 
 def clamp_window_step(
