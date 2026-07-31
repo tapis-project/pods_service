@@ -1605,6 +1605,104 @@ def apply_update(raw, expected_sha, state):
     return path, new_version
 
 
+# Decommission — central asked this agent to remove itself (the polite ordering:
+# agent removes what it can FIRST, then central deletes the row on the agent's
+# confirmation). The agent only ever touches its own property: its state dir
+# and, when the docker socket allows, its own container — nothing else.
+
+def decommission_marker_path():
+    return os.path.join(state_dir(), "DECOMMISSIONED")
+
+
+def check_decommissioned():
+    """True when this install was decommissioned — restarts must stay inert
+    (the token is gone; a restart policy may revive the container, but it must
+    never look like a live agent again)."""
+    return os.path.exists(decommission_marker_path())
+
+
+def decommission_plan():
+    """(outcome, description) — what self-removal can honestly achieve HERE.
+    Reported to central BEFORE executing, so the ledger records the plan even
+    though the agent cannot report again afterwards (its token dies with the
+    node row)."""
+    if not os.path.exists("/.dockerenv"):
+        return ("bare-exit",
+                "bare host: wiping state (token included) and exiting — removal complete")
+    if os.path.exists(DOCKER_SOCK):
+        return ("container-self-remove",
+                "containerized with the docker socket: wiping state, then force-removing "
+                "this container via the socket — removal complete")
+    return ("container-inert",
+            "containerized WITHOUT the docker socket: wiping state (token included) and "
+            "going inert — one 'docker rm -f' is still needed on the box; a restart "
+            "policy may revive the container but it stays tokenless and idle")
+
+
+def wipe_local_state(write_marker=True):
+    """Remove everything this agent stored (token, cursors, installed update
+    copies); leave only the DECOMMISSIONED marker so restarts stay inert.
+    Returns the list of removed filenames."""
+    d = state_dir()
+    removed = []
+    for name in ("state.json", "state.json.tmp", "pods_agent_updated.py",
+                 "pods_agent_updated.py.prev", "pods_agent_updated.py.tmp"):
+        p = os.path.join(d, name)
+        try:
+            if os.path.exists(p):
+                os.remove(p)
+                removed.append(name)
+        except OSError as e:
+            log(f"decommission: could not remove {p}: {e}")
+    if write_marker:
+        try:
+            os.makedirs(d, exist_ok=True)
+            with open(decommission_marker_path(), "w") as f:
+                f.write(f"decommissioned at "
+                        f"{datetime.now(timezone.utc).isoformat(timespec='seconds')} "
+                        f"by agent {AGENT_VERSION}\n"
+                        f"This agent removed its own state on central's request. Delete "
+                        f"this file to allow a fresh join from this install.\n")
+        except OSError as e:
+            log(f"decommission: could not write marker: {e}")
+    return removed
+
+
+def do_decommission_command(state, headers, cid):
+    """Confirm the plan FIRST (this is the agent's last authed request — central
+    deletes the node row on this ack), then execute it. Never returns."""
+    outcome, description = decommission_plan()
+    log(f"decommission {cid}: {description}")
+    try:
+        post_command_result(state, headers, cid, "done",
+                            {"outcome": outcome, "detail": description})
+    except Exception as e:
+        log(f"could not post decommission confirmation ({e}) — removing anyway; "
+            f"central's timeout or a force delete clears the row")
+    removed = wipe_local_state()
+    log(f"decommission: local state wiped ({', '.join(removed) or 'nothing to remove'}) — "
+        f"this agent can never check in again")
+    if outcome == "container-self-remove":
+        conn = None
+        try:
+            conn = _UnixHTTPConnection(DOCKER_SOCK)
+            conn.request("DELETE", f"/containers/{socket.gethostname()}?force=true")
+            resp = conn.getresponse()
+            log(f"decommission: container self-removal requested (HTTP {resp.status}) — goodbye")
+            # force-remove SIGKILLs this process; if we are somehow still here
+            # after a grace period, fall through to inert exit.
+            time.sleep(30)
+            log("decommission: still alive after self-removal request — exiting inert; "
+                "remove the container with docker rm -f")
+        except Exception as e:
+            log(f"decommission: container self-removal failed ({e}) — exiting inert; "
+                f"remove the container with docker rm -f")
+        finally:
+            if conn:
+                conn.close()
+    raise SystemExit(0)
+
+
 def deletion_park_message(node_id):
     """Logged (loudly) when central confirms this node's row is gone. The agent
     parks — hourly re-check only — and tells the human exactly how to remove it.
@@ -1850,6 +1948,8 @@ def run():
                             post_command_result(state, headers, cid, "error",
                                                 {"error": f"{type(e).__name__}: {e}"[:300]})
                             log(f"bench {cid} FAILED: {e}")
+                    elif ctype == "decommission":
+                        do_decommission_command(state, headers, cid)  # never returns
                     elif ctype == "restart":
                         log(f"restart command {cid} — acking, then re-exec'ing in place")
                         do_restart_command(state, headers, cid)  # never returns
@@ -1937,6 +2037,21 @@ def main():
     if args.command == "join":
         return 0 if join(args.url, args.node, args.token, tenant=args.tenant) else 1
     if args.command == "run":
+        if check_decommissioned():
+            # A restart policy revived a decommissioned container. Stay inert:
+            # no token, no network, one log line an hour so docker logs shows
+            # the removal how-to without churn.
+            node_hint = os.environ.get("PODS_NODE_ID", "<node-id>")
+            while not _stop["flag"]:
+                log(f"this agent was DECOMMISSIONED (marker: {decommission_marker_path()}) — "
+                    f"it holds no token and will not run. Remove it: "
+                    f"docker rm -f pods-agent-{node_hint} (and the state volume: "
+                    f"docker volume rm pods-agent-state-{node_hint}). To reuse this "
+                    f"install instead, delete the marker file and run a fresh join.")
+                deadline = time.monotonic() + 3600
+                while not _stop["flag"] and time.monotonic() < deadline:
+                    time.sleep(1)
+            return 0
         # Self-update handoff: a container restart runs the image's baked-in
         # copy — defer to a newer verified self-installed copy before looping.
         maybe_exec_updated_copy()
