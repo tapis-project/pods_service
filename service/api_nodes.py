@@ -6,10 +6,10 @@ import secrets
 import time
 
 import json
-from typing import Optional
+from typing import Any, Dict, Optional
 
 import requests
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Body, Query, Request
 
 from errors import ResourceError
 from models_node import (
@@ -25,6 +25,7 @@ from models_node import (
     NodeCheckinResponse,
     NodeCommandsResponse,
     NodeDeleteResponse,
+    NodeLedgerResponse,
 )
 from models_routes import (
     Route,
@@ -43,6 +44,8 @@ from models_node_telemetry import (
 )
 from node_telemetry_utils import (
     decode_payload,
+    sanitize_agent_settings,
+    diff_settings,
     parse_json_payload,
     parse_ts,
     normalize_log_entries,
@@ -446,6 +449,12 @@ async def checkin_node(node_id: str, checkin: NodeCheckinRequest, request: Reque
     if checkin.capabilities:
         node.capabilities = checkin.capabilities
     if checkin.status:
+        # Adoption ledger: when the agent's reported applied_settings change,
+        # record it — the audit trail closes the loop on settings pushes.
+        new_applied = checkin.status.get("applied_settings")
+        old_applied = (node.status or {}).get("applied_settings")
+        if new_applied is not None and new_applied != old_applied:
+            node.log_action(f"agent adopted settings: {json.dumps(new_applied, sort_keys=True)[:400]}")
         node.status = checkin.status
 
     resync = False
@@ -485,6 +494,7 @@ async def checkin_node(node_id: str, checkin: NodeCheckinRequest, request: Reque
             "resync": resync,
             "poll_after_seconds": CHECKIN_INTERVAL_SECONDS,
             "desired": {},
+            "settings": node.agent_settings or {},
         },
         msg="Checkin recorded.")
 
@@ -610,6 +620,8 @@ async def trigger_node_bench(node_id: str, bench: NodeBenchRequest):
         site_id=node.site_id,
     )
     cmd.db_create()
+    node.log_action(f"bench queued by '{getattr(g, 'username', '?')}' ({cmd.command_id[:14]}…, dry_run={cmd.params.get('dry_run', True)})")
+    node.db_update(user_update=False)
     return ok(result=cmd.display(),
               msg="Benchmark queued — the agent picks it up on its next command poll (within one checkin interval).")
 
@@ -631,6 +643,49 @@ async def list_node_bench_runs(node_id: str):
         .limit(20))
     runs = store.run("execute", stmt, scalars=True, all=True)
     return ok(result=[c.display() for c in runs], msg=f"Retrieved {len(runs)} bench run(s).")
+
+
+# Settings channel + audit ledger ---------------------------------------------
+
+@router.put(
+    "/pods/nodes/{node_id}/settings",
+    tags=["Nodes"],
+    summary="update_node_settings",
+    operation_id="update_node_settings",
+    response_model=NodeResponse)
+async def update_node_settings(node_id: str, settings: Dict[str, Any] = Body(...)):
+    """Replace this node's central agent settings (node ADMIN permission).
+
+    The dict is a SPARSE overlay — absent keys mean agent defaults. Unknown or
+    invalid keys are ignored (reported in the response message). The agent
+    adopts changes on its next heartbeat; env vars on the box always win over
+    these, and the agent reports env-pinned keys back in its status. Every
+    change (and every agent adoption) lands in the node's action ledger.
+    """
+    node = _get_node_or_404(node_id)
+    clean, ignored = sanitize_agent_settings(settings)
+    changes = diff_settings(node.agent_settings or {}, clean)
+    node.agent_settings = clean
+    node.log_action(f"agent settings changed by '{getattr(g, 'username', '?')}': {changes}")
+    node.db_update(user_update=False)
+    msg = "Agent settings updated — the agent adopts them on its next heartbeat (env vars on the box still win)."
+    if ignored:
+        msg += f" Ignored unknown/invalid keys: {ignored}."
+    return ok(result=node.display(), msg=msg)
+
+
+@router.get(
+    "/pods/nodes/{node_id}/ledger",
+    tags=["Nodes"],
+    summary="get_node_ledger",
+    operation_id="get_node_ledger",
+    response_model=NodeLedgerResponse)
+async def get_node_ledger(node_id: str):
+    """The node's action ledger, newest first (node READ permission) — creation,
+    re-keys, settings changes + agent adoptions, bench triggers."""
+    node = _get_node_or_404(node_id)
+    return ok(result=list(reversed(node.action_logs or [])),
+              msg=f"{len(node.action_logs or [])} ledger entr(ies).")
 
 
 # Telemetry — Phase 3: agent-shipped logs + metrics history -------------------

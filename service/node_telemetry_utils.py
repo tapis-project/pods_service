@@ -244,6 +244,78 @@ def sanitize_bench_settings(req: Any) -> Dict[str, Any]:
     }
 
 
+# ── Agent settings sanitization (settings channel) ───────────────────────────
+# Central-stored per-node agent settings, carried to the agent in every checkin
+# response (config-as-data). Precedence at the edge: env (the box pins it) >
+# these central settings > agent defaults. The server whitelists/clamps here so
+# a bad payload can never instruct an agent into nonsense.
+
+AGENT_SETTING_DEFS = {
+    # key: (kind, validator/clamp)
+    "share_hostname": "bool",
+    "metrics": "bool",
+    "check_docker": "bool",
+    "check_k8s": "bool",
+    "ship_logs": "bool",
+    "metrics_interval": ("int", 15, 3600),
+    "logs_tail": ("int", 10, 1000),
+    # container filters (log shipping): fnmatch globs vs container name
+    "containers": "globs",          # allowlist — empty/absent = all running
+    "containers_exclude": "globs",  # denylist, applied after allowlist
+    # only ship containers labeled pods.agent.logs=true (workload opt-in)
+    "container_label_optin": "bool",
+    # preferred wire encoding; agent still honors central's advertised set
+    "log_encoding": ("enum", ["auto", "identity", "gzip", "zstd"]),
+}
+
+
+def sanitize_agent_settings(req: Any) -> Tuple[Dict[str, Any], List[str]]:
+    """Whitelist/clamp a raw settings dict. Returns (clean, ignored_keys).
+    Only provided keys are kept — absent keys mean 'agent default', so the
+    stored dict stays a sparse overlay, same philosophy as pod layering."""
+    req = req if isinstance(req, dict) else {}
+    clean: Dict[str, Any] = {}
+    ignored: List[str] = []
+    for key, value in req.items():
+        spec = AGENT_SETTING_DEFS.get(key)
+        if spec is None:
+            ignored.append(key)
+            continue
+        if spec == "bool":
+            if isinstance(value, bool):
+                clean[key] = value
+            else:
+                ignored.append(key)
+        elif spec == "globs":
+            if isinstance(value, list):
+                globs = [str(v)[:128] for v in value if isinstance(v, str) and v.strip()]
+                clean[key] = globs[:32]
+            else:
+                ignored.append(key)
+        elif isinstance(spec, tuple) and spec[0] == "int":
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                clean[key] = max(spec[1], min(int(value), spec[2]))
+            else:
+                ignored.append(key)
+        elif isinstance(spec, tuple) and spec[0] == "enum":
+            if value in spec[1]:
+                clean[key] = value
+            else:
+                ignored.append(key)
+    return clean, ignored
+
+
+def diff_settings(old: Dict[str, Any], new: Dict[str, Any]) -> str:
+    """Human ledger line for a settings change: 'key: old -> new, ...'."""
+    keys = sorted(set(old or {}) | set(new or {}))
+    parts = []
+    for k in keys:
+        o, n = (old or {}).get(k), (new or {}).get(k)
+        if o != n:
+            parts.append(f"{k}: {o if o is not None else '(default)'} -> {n if n is not None else '(default)'}")
+    return ", ".join(parts) or "no changes"
+
+
 # ── Series downsampling (metrics read path) ──────────────────────────────────
 
 def clamp_window_step(

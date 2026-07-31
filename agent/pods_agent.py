@@ -58,6 +58,7 @@ backs off (capped) and keeps running; it never exits on network errors. A 403 me
 agent token was revoked (admin ran /regenerate) — the agent parks and waits for a re-join.
 """
 import argparse
+import fnmatch
 import gzip
 import hashlib
 import http.client
@@ -91,6 +92,75 @@ MILESTONES = {"proc_start": round(STARTED_AT.timestamp(), 3)}
 def milestone(name):
     """Record a startup milestone once (first occurrence wins)."""
     MILESTONES.setdefault(name, round(time.time(), 3))
+
+
+# Settings — env (the box pins it) > central (adopted each heartbeat) > default.
+# Central settings arrive in checkin responses (config-as-data) and persist in
+# state so restarts keep the last-adopted values while offline.
+CENTRAL_SETTINGS = {}
+
+_SETTING_ENVS = {
+    "share_hostname": "PODS_AGENT_SHARE_HOSTNAME",
+    "metrics": "PODS_AGENT_METRICS",
+    "check_docker": "PODS_AGENT_CHECK_DOCKER",
+    "check_k8s": "PODS_AGENT_CHECK_K8S",
+    "ship_logs": "PODS_AGENT_SHIP_LOGS",
+    "metrics_interval": "PODS_AGENT_METRICS_INTERVAL",
+    "logs_tail": "PODS_AGENT_LOGS_TAIL",
+    "containers": "PODS_AGENT_CONTAINERS",
+    "containers_exclude": "PODS_AGENT_CONTAINERS_EXCLUDE",
+    "container_label_optin": "PODS_AGENT_CONTAINER_LABEL_OPTIN",
+    "log_encoding": "PODS_AGENT_LOG_ENCODING",
+}
+_SETTING_DEFAULTS = {
+    "share_hostname": True, "metrics": True, "check_docker": True, "check_k8s": True,
+    "ship_logs": True, "metrics_interval": 60, "logs_tail": 200,
+    "containers": [], "containers_exclude": [], "container_label_optin": False,
+    "log_encoding": "auto",
+}
+
+
+def setting(key):
+    """Effective value for one setting: env > central > default."""
+    env = os.environ.get(_SETTING_ENVS[key])
+    default = _SETTING_DEFAULTS[key]
+    if env not in (None, ""):
+        if isinstance(default, bool):
+            if key == "container_label_optin":
+                return env.lower() == "true"
+            return env.lower() != "false"
+        if isinstance(default, int):
+            try:
+                return int(env)
+            except ValueError:
+                return default
+        if isinstance(default, list):
+            return [part.strip() for part in env.split(",") if part.strip()]
+        return env
+    if key in CENTRAL_SETTINGS:
+        return CENTRAL_SETTINGS[key]
+    return default
+
+
+def env_pinned_settings():
+    return sorted(k for k, e in _SETTING_ENVS.items() if os.environ.get(e) not in (None, ""))
+
+
+def applied_settings():
+    return {k: setting(k) for k in _SETTING_ENVS}
+
+
+def container_selected(c):
+    """Log-shipping container filter: allow globs, deny globs, label opt-in."""
+    name = (c.get("names") or [c.get("id") or ""])[0]
+    allow = setting("containers")
+    if allow and not any(fnmatch.fnmatch(name, pat) for pat in allow):
+        return False
+    if any(fnmatch.fnmatch(name, pat) for pat in setting("containers_exclude")):
+        return False
+    if setting("container_label_optin") and (c.get("labels") or {}).get("pods.agent.logs") != "true":
+        return False
+    return True
 
 
 # The agent's own lines double as a shippable log source ("agent" in central's
@@ -349,8 +419,8 @@ def tailscale_state():
 # Detection / sampling -----------------------------------------------------------
 
 def _probe_enabled(name):
-    return os.environ.get(f"PODS_AGENT_CHECK_{name}", "true").lower() != "false"
-
+    """docker/k8s probe gates — env > central settings > default-on."""
+    return setting("check_docker" if name == "docker" else "check_k8s")
 
 def log_probe_policy():
     parts = []
@@ -393,10 +463,10 @@ def _meminfo():
 
 
 def share_hostname():
-    """PODS_AGENT_SHARE_HOSTNAME=false keeps the machine's hostname out of
-    everything the agent ships (status, bench reports). Identity then rests on
-    the node_id alone — which the operator chose, so it is always shareable."""
-    return os.environ.get("PODS_AGENT_SHARE_HOSTNAME", "true").lower() != "false"
+    """False keeps the machine's hostname out of everything the agent ships
+    (status, bench reports); identity then rests on the operator-chosen
+    node_id alone. env > central setting > default-true."""
+    return setting("share_hostname")
 
 
 def sample_status(caps, inv=None):
@@ -441,6 +511,8 @@ def sample_status(caps, inv=None):
             phases[p.get("phase") or "Unknown"] = phases.get(p.get("phase") or "Unknown", 0) + 1
         status["k8s_pod_phases"] = phases
     status["startup_milestones"] = dict(MILESTONES)
+    status["applied_settings"] = applied_settings()
+    status["env_pinned"] = env_pinned_settings()
     return status
 
 
@@ -456,6 +528,7 @@ def collect_inventory(caps, state_ns=None):
                 "state": c.get("State"),
                 "status": c.get("Status"),
                 "ports": sorted({p.get("PrivatePort") for p in c.get("Ports", []) if p.get("PrivatePort")}),
+                "labels": {k: v for k, v in sorted((c.get("Labels") or {}).items()) if k.startswith("pods.agent.")},
             }
             for c in containers
         ]
@@ -611,7 +684,7 @@ def collect_container_logs(inv, cursors, tail, per_container_cap=500, total_cap=
         room = min(per_container_cap, total_cap - len(entries))
         if room <= 0:
             break
-        if c.get("state") != "running":
+        if c.get("state") != "running" or not container_selected(c):
             continue
         cid = c.get("id")
         name = (c.get("names") or [cid])[0]
@@ -638,9 +711,12 @@ def ship_log_batch(state, headers, entries):
     advertised it. Raises on failure — the caller decides what to retry."""
     url = state.get("log_ingest") or f"{state['api_base']}/nodes/{state['node_id']}/logs"
     raw = json.dumps({"entries": entries}).encode()
+    pref = setting("log_encoding")
     encoding = "gzip"
     body = gzip.compress(raw)
-    if "zstd" in (state.get("log_encodings") or ""):
+    if pref == "identity":
+        encoding, body = "identity", raw
+    elif pref in ("auto", "zstd") and "zstd" in (state.get("log_encodings") or ""):
         try:
             from compression import zstd as _zstd   # stdlib, Python 3.14+
             body = _zstd.compress(raw)
@@ -1158,12 +1234,9 @@ def run():
 
     # Telemetry (Phase 3): metrics buffer across offline stretches; log shipping
     # driven by per-container cursors persisted in state.
-    metrics_enabled = os.environ.get("PODS_AGENT_METRICS", "true").lower() != "false"
-    metrics_interval = int(os.environ.get("PODS_AGENT_METRICS_INTERVAL", "60"))
+    CENTRAL_SETTINGS.update(state.get("central_settings") or {})
     metrics_buf = []
     last_sample_mono = 0.0
-    ship_logs_enabled = os.environ.get("PODS_AGENT_SHIP_LOGS", "true").lower() != "false"
-    logs_tail = int(os.environ.get("PODS_AGENT_LOGS_TAIL", "200"))
     logs_max_batch = 2000  # lowered automatically if central advertises a smaller cap
 
     log_probe_policy()
@@ -1178,7 +1251,7 @@ def run():
         # Sample on cadence (one per loop pass at most — during offline backoff the
         # cadence stretches with the loop, and the resulting gaps are honest data:
         # central's charts render them as off periods rather than interpolating).
-        if metrics_enabled and time.monotonic() - last_sample_mono >= metrics_interval * 0.9:
+        if setting("metrics") and time.monotonic() - last_sample_mono >= setting("metrics_interval") * 0.9:
             metrics_buf.append(metrics_sample(caps, inv))
             del metrics_buf[:-METRICS_BUF_MAX]
             last_sample_mono = time.monotonic()
@@ -1220,8 +1293,18 @@ def run():
                     state[key] = endpoints[key]
                     save_state(state)
 
-            if ship_logs_enabled:
-                logs_max_batch = ship_pending_logs(state, headers, inv, logs_tail, logs_max_batch)
+            # Settings channel: adopt central's per-node agent settings (env pins win
+            # inside setting(); the settings themselves are whitelisted server-side).
+            new_settings = result.get("settings")
+            if new_settings is not None and new_settings != CENTRAL_SETTINGS:
+                log(f"central settings adopted: {json.dumps(new_settings, sort_keys=True)}")
+                CENTRAL_SETTINGS.clear()
+                CENTRAL_SETTINGS.update(new_settings)
+                state["central_settings"] = dict(new_settings)
+                save_state(state)
+
+            if setting("ship_logs"):
+                logs_max_batch = ship_pending_logs(state, headers, inv, setting("logs_tail"), logs_max_batch)
 
             try:
                 cmds = http_json("GET", f"{state['api_base']}/nodes/{node_id}/commands", headers=headers)
