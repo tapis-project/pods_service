@@ -81,6 +81,8 @@ spec:
 #DEV          mountPath: /home/tapis/alembic
 #DEV        - name: dev-docs
 #DEV          mountPath: /home/tapis/docs
+#DEV        - name: dev-agent
+#DEV          mountPath: /home/tapis/agent
 
       volumes:
       - name: MAKEFILE_SERVICE_NAME-config
@@ -108,4 +110,8 @@ spec:
 #DEV      - name: dev-docs
 #DEV        hostPath:
 #DEV          path: /pods_service/docs #NOTE FOR MINIKUBE: Minikube is a vm, you have to minikube mount for hostpath to work
+#DEV          type: Directory
+#DEV      - name: dev-agent
+#DEV        hostPath:
+#DEV          path: /pods_service/agent #NOTE FOR MINIKUBE: Minikube is a vm, you have to minikube mount for hostpath to work
 #DEV          type: Directory

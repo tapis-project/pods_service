@@ -54,6 +54,7 @@ NO_TOKEN_ROUTES = [
     # POST only — GET /logs is a user read, gated by node READ permission
     (re.compile(r'^/pods/nodes/[^/]+/logs$'), {"POST"}),
     (re.compile(r'^/pods/nodes/[^/]+/commands/[^/]+/result$'), {"POST"}),
+    (re.compile(r'^/pods/nodes/[^/]+/agent-source$'), {"GET"}),
 ]
 
 # Static utility paths that carry no user/tenant context (also NOT-API in the
@@ -286,6 +287,10 @@ def check_route_permissions(request):
         # settings channel + audit ledger — settings control data collection: ADMIN
         ["/pods/nodes/{node_id}/settings", "PUT", codes.ADMIN],
         ["/pods/nodes/{node_id}/ledger", "GET", codes.READ],
+        # agent lifecycle — restart re-execs in place, update = hash-verified
+        # self-update; both process-control, so node ADMIN
+        ["/pods/nodes/{node_id}/restart", "POST", codes.ADMIN],
+        ["/pods/nodes/{node_id}/update", "POST", codes.ADMIN],
         # route forwardAuth browser flow — like pod /auth, tenant from host, no token
         ["/pods/routes/{route_id}/auth", "GET", "NEED-BASEURL"],
         ["/pods/routes/{route_id}/auth/callback", "GET", "NEED-BASEURL"],
@@ -296,6 +301,7 @@ def check_route_permissions(request):
         ["/pods/nodes/{node_id}/commands", "GET", "NEED-BASEURL"],
         ["/pods/nodes/{node_id}/commands/{command_id}/result", "POST", "NEED-BASEURL"],
         ["/pods/nodes/{node_id}/logs", "POST", "NEED-BASEURL"],
+        ["/pods/nodes/{node_id}/agent-source", "GET", "NEED-BASEURL"],
         # STACKS — MUST be registered before the /pods/{pod_id} routes below; the {pod_id}
         # regex ([^/]+) would otherwise swallow "stacks".
         ["/pods/stacks/{stack_id}/permissions", "GET", codes.USER],

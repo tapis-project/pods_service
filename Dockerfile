@@ -36,6 +36,9 @@ COPY --chown=tapis:tapis alembic /home/tapis/alembic
 COPY --chown=tapis:tapis tests /home/tapis/tests
 COPY --chown=tapis:tapis service /home/tapis/service
 COPY --chown=tapis:tapis docs /home/tapis/docs
+# Agent self-update: central serves agent/pods_agent.py (version + sha256
+# advertised in checkin endpoints) so edges update themselves — no image pull.
+COPY --chown=tapis:tapis agent /home/tapis/agent
 COPY --chown=tapis:tapis configschema.json alembic.ini /home/tapis/
 COPY --chown=tapis:tapis --chmod=777 entry.sh /home/tapis/
 # Add helpful navigation through filenames at root of container

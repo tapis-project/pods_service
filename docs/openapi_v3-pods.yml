@@ -2441,6 +2441,99 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /pods/nodes/{node_id}/agent-source:
+    get:
+      tags:
+      - Nodes
+      summary: get_node_agent_source
+      description: "The agent source central serves for self-update (agent-token authed\
+        \ \u2014\nthe same X-Pods-Node-Token channel as checkin). Raw python text;\
+        \ the\nversion and sha256 ride response headers AND the checkin endpoints\
+        \ dict, so\nthe agent verifies the bytes against a value from a separate request."
+      operationId: get_node_agent_source
+      parameters:
+      - name: node_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Node Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /pods/nodes/{node_id}/restart:
+    post:
+      tags:
+      - Nodes
+      summary: trigger_node_restart
+      description: "Queue an agent restart (node ADMIN). The agent acks the command,\
+        \ then\nre-execs itself in place \u2014 same process slot, so it works for\
+        \ bare-host AND\ncontainerized agents without any restart policy. Expect one\
+        \ missed heartbeat\nand a fresh startup-milestone waterfall; state (token,\
+        \ cursors, adopted\nsettings) persists across the restart."
+      operationId: trigger_node_restart
+      parameters:
+      - name: node_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Node Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeCommandResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /pods/nodes/{node_id}/update:
+    post:
+      tags:
+      - Nodes
+      summary: trigger_node_update
+      description: "Queue an agent self-update (node ADMIN). The agent fetches central's\n\
+        advertised source, verifies its sha256 against the checkin-advertised value,\n\
+        compile-checks it, writes it atomically to the persistent state dir (keeping\n\
+        the previous copy as a fallback), and execs onto it. Requires the node's\n\
+        effective `allow_self_update` setting to be on \u2014 checked here for a clear\n\
+        error instead of a silent agent-side refusal, and enforced again by the\n\
+        agent itself."
+      operationId: trigger_node_update
+      parameters:
+      - name: node_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Node Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeCommandResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /pods/nodes/{node_id}/settings:
     put:
       tags:

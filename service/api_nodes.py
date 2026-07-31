@@ -2,6 +2,7 @@ import datetime
 import hashlib
 import hmac
 import os
+import re
 import secrets
 import time
 
@@ -10,6 +11,7 @@ from typing import Any, Dict, Optional
 
 import requests
 from fastapi import APIRouter, Body, Query, Request
+from fastapi.responses import Response
 
 from errors import ResourceError
 from models_node import (
@@ -158,7 +160,7 @@ def _agent_endpoints(request: Request, node: Node) -> dict:
     """Config-as-data: current central endpoints, republished on every checkin so agents
     never rely on stale cached values (decision 5 in ROADMAP_EDGE_REMOTE)."""
     base = _central_base_url(request)
-    return {
+    endpoints = {
         "api_base": f"{base}/pods",
         "login_server": _login_server_for(node),
         # Phase 3 log shipping target — also usable by a Vector HTTP sink later
@@ -166,6 +168,60 @@ def _agent_endpoints(request: Request, node: Node) -> dict:
         "log_ingest": f"{base}/pods/nodes/{node.node_id}/logs",
         "log_encodings": ",".join(supported_encodings()),
     }
+    # Agent self-update: advertise the source central can serve, with the exact
+    # sha256 the agent must verify before exec'ing it. Keys are simply absent
+    # when central has no agent copy (image built without agent/, no dev mount).
+    info = _agent_source_info()
+    if info:
+        endpoints["agent_source"] = f"{base}/pods/nodes/{node.node_id}/agent-source"
+        endpoints["agent_source_sha256"] = info["sha256"]
+        endpoints["agent_source_version"] = info["version"]
+    return endpoints
+
+
+# Agent source serving (self-update) ------------------------------------------
+# Central serves agent/pods_agent.py itself: the agent is ONE stdlib-only file
+# and its state dir is persistent, so an edge can fetch + hash-verify + exec the
+# new copy — no image rebuild, no rm/rerun. mtime-keyed cache keeps dev edits
+# live; PODS_AGENT_SOURCE overrides the search path (also how in-container tests
+# point at a fixture).
+
+_AGENT_SOURCE_CACHE: Dict[str, Any] = {}
+
+
+def _agent_source_candidates():
+    return [
+        os.environ.get("PODS_AGENT_SOURCE") or "",
+        "/home/tapis/agent/pods_agent.py",
+        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                     "agent", "pods_agent.py"),
+    ]
+
+
+def _agent_source_info() -> Optional[Dict[str, Any]]:
+    """{"bytes", "sha256", "version", "path"} of the servable agent source, or
+    None when central has no copy. Re-resolved per call (env + mtime) so dev
+    edits and test fixtures are picked up without restarts."""
+    path = next((c for c in _agent_source_candidates() if c and os.path.isfile(c)), None)
+    if not path:
+        return None
+    try:
+        mtime = os.path.getmtime(path)
+        c = _AGENT_SOURCE_CACHE
+        if c.get("path") != path or c.get("mtime") != mtime:
+            with open(path, "rb") as f:
+                raw = f.read()
+            m = re.search(rb'^AGENT_VERSION\s*=\s*["\']([^"\']+)["\']', raw, re.M)
+            c.clear()
+            c.update({
+                "path": path, "mtime": mtime, "bytes": raw,
+                "sha256": hashlib.sha256(raw).hexdigest(),
+                "version": m.group(1).decode() if m else "unknown",
+            })
+        return c
+    except OSError as e:
+        logger.warning(f"agent source at {path} unreadable: {e}")
+        return None
 
 
 # Headscale provisioning ------------------------------------------------------
@@ -585,6 +641,14 @@ async def post_node_command_result(node_id: str, command_id: str, body: NodeComm
               sa_update(NodeCommand)
               .where(NodeCommand.command_id == command_id)
               .values(status=body.status, result=result, completed_ts=_utcnow()))
+    # Lifecycle commands close their loop in the ledger — the trigger entry said
+    # "watch the ledger", so the completion (or failure detail) must land there.
+    if cmd.type in ("restart", "update"):
+        detail = result.get("detail") or result.get("error") or ""
+        node.log_action(
+            f"agent {cmd.type} {'completed' if body.status == 'done' else 'FAILED'}"
+            f" ({command_id[:14]}…){': ' + str(detail)[:200] if detail else ''}")
+        node.db_update(user_update=False)
     return ok(result={"command_id": command_id, "status": body.status},
               msg="Command result recorded.")
 
@@ -643,6 +707,159 @@ async def trigger_node_bench(node_id: str, bench: NodeBenchRequest):
     node.db_update(user_update=False)
     return ok(result=cmd.display(),
               msg="Benchmark queued — the agent picks it up on its next command poll (within one checkin interval).")
+
+
+# Agent lifecycle — restart + self-update over the dispatcher -----------------
+# The primitives that dissolve the rm/rerun dance: restart re-execs the agent in
+# place (works identically bare-host and in-container — os.execv keeps PID 1
+# alive, no restart policy required), update fetches central's own advertised
+# source, sha256-verifies, compile-checks, writes atomically to the persistent
+# state dir and execs onto it. Every step is ledgered and verbose.
+
+def _expire_or_reject_active(node: Node, cmd_type: str, verb: str):
+    """One active command of a type at a time; dead runs auto-expire after 15 min
+    (same discipline as bench)."""
+    store = _telemetry_store(NodeCommand)
+    active = store.run(
+        "execute",
+        sa_select(NodeCommand).where(
+            NodeCommand.node_id == node.node_id,
+            NodeCommand.type == cmd_type,
+            NodeCommand.status.in_(["queued", "delivered"])),
+        scalars=True, all=True)
+    fresh_cutoff = _utcnow() - datetime.timedelta(minutes=15)
+    if any(c.created_ts and c.created_ts > fresh_cutoff for c in active):
+        raise ResourceError(
+            f"A {verb} is already queued or in progress on this node — wait for it "
+            f"to complete (or up to 15 minutes for a dead one to expire).", 409)
+    if active:
+        store.run("execute",
+                  sa_update(NodeCommand)
+                  .where(NodeCommand.command_id.in_([c.command_id for c in active]))
+                  .values(status="error",
+                          result={"error": "expired — never completed within 15 minutes"},
+                          completed_ts=_utcnow()))
+
+
+def _queue_lifecycle_command(node: Node, cmd_type: str, params: Dict[str, Any]) -> NodeCommand:
+    cmd = NodeCommand(
+        command_id=_mint_token("nc"),
+        node_id=node.node_id,
+        type=cmd_type,
+        params=params,
+        status="queued",
+        requested_by=getattr(g, 'username', '') or '',
+        created_ts=_utcnow(),
+        tenant_id=node.tenant_id,
+        site_id=node.site_id,
+    )
+    cmd.db_create()
+    return cmd
+
+
+@router.get(
+    "/pods/nodes/{node_id}/agent-source",
+    tags=["Nodes"],
+    summary="get_node_agent_source",
+    operation_id="get_node_agent_source")
+async def get_node_agent_source(node_id: str, request: Request):
+    """The agent source central serves for self-update (agent-token authed —
+    the same X-Pods-Node-Token channel as checkin). Raw python text; the
+    version and sha256 ride response headers AND the checkin endpoints dict, so
+    the agent verifies the bytes against a value from a separate request."""
+    node = _get_node_or_404(node_id)
+    _require_agent(request, node)
+    info = _agent_source_info()
+    if not info:
+        raise ResourceError(
+            "Central has no agent source to serve (service image built without "
+            "agent/, and no PODS_AGENT_SOURCE override) — self-update unavailable.", 503)
+    return Response(
+        content=info["bytes"],
+        media_type="text/x-python",
+        headers={
+            "X-Agent-Version": info["version"],
+            "X-Agent-Sha256": info["sha256"],
+        })
+
+
+@router.post(
+    "/pods/nodes/{node_id}/restart",
+    tags=["Nodes"],
+    summary="trigger_node_restart",
+    operation_id="trigger_node_restart",
+    response_model=NodeCommandResponse)
+async def trigger_node_restart(node_id: str):
+    """Queue an agent restart (node ADMIN). The agent acks the command, then
+    re-execs itself in place — same process slot, so it works for bare-host AND
+    containerized agents without any restart policy. Expect one missed heartbeat
+    and a fresh startup-milestone waterfall; state (token, cursors, adopted
+    settings) persists across the restart."""
+    node = _get_node_or_404(node_id)
+    _expire_or_reject_active(node, "restart", "restart")
+    _expire_or_reject_active(node, "update", "self-update")
+    cmd = _queue_lifecycle_command(node, "restart", {})
+    node.log_action(f"agent restart queued by '{getattr(g, 'username', '?')}' ({cmd.command_id[:14]}…)")
+    node.db_update(user_update=False)
+    return ok(result=cmd.display(),
+              msg="Restart queued — the agent picks it up on its next command poll "
+                  "(within one checkin interval), acks, and re-execs in place.")
+
+
+@router.post(
+    "/pods/nodes/{node_id}/update",
+    tags=["Nodes"],
+    summary="trigger_node_update",
+    operation_id="trigger_node_update",
+    response_model=NodeCommandResponse)
+async def trigger_node_update(node_id: str):
+    """Queue an agent self-update (node ADMIN). The agent fetches central's
+    advertised source, verifies its sha256 against the checkin-advertised value,
+    compile-checks it, writes it atomically to the persistent state dir (keeping
+    the previous copy as a fallback), and execs onto it. Requires the node's
+    effective `allow_self_update` setting to be on — checked here for a clear
+    error instead of a silent agent-side refusal, and enforced again by the
+    agent itself."""
+    node = _get_node_or_404(node_id)
+
+    info = _agent_source_info()
+    if not info:
+        raise ResourceError(
+            "Central has no agent source to serve (service image built without "
+            "agent/, and no PODS_AGENT_SOURCE override) — self-update unavailable.", 503)
+
+    # Effective setting precheck: what the agent REPORTS applying wins (it may be
+    # env-pinned); fall back to the stored central overlay before first report.
+    applied = ((node.status or {}).get("applied_settings") or {})
+    effective = applied.get("allow_self_update",
+                            (node.agent_settings or {}).get("allow_self_update", False))
+    if not effective:
+        raise ResourceError(
+            "Self-update is disabled on this node (allow_self_update is off). Enable it "
+            "in the node's Options (settings channel — the agent adopts it within one "
+            "heartbeat) or set PODS_AGENT_ALLOW_SELF_UPDATE=true on the box, then retry.", 403)
+
+    running = node.agent_version or "unknown"
+    if running == info["version"]:
+        # Same version is allowed (dev iterates without bumping), but say so.
+        note = f" (agent already reports {running} — same-version refresh)"
+    else:
+        note = ""
+
+    _expire_or_reject_active(node, "update", "self-update")
+    _expire_or_reject_active(node, "restart", "restart")
+    cmd = _queue_lifecycle_command(node, "update", {
+        "to_version": info["version"],
+        "sha256": info["sha256"],
+    })
+    node.log_action(
+        f"agent self-update queued by '{getattr(g, 'username', '?')}': "
+        f"{running} -> {info['version']} (sha {info['sha256'][:12]}…, {cmd.command_id[:14]}…)")
+    node.db_update(user_update=False)
+    return ok(result=cmd.display(),
+              msg=f"Self-update to {info['version']} queued{note} — the agent verifies the "
+                  f"sha256, compile-checks, keeps the previous copy as fallback, and re-execs. "
+                  f"Watch the ledger for the completion entry.")
 
 
 @router.get(

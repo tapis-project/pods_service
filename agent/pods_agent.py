@@ -77,7 +77,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 
-AGENT_VERSION = "0.3.0"
+AGENT_VERSION = "0.4.1"
 TOKEN_HEADER = "X-Pods-Node-Token"
 DOCKER_SOCK = os.environ.get("DOCKER_SOCK", "/var/run/docker.sock")
 K8S_SA_DIR = "/var/run/secrets/kubernetes.io/serviceaccount"
@@ -113,6 +113,7 @@ _SETTING_ENVS = {
     "container_label_optin": "PODS_AGENT_CONTAINER_LABEL_OPTIN",
     "log_encoding": "PODS_AGENT_LOG_ENCODING",
     "watch_paths": "PODS_AGENT_WATCH_PATHS",
+    "allow_self_update": "PODS_AGENT_ALLOW_SELF_UPDATE",
 }
 _SETTING_DEFAULTS = {
     "share_hostname": True, "metrics": True, "check_docker": True, "check_k8s": True,
@@ -120,7 +121,11 @@ _SETTING_DEFAULTS = {
     "containers": [], "containers_exclude": [], "container_label_optin": False,
     "log_encoding": "auto",
     "watch_paths": [],
+    "allow_self_update": False,
 }
+# default-False safety gates: env only enables with the exact string "true"
+# (any other value stays off), unlike default-True bools where env disables
+_OPT_IN_KEYS = {"container_label_optin", "allow_self_update"}
 
 
 def setting(key):
@@ -131,7 +136,7 @@ def setting(key):
         if key == "watch_paths":
             return parse_watch_env(env)
         if isinstance(default, bool):
-            if key == "container_label_optin":
+            if key in _OPT_IN_KEYS:
                 return env.lower() == "true"
             return env.lower() != "false"
         if isinstance(default, int):
@@ -1474,6 +1479,243 @@ def _maybe_join_tailnet(preauthkey, login_server):
         log(f"tailnet join errored: {e} — continuing; agent works over plain API too")
 
 
+# Agent lifecycle — restart + self-update ---------------------------------------
+# restart: ack, then os.execv in place — same process slot, so it works for
+# bare-host AND containerized agents with no supervisor or restart policy.
+# update: fetch central's own advertised source, verify sha256 (against the
+# value from a SEPARATE request — the checkin), compile-check, install
+# atomically into the persistent state dir (previous copy kept), exec onto it.
+# The baked-in image copy defers to a newer installed copy at startup
+# (maybe_exec_updated_copy) so updates survive container restarts, with a
+# crash-loop guard that abandons a bad copy after 3 failed handoffs.
+
+def updated_copy_path():
+    return os.path.join(state_dir(), "pods_agent_updated.py")
+
+
+def build_reexec_argv(new_script=None):
+    """argv for os.execv: same interpreter, same subcommand/args, optionally a
+    different script file."""
+    argv = [sys.executable] + sys.argv[:]
+    argv[1] = os.path.abspath(new_script) if new_script else os.path.abspath(sys.argv[0])
+    return argv
+
+
+def _reexec(new_script=None):
+    argv = build_reexec_argv(new_script)
+    log(f"re-exec: {' '.join(argv)}")
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os.execv(argv[0], argv)
+
+
+def _parse_version(src):
+    m = re.search(r'^AGENT_VERSION\s*=\s*["\']([^"\']+)["\']', src, re.M)
+    return m.group(1) if m else "unknown"
+
+
+def update_posture(state):
+    """Self-update posture for checkin status — always present so the UI can
+    explain exactly why an update would or would not work here. A blocker is
+    only ever claimed from KNOWLEDGE: before the first successful checkin of
+    this process the agent simply hasn't learned what central advertises, so it
+    reports pending instead of a spooky (and possibly false) accusation."""
+    adv_v = state.get("agent_source_version")
+    posture = {
+        "running_version": AGENT_VERSION,
+        "advertised_version": adv_v,
+        "available": bool(adv_v and adv_v != AGENT_VERSION),
+        "allowed": bool(setting("allow_self_update")),
+    }
+    if not adv_v:
+        if "first_checkin_ok" in MILESTONES:
+            posture["blocker"] = (
+                "central has not advertised an agent source — its service image was "
+                "built without agent/ (or predates self-update)")
+        else:
+            posture["pending"] = True  # first heartbeat — capabilities unknown yet
+    rec = state.get("agent_update") or {}
+    if rec and os.path.abspath(__file__) == os.path.abspath(updated_copy_path()):
+        posture["running_installed_copy"] = rec.get("version")
+    return posture
+
+
+def agent_source_url(state):
+    """Where to fetch the agent source: central's advertised URL when adopted,
+    else DERIVED from the api_base this agent already reaches for everything —
+    so agents running with endpoint adoption off (dev in-cluster flavor) can
+    still self-update over their working connection."""
+    return (state.get("agent_source")
+            or f"{state['api_base']}/nodes/{state['node_id']}/agent-source")
+
+
+def fetch_agent_source(state, headers):
+    """(bytes, advertised_version, advertised_sha) from central's agent-source
+    endpoint. Raises with a precise reason on any failure."""
+    url = agent_source_url(state)
+    req = urllib.request.Request(
+        url, headers={**headers, "User-Agent": f"pods-agent/{AGENT_VERSION}"})
+    ctx = None
+    if os.environ.get("PODS_AGENT_INSECURE", "").lower() == "true":
+        ctx = ssl._create_unverified_context()
+    with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
+        raw = resp.read()
+        return (raw,
+                resp.headers.get("X-Agent-Version") or "unknown",
+                resp.headers.get("X-Agent-Sha256") or "")
+
+
+def apply_update(raw, expected_sha, state):
+    """Verify + install fetched agent source. Returns (path, new_version).
+    Raises RuntimeError with the exact refusal reason on any failure — nothing
+    is written unless every check passes."""
+    if not expected_sha:
+        raise RuntimeError(
+            "no expected sha256 to verify against — refusing to install unverified code")
+    actual = hashlib.sha256(raw).hexdigest()
+    if actual != expected_sha:
+        raise RuntimeError(
+            f"sha256 mismatch: fetched {actual[:12]}… != advertised {expected_sha[:12]}… "
+            f"— refusing to install (source changed mid-flight, or tampering)")
+    try:
+        src = raw.decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise RuntimeError(f"fetched source is not valid utf-8: {e}")
+    try:
+        compile(src, "pods_agent.py", "exec")
+    except SyntaxError as e:
+        raise RuntimeError(
+            f"fetched source does not compile (line {e.lineno}: {e.msg}) — refusing to install")
+    new_version = _parse_version(src)
+    path = updated_copy_path()
+    os.makedirs(state_dir(), exist_ok=True)
+    if os.path.exists(path):
+        try:
+            os.replace(path, path + ".prev")   # keep the previous copy as fallback
+        except OSError:
+            pass
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(src)
+    os.replace(tmp, path)
+    state["agent_update"] = {"sha256": expected_sha, "version": new_version,
+                             "installed_over": AGENT_VERSION,
+                             "installed_at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+    save_state(state)
+    return path, new_version
+
+
+def deletion_park_message(node_id):
+    """Logged (loudly) when central confirms this node's row is gone. The agent
+    parks — hourly re-check only — and tells the human exactly how to remove it.
+    It NEVER deletes itself: removal is the box owner's call, stated plainly."""
+    return (
+        f"node '{node_id}' was DELETED on central — this agent is orphaned and is "
+        f"parking (hourly re-check only; it never deletes itself).\n"
+        f"  To remove it:\n"
+        f"    containerized:  docker rm -f pods-agent-{node_id}"
+        f"    (and the state volume: docker volume rm pods-agent-state-{node_id})\n"
+        f"    bare host:      stop this process and delete {state_dir()}\n"
+        f"  If the deletion was a mistake: re-create the node on central and run a "
+        f"fresh join — the old token died with the node row.")
+
+
+def do_restart_command(state, headers, cid):
+    """Ack FIRST (the result must land before the process image is replaced),
+    then re-exec in place. Never returns on success."""
+    try:
+        post_command_result(state, headers, cid, "done", {
+            "detail": f"agent {AGENT_VERSION} re-exec'ing in place — expect one missed "
+                      f"heartbeat and a fresh startup-milestone waterfall"})
+    except Exception as e:
+        log(f"could not post restart ack before re-exec (restarting anyway): {e}")
+    save_state(state)
+    _reexec()
+
+
+def do_update_command(state, headers, cid):
+    """Full self-update: gate check, fetch, verify, install, ack, exec. Posts a
+    precise error result on any refusal. Never returns on success."""
+    if not setting("allow_self_update"):
+        post_command_result(state, headers, cid, "error", {
+            "error": "self-update disabled on this node — allow_self_update is off "
+                     "(enable it via the settings channel, or set "
+                     "PODS_AGENT_ALLOW_SELF_UPDATE=true on the box)"})
+        return
+    log("self-update: fetching source from central…")
+    raw, adv_version, adv_sha = fetch_agent_source(state, headers)
+    # Prefer the sha the CHECKIN advertised (separate request/channel from the
+    # bytes themselves); the response header is the fallback.
+    expected = state.get("agent_source_sha256") or adv_sha
+    log(f"self-update: fetched {len(raw)} bytes (serves {adv_version}, "
+        f"sha {adv_sha[:12]}…) — verifying against {expected[:12]}…")
+    path, new_version = apply_update(raw, expected, state)
+    running_sha = ""
+    try:
+        with open(os.path.abspath(__file__), "rb") as f:
+            running_sha = hashlib.sha256(f.read()).hexdigest()
+    except OSError:
+        pass
+    same = " (byte-identical to the running copy — effectively a restart)" \
+        if running_sha == expected else ""
+    detail = f"installed {new_version} over {AGENT_VERSION} at {path}{same}; re-exec'ing onto it"
+    try:
+        post_command_result(state, headers, cid, "done", {
+            "detail": detail, "from_version": AGENT_VERSION,
+            "to_version": new_version, "sha256": expected})
+    except Exception as e:
+        log(f"could not post update ack before re-exec (updating anyway): {e}")
+    log(f"self-update: {detail}")
+    _reexec(path)
+
+
+def maybe_exec_updated_copy():
+    """Startup handoff: a container restart runs the image's baked-in script, so
+    the baked-in script defers to a newer self-installed copy in the state dir.
+    Everything is re-verified (sha vs the state record, compile) and a crash-loop
+    guard abandons a copy that fails 3 handoffs inside 10 minutes — a bad update
+    can cost at most three quick restarts, never the node."""
+    state = load_state() or {}
+    rec = state.get("agent_update") or {}
+    path = updated_copy_path()
+    if not rec or not os.path.isfile(path):
+        return
+    if os.path.abspath(__file__) == os.path.abspath(path):
+        return  # already the installed copy
+    now = time.time()
+    attempts = state.get("agent_update_attempts") or {}
+    if now - attempts.get("first_ts", now) >= 600:
+        attempts = {}
+    if attempts.get("count", 0) >= 3:
+        log(f"self-update loader: installed copy {rec.get('version')} crash-looped "
+            f"{attempts['count']}x in 10 min — ABANDONING it, continuing on baked-in {AGENT_VERSION}")
+        state.pop("agent_update", None)
+        state["agent_update_attempts"] = {}
+        save_state(state)
+        return
+    try:
+        with open(path, "rb") as f:
+            raw = f.read()
+        if hashlib.sha256(raw).hexdigest() != rec.get("sha256"):
+            raise RuntimeError("installed copy no longer matches its recorded sha256")
+        src = raw.decode("utf-8")
+        compile(src, "pods_agent.py", "exec")
+        installed_version = _parse_version(src)
+    except (OSError, RuntimeError, UnicodeDecodeError, SyntaxError) as e:
+        log(f"self-update loader: installed copy failed verification ({e}) — "
+            f"clearing it, continuing on baked-in {AGENT_VERSION}")
+        state.pop("agent_update", None)
+        save_state(state)
+        return
+    state["agent_update_attempts"] = {
+        "count": attempts.get("count", 0) + 1,
+        "first_ts": attempts.get("first_ts", now)}
+    save_state(state)
+    log(f"self-update loader: handing off to installed agent {installed_version} "
+        f"at {path} (baked-in copy: {AGENT_VERSION})")
+    _reexec(path)
+
+
 def run():
     state = load_state()
     if not state:
@@ -1501,6 +1743,7 @@ def run():
     CENTRAL_SETTINGS.update(state.get("central_settings") or {})
     metrics_buf = []
     last_sample_mono = 0.0
+    deleted_404s = 0       # consecutive checkin 404s — 3 = node deleted centrally, park
     logs_max_batch = 2000  # lowered automatically if central advertises a smaller cap
 
     log_probe_policy()
@@ -1527,10 +1770,12 @@ def run():
             del metrics_buf[:-METRICS_BUF_MAX]
             last_sample_mono = time.monotonic()
 
+        status = sample_status(caps, inv)
+        status["update"] = update_posture(state)
         body = {
             "agent_version": AGENT_VERSION,
             "capabilities": caps,
-            "status": sample_status(caps, inv),
+            "status": status,
             "inventory_hash": h,
         }
         if send_full or h != last_acked_hash:
@@ -1546,7 +1791,13 @@ def run():
             send_full = bool(result.get("resync"))
             interval = int(result.get("poll_after_seconds") or interval)
             backoff = interval
+            deleted_404s = 0
             milestone("first_checkin_ok")
+            # A successful checkin proves this copy is healthy — clear the
+            # self-update crash-loop counter so future handoffs start fresh.
+            if state.get("agent_update_attempts"):
+                state["agent_update_attempts"] = {}
+                save_state(state)
             # 200 = stored (dedupe makes resends harmless) — clear what was sent.
             if metrics_batch:
                 milestone("first_metrics_flush")
@@ -1559,8 +1810,15 @@ def run():
                 log(f"central republished api_base: {state['api_base']} -> {new_base} (adopting)")
                 state["api_base"] = new_base
                 save_state(state)
-            for key in ("log_ingest", "log_encodings"):
+            for key in ("log_ingest", "log_encodings", "agent_source"):
                 if adopt_endpoints and endpoints.get(key) and endpoints.get(key) != state.get(key):
+                    state[key] = endpoints[key]
+                    save_state(state)
+            # Facts, not routing — adopt regardless of adopt_endpoints (an agent
+            # with adoption off still needs to KNOW what central serves; the
+            # fetch URL derives from its own api_base, see agent_source_url).
+            for key in ("agent_source_sha256", "agent_source_version"):
+                if endpoints.get(key) and endpoints.get(key) != state.get(key):
                     state[key] = endpoints[key]
                     save_state(state)
 
@@ -1592,6 +1850,20 @@ def run():
                             post_command_result(state, headers, cid, "error",
                                                 {"error": f"{type(e).__name__}: {e}"[:300]})
                             log(f"bench {cid} FAILED: {e}")
+                    elif ctype == "restart":
+                        log(f"restart command {cid} — acking, then re-exec'ing in place")
+                        do_restart_command(state, headers, cid)  # never returns
+                    elif ctype == "update":
+                        log(f"self-update command {cid} — starting (gate, fetch, verify, install, exec)")
+                        try:
+                            do_update_command(state, headers, cid)  # never returns on success
+                        except Exception as e:
+                            detail = f"{type(e).__name__}: {e}"[:400]
+                            log(f"self-update {cid} FAILED: {detail}")
+                            try:
+                                post_command_result(state, headers, cid, "error", {"error": detail})
+                            except Exception:
+                                pass
                     else:
                         log(f"unsupported command type '{ctype}' ({cid}) — reporting error")
                         post_command_result(state, headers, cid, "error",
@@ -1603,6 +1875,18 @@ def run():
             if e.code == 403:
                 log(f"checkin REJECTED (403): {http_error_detail(e)} — token likely revoked via /regenerate; parking (re-join required)")
                 backoff = min(max(backoff * 2, 60), 600)
+            elif e.code == 404:
+                # Node deleted on central. Three strikes before parking so a
+                # transient proxy 404 can't strand a healthy node; a later
+                # successful checkin (row restored) resumes normal cadence.
+                deleted_404s += 1
+                if deleted_404s >= 3:
+                    log(deletion_park_message(node_id))
+                    backoff = 3600
+                else:
+                    log(f"checkin 404: {http_error_detail(e)} — node row missing on "
+                        f"central ({deleted_404s}/3 before parking)")
+                    backoff = min(max(backoff * 2, 5), 600)
             else:
                 log(f"checkin failed ({e.code}): {http_error_detail(e)}")
                 backoff = min(max(backoff * 2, 5), 600)
@@ -1653,6 +1937,9 @@ def main():
     if args.command == "join":
         return 0 if join(args.url, args.node, args.token, tenant=args.tenant) else 1
     if args.command == "run":
+        # Self-update handoff: a container restart runs the image's baked-in
+        # copy — defer to a newer verified self-installed copy before looping.
+        maybe_exec_updated_copy()
         return run()
     return show_status()
 
