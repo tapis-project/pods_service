@@ -161,13 +161,22 @@ def _get_node_or_404(node_id: str) -> Node:
 
 
 def _require_agent(request: Request, node: Node):
-    """Authenticate an agent request via the node-scoped bearer token minted at join."""
+    """Authenticate an agent request via the node-scoped bearer token minted at join.
+
+    During a rotation BOTH the active token and the pending (newly minted, not yet
+    confirmed) token authenticate — that overlap is what makes rotation zero-downtime.
+    Returns True when the caller used the PENDING token (the confirmation signal)."""
     token = request.headers.get(AGENT_TOKEN_HEADER)
-    if not _token_matches(token, node.agent_token_hash):
+    if _token_matches(token, node.agent_token_hash):
+        used_pending = False
+    elif node.pending_agent_token_hash and _token_matches(token, node.pending_agent_token_hash):
+        used_pending = True
+    else:
         raise ResourceError(f"Invalid or missing {AGENT_TOKEN_HEADER} for node '{node.node_id}'.", 403)
     # Agent requests carry no Tapis token, so g.username is unset — give db writes an actor.
     if not getattr(g, 'username', None):
         g.username = f"_node_agent_{node.node_id}"
+    return used_pending
 
 
 def _central_base_url(request: Request) -> str:
@@ -590,6 +599,16 @@ async def checkin_node(node_id: str, checkin: NodeCheckinRequest, request: Reque
     _require_agent(request, node)
 
     node.last_checkin_ts = _utcnow()
+    # Expire an unconfirmed rotation: the agent is demonstrably alive on some
+    # token, so a pending that never got confirmed is dead weight — drop it and
+    # leave the active token exactly as it was.
+    if node.pending_token_ts and node.pending_token_ts < _utcnow() - datetime.timedelta(
+            minutes=PENDING_TOKEN_TTL_MINUTES):
+        node.pending_agent_token_hash = None
+        node.pending_token_ts = None
+        node.log_action(
+            f"pending rotation token expired after {PENDING_TOKEN_TTL_MINUTES} minutes "
+            f"without confirmation — current token unchanged and still active")
     if checkin.agent_version:
         node.agent_version = checkin.agent_version
     if checkin.capabilities:
@@ -705,6 +724,15 @@ async def get_node_commands(
                       sa_update(NodeCommand)
                       .where(NodeCommand.command_id.in_([c.command_id for c in queued]))
                       .values(status="delivered", delivered_ts=_utcnow()))
+            # A rotate's params carry the RAW new token, needed exactly once — in
+            # this response (built from the in-memory rows above). Scrub the DB
+            # copy at handoff so the only durable copy is the hash on the node row.
+            rotate_ids = [c.command_id for c in queued if c.type == "rotate"]
+            if rotate_ids:
+                store.run("execute",
+                          sa_update(NodeCommand)
+                          .where(NodeCommand.command_id.in_(rotate_ids))
+                          .values(params={}))
         settings_changed = (
             json.dumps(node.agent_settings or {}, sort_keys=True) != settings_at_hold)
         if queued or settings_changed or time.monotonic() >= deadline:
@@ -747,7 +775,7 @@ async def get_node_commands(
 async def post_node_command_result(node_id: str, command_id: str, body: NodeCommandResultIn, request: Request):
     """Agent completion report for a delivered command (X-Pods-Node-Token auth)."""
     node = _get_node_or_404(node_id)
-    _require_agent(request, node)
+    used_pending = _require_agent(request, node)
 
     if body.status not in ("done", "error"):
         raise ResourceError(f"Command result status must be done|error, got '{body.status}'.", 400)
@@ -763,10 +791,15 @@ async def post_node_command_result(node_id: str, command_id: str, body: NodeComm
         scalars=True, first=True)
     if not cmd or cmd.status not in ("queued", "delivered"):
         raise ResourceError(f"Command '{command_id}' not found or already completed.", 404)
+    completion = dict(status=body.status, result=result, completed_ts=_utcnow())
+    if cmd.type == "rotate":
+        # Invariant: a rotate row past `queued` never holds the raw token
+        # (delivery already scrubbed it; this covers rows queued pre-scrub).
+        completion["params"] = {}
     store.run("execute",
               sa_update(NodeCommand)
               .where(NodeCommand.command_id == command_id)
-              .values(status=body.status, result=result, completed_ts=_utcnow()))
+              .values(**completion))
     # Lifecycle commands close their loop in the ledger — the trigger entry said
     # "watch the ledger", so the completion (or failure detail) must land there.
     if cmd.type in ("restart", "update"):
@@ -774,6 +807,39 @@ async def post_node_command_result(node_id: str, command_id: str, body: NodeComm
         node.log_action(
             f"agent {cmd.type} {'completed' if body.status == 'done' else 'FAILED'}"
             f" ({command_id[:14]}…){': ' + str(detail)[:200] if detail else ''}")
+        node.db_update(user_update=False)
+    elif cmd.type == "rotate":
+        # Promotion requires the agent to have used the NEW token for this very
+        # request — that IS the proof it persisted the token successfully.
+        # Every rotate outcome entry carries the command-id prefix — the UI's
+        # banner watcher matches completions by it (same contract as restart/update).
+        if body.status == "done" and used_pending and node.pending_agent_token_hash:
+            node.agent_token_hash = node.pending_agent_token_hash
+            node.pending_agent_token_hash = None
+            node.pending_token_ts = None
+            node.log_action(
+                f"token rotation CONFIRMED ({command_id[:14]}…) with the new token — "
+                f"old token revoked (the token itself is never shown anywhere: it exists "
+                f"only on the box; this confirmation is the proof it landed)")
+        elif body.status == "done":
+            node.log_action(
+                f"token rotation NOT PROMOTED ({command_id[:14]}…) — the agent reported done "
+                f"but confirmed with the OLD token; the pending token expires and the "
+                f"current one stays active")
+        else:
+            node.pending_agent_token_hash = None
+            node.pending_token_ts = None
+            node.log_action(
+                f"token rotation FAILED ({command_id[:14]}…): "
+                f"{str(result.get('error', ''))[:200]} — pending token discarded, "
+                f"current token still active")
+        node.db_update(user_update=False)
+    elif cmd.type == "shell":
+        exit_code = result.get("exit_code")
+        node.log_action(
+            f"shell {'completed' if body.status == 'done' else 'FAILED'} ({command_id[:14]}…"
+            f"{f', exit {exit_code}' if exit_code is not None else ''}): "
+            f"{str((cmd.params or {}).get('command', ''))[:200]}")
         node.db_update(user_update=False)
     elif cmd.type == "decommission":
         if body.status == "done":
@@ -878,12 +944,17 @@ def _expire_or_reject_active(node: Node, cmd_type: str, verb: str):
             f"A {verb} is already queued or in progress on this node — wait for it "
             f"to complete (or up to 15 minutes for a dead one to expire).", 409)
     if active:
+        values = dict(status="error",
+                      result={"error": "expired — never completed within 15 minutes"},
+                      completed_ts=_utcnow())
+        if cmd_type == "rotate":
+            # Never let a raw token linger at rest on a dead rotate. (Other types
+            # keep params — shell/bench history shows what was asked.)
+            values["params"] = {}
         store.run("execute",
                   sa_update(NodeCommand)
                   .where(NodeCommand.command_id.in_([c.command_id for c in active]))
-                  .values(status="error",
-                          result={"error": "expired — never completed within 15 minutes"},
-                          completed_ts=_utcnow()))
+                  .values(**values))
 
 
 def _queue_lifecycle_command(node: Node, cmd_type: str, params: Dict[str, Any]) -> NodeCommand:
@@ -1008,6 +1079,130 @@ async def trigger_node_update(node_id: str):
                   f"by long-polling (0.5.0+) agents, within one checkin interval otherwise. "
                   f"The agent verifies the sha256, compile-checks, keeps the previous copy as "
                   f"fallback, and re-execs. Watch the ledger for the completion entry.")
+
+
+SHELL_TIMEOUT_DEFAULT = int(os.environ.get("NODES_SHELL_TIMEOUT_DEFAULT", "60"))
+SHELL_TIMEOUT_MAX = int(os.environ.get("NODES_SHELL_TIMEOUT_MAX", "300"))
+SHELL_COMMAND_MAX_CHARS = 4096
+
+
+@router.post(
+    "/pods/nodes/{node_id}/shell",
+    tags=["Nodes"],
+    summary="trigger_node_shell",
+    operation_id="trigger_node_shell",
+    response_model=NodeCommandResponse)
+async def trigger_node_shell(node_id: str, body: Dict[str, Any] = Body(...)):
+    """Queue a shell command on this node (node ADMIN).
+
+    The strictest capability in the system, so its enable is the strictest too:
+    the box must set PODS_AGENT_ALLOW_SHELL=true — central CANNOT turn this on
+    through the settings channel (unlike self-update). The agent reports the
+    effective value in its status; this endpoint refuses early when it is off so
+    the operator gets a real explanation instead of a silent agent-side refusal.
+
+    Body: {"command": "df -h /scratch", "timeout": 60}. The command is recorded
+    verbatim in the ledger with the requester, and its exit code is recorded on
+    completion — every shell run is auditable after the fact.
+    """
+    node = _get_node_or_404(node_id)
+
+    command = (body or {}).get("command")
+    if not isinstance(command, str) or not command.strip():
+        raise ResourceError("A non-empty 'command' string is required.", 400)
+    command = command.strip()
+    if len(command) > SHELL_COMMAND_MAX_CHARS:
+        raise ResourceError(f"Command exceeds {SHELL_COMMAND_MAX_CHARS} characters.", 400)
+    timeout = (body or {}).get("timeout", SHELL_TIMEOUT_DEFAULT)
+    if not isinstance(timeout, (int, float)) or isinstance(timeout, bool):
+        timeout = SHELL_TIMEOUT_DEFAULT
+    timeout = max(1, min(int(timeout), SHELL_TIMEOUT_MAX))
+
+    status = node.status or {}
+    applied = status.get("applied_settings") or {}
+    if not applied.get("allow_shell"):
+        raise ResourceError(
+            "Shell commands are disabled on this node. This one is env-only by design: "
+            "set PODS_AGENT_ALLOW_SHELL=true on the box itself and restart the agent — "
+            "central cannot enable it remotely. (If the agent predates shell support, "
+            "update it first.)", 403)
+
+    _expire_or_reject_active(node, "shell", "shell command")
+    cmd = _queue_lifecycle_command(node, "shell", {"command": command, "timeout": timeout})
+    node.log_action(
+        f"shell queued by '{getattr(g, 'username', '?')}' ({cmd.command_id[:14]}…, "
+        f"timeout {timeout}s): {command[:300]}")
+    node.db_update(user_update=False)
+    return ok(result=cmd.display(),
+              msg=f"Shell command queued (timeout {timeout}s) — picked up within seconds by "
+                  f"long-polling agents. Output and exit code come back in the run history; "
+                  f"the command and its exit code are recorded in this node's ledger.")
+
+
+@router.get(
+    "/pods/nodes/{node_id}/shell",
+    tags=["Nodes"],
+    summary="list_node_shell_runs",
+    operation_id="list_node_shell_runs",
+    response_model=NodeCommandsListResponse)
+async def list_node_shell_runs(node_id: str):
+    """Shell run history for a node (node READ permission), newest first."""
+    node = _get_node_or_404(node_id)
+    store = _telemetry_store(NodeCommand)
+    runs = store.run(
+        "execute",
+        sa_select(NodeCommand)
+        .where(NodeCommand.node_id == node.node_id, NodeCommand.type == "shell")
+        .order_by(NodeCommand.created_ts.desc())
+        .limit(20),
+        scalars=True, all=True)
+    return ok(result=[c.display() for c in runs], msg=f"Retrieved {len(runs)} shell run(s).")
+
+
+PENDING_TOKEN_TTL_MINUTES = int(os.environ.get("NODES_PENDING_TOKEN_TTL_MINUTES", "60"))
+
+
+@router.post(
+    "/pods/nodes/{node_id}/rotate",
+    tags=["Nodes"],
+    summary="trigger_node_rotate",
+    operation_id="trigger_node_rotate",
+    response_model=NodeCommandResponse)
+async def trigger_node_rotate(node_id: str):
+    """Rotate this node's agent token with NO downtime (node ADMIN).
+
+    Unlike /regenerate — which revokes immediately and parks the agent until a
+    human re-runs a join on the box — this is a two-phase handshake over the
+    already-authed channel:
+
+      1. central mints a new token and stores it as PENDING (both tokens work),
+      2. the new token rides a `rotate` command to the agent,
+      3. the agent persists it and CONFIRMS using the new token,
+      4. that confirmation promotes pending -> active and revokes the old one.
+
+    A rotate that never lands (agent offline, crash mid-swap) simply expires —
+    the running agent keeps working on its existing token the whole time.
+    """
+    node = _get_node_or_404(node_id)
+    if not node.agent_token_hash:
+        raise ResourceError(
+            "This node has never been claimed — there is no agent token to rotate. "
+            "Use the join command from Add node (or Regenerate for a fresh claim token).", 409)
+    _expire_or_reject_active(node, "rotate", "token rotation")
+
+    new_token = _mint_token("pna")
+    node.pending_agent_token_hash = _hash_token(new_token)
+    node.pending_token_ts = _utcnow()
+    cmd = _queue_lifecycle_command(node, "rotate", {"node_token": new_token})
+    node.log_action(
+        f"token rotation started by '{getattr(g, 'username', '?')}' ({cmd.command_id[:14]}…) — "
+        f"both tokens valid until the agent confirms with the new one")
+    node.db_update(user_update=False)
+    return ok(result=cmd.display(),
+              msg="Token rotation queued — the new token rides the authed command channel; "
+                  "both tokens work until the agent confirms with the new one, which revokes "
+                  "the old. If it never confirms, the agent keeps running on its current token "
+                  f"and the pending token expires after {PENDING_TOKEN_TTL_MINUTES} minutes.")
 
 
 @router.get(

@@ -137,6 +137,8 @@ The edge release. Pods learned to leave the cluster.
 - **Remote agent lifecycle** — restart and self-update from the UI. Updates are sha256-verified against a hash the agent fetches separately, install atomically with a fallback copy, and survive container restarts. A crash-loop guard abandons a bad update after three failed handoffs, so a broken update costs a few restarts, never the node.
 - **Polite decommission** — deleting a node asks the agent to remove itself first (wipe its token and state, remove its own container where it can) and reports honestly what it could and couldn't clean up. Force delete stays one click away, and an offline agent parks itself on its next checkin.
 - **Long-poll command delivery** — the agent holds a request open between heartbeats, so a restart you click lands in under a second, and settings adopt just as fast. Idle cost is near zero, and older agents keep working unchanged.
+- **Node shell** — one-shot commands with recorded exit code and output, auditable after the fact. Deliberately not a PTY, and enabled only by an environment variable on the box itself: central cannot turn on arbitrary code execution remotely.
+- **No-downtime token rotation** — central mints a new token, both work during the handshake, and the old one is revoked only once the agent proves it persisted the new one by using it.
 
 ### Bug fixes:
 - Permission guards return proper 4xx codes instead of bare errors that mapped to 500.
