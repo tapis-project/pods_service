@@ -5,8 +5,10 @@ import os
 import secrets
 import time
 
+from typing import Optional
+
 import requests
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 
 from errors import ResourceError
 from models_node import (
@@ -31,7 +33,27 @@ from models_routes import (
     RouteDeleteResponse,
     RouteProbeResponse,
 )
+from models_node_telemetry import (
+    NodeLog,
+    NodeMetric,
+    NodeLogIngestResponse,
+    NodeLogsResponse,
+    NodeMetricsResponse,
+)
+from node_telemetry_utils import (
+    decode_payload,
+    parse_json_payload,
+    parse_ts,
+    normalize_log_entries,
+    normalize_metric_samples,
+    clamp_window_step,
+    downsample_samples,
+    supported_encodings,
+    METRIC_FIELDS,
+)
 from models_pods import Pod
+from sqlalchemy import delete as sa_delete, select as sa_select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from tapis_auth_utils import TapisAuthEntity, run_tapis_auth_check, run_tapis_auth_callback
 from tapisservice.tapisfastapi.utils import g, ok
 from tapisservice.logs import get_logger
@@ -45,6 +67,18 @@ router = APIRouter()
 CLAIM_TTL_HOURS = int(os.environ.get("NODES_CLAIM_TTL_HOURS", "4"))
 COMMANDS_POLL_AFTER_SECONDS = int(os.environ.get("NODES_COMMANDS_POLL_AFTER", "25"))
 DEFAULT_LOGIN_SERVER = os.environ.get("TS_LOGIN_SERVER", "https://headscale.pods.tacc.develop.tapis.io")
+
+# Telemetry quotas/retention (Phase 3) — per-node hard caps enforced at ingest so one
+# hot edge can never flood central (transport discipline #4). Caps are advertised in
+# ingest responses so agents can size their offline buffers to what will be kept.
+NODES_LOGS_MAX_BODY_BYTES = int(os.environ.get("NODES_LOGS_MAX_BODY_BYTES", str(8 * 1024 * 1024)))  # decompressed
+NODES_LOGS_MAX_BATCH = int(os.environ.get("NODES_LOGS_MAX_BATCH", "5000"))
+NODES_LOGS_MAX_LINE_CHARS = int(os.environ.get("NODES_LOGS_MAX_LINE_CHARS", "8192"))
+NODES_LOGS_MAX_ROWS = int(os.environ.get("NODES_LOGS_MAX_ROWS", "100000"))          # per node
+NODES_LOGS_MAX_AGE_DAYS = int(os.environ.get("NODES_LOGS_MAX_AGE_DAYS", "7"))
+NODES_METRICS_MAX_BATCH = int(os.environ.get("NODES_METRICS_MAX_BATCH", "1500"))    # ~25 h @ 60 s
+NODES_METRICS_MAX_ROWS = int(os.environ.get("NODES_METRICS_MAX_ROWS", "100000"))    # per node
+NODES_METRICS_MAX_AGE_DAYS = int(os.environ.get("NODES_METRICS_MAX_AGE_DAYS", "30"))
 
 # Agents authenticate with this header on checkin/commands — NOT Authorization, so the
 # Tapis token middleware never tries to parse it as a JWT.
@@ -113,7 +147,10 @@ def _agent_endpoints(request: Request, node: Node) -> dict:
     return {
         "api_base": f"{base}/pods",
         "login_server": _login_server_for(node),
-        # log_ingest lands with Phase 3 (Vector HTTP sink target).
+        # Phase 3 log shipping target — also usable by a Vector HTTP sink later
+        # (same endpoint, same X-Pods-Node-Token header, config-only opt-in).
+        "log_ingest": f"{base}/pods/nodes/{node.node_id}/logs",
+        "log_encodings": ",".join(supported_encodings()),
     }
 
 
@@ -277,6 +314,10 @@ async def delete_node(node_id: str):
     # Routes die with their node — they'd otherwise keep rendering into the proxy config.
     for route in Route.db_get_for_node(node_id, tenant=g.request_tenant_id, site=g.site_id):
         route.db_delete()
+    # Telemetry dies with the node too (logs + metrics rows would otherwise orphan).
+    store = _telemetry_store(NodeLog)
+    store.run("execute", sa_delete(NodeLog).where(NodeLog.node_id == node_id))
+    store.run("execute", sa_delete(NodeMetric).where(NodeMetric.node_id == node_id))
     node.db_delete()
     return ok(result="", msg="Node deleted successfully.")
 
@@ -403,6 +444,28 @@ async def checkin_node(node_id: str, checkin: NodeCheckinRequest, request: Reque
     elif checkin.inventory_hash and checkin.inventory_hash != node.inventory_hash:
         resync = True
 
+    # Phase 3: metrics samples ride the heartbeat (30-60 s agent cadence, batched —
+    # an offline agent flushes its whole buffer on reconnect). (node_id, ts) dedupe
+    # makes lost-ack resends harmless; a 200 tells the agent to clear its buffer.
+    if checkin.metrics_samples:
+        try:
+            m_rows, m_dropped = normalize_metric_samples(
+                checkin.metrics_samples, _utcnow(), NODES_METRICS_MAX_BATCH)
+        except ValueError as e:
+            logger.warning(f"checkin metrics_samples rejected for node {node.node_id}: {e}")
+            m_rows, m_dropped = [], len(checkin.metrics_samples)
+        if m_dropped:
+            logger.info(f"checkin metrics for node {node.node_id}: dropped {m_dropped} sample(s).")
+        if m_rows:
+            values = [{**r, "node_id": node.node_id,
+                       "tenant_id": node.tenant_id, "site_id": node.site_id} for r in m_rows]
+            store = _telemetry_store(NodeMetric)
+            store.run("execute",
+                      pg_insert(NodeMetric).values(values).on_conflict_do_nothing(
+                          index_elements=["node_id", "ts"]))
+            _prune_telemetry(store, NodeMetric, node.node_id,
+                             NODES_METRICS_MAX_ROWS, NODES_METRICS_MAX_AGE_DAYS)
+
     node.db_update(user_update=False)
 
     return ok(
@@ -433,6 +496,188 @@ async def get_node_commands(node_id: str, request: Request):
     return ok(
         result={"commands": [], "poll_after_seconds": COMMANDS_POLL_AFTER_SECONDS},
         msg="No pending commands.")
+
+
+# Telemetry — Phase 3: agent-shipped logs + metrics history -------------------
+# Write paths are agent-authenticated (X-Pods-Node-Token) like checkin; read
+# paths are Tapis-JWT + node-READ gated via the route allowlist. Per-node
+# retention (rows + age) is enforced at ingest, never by a background sweeper.
+
+def _telemetry_store(model):
+    _, _, store = model.get_site_tenant_session(tenant=g.request_tenant_id, site=getattr(g, 'site_id', None))
+    return store
+
+
+def _prune_telemetry(store, model, node_id: str, max_rows: int, max_age_days: int):
+    """Per-node retention: drop rows past the age cap, then rows beyond the row
+    cap (oldest first). The row-cap boundary subquery yields NULL when the node
+    is under cap, which makes the second delete a no-op."""
+    cutoff = _utcnow() - datetime.timedelta(days=max_age_days)
+    store.run("execute", sa_delete(model).where(model.node_id == node_id, model.ts < cutoff))
+    boundary = (
+        sa_select(model.id)
+        .where(model.node_id == node_id)
+        .order_by(model.id.desc())
+        .offset(max_rows).limit(1)
+        .scalar_subquery())
+    store.run("execute", sa_delete(model).where(model.node_id == node_id, model.id <= boundary))
+
+
+def _log_retention_info() -> dict:
+    """Advertised in every ingest response so agents size offline buffers to
+    what the server will actually keep."""
+    return {
+        "max_batch": NODES_LOGS_MAX_BATCH,
+        "max_line_chars": NODES_LOGS_MAX_LINE_CHARS,
+        "max_rows_per_node": NODES_LOGS_MAX_ROWS,
+        "max_age_days": NODES_LOGS_MAX_AGE_DAYS,
+        "max_body_bytes": NODES_LOGS_MAX_BODY_BYTES,
+        "encodings": supported_encodings(),
+    }
+
+
+@router.post(
+    "/pods/nodes/{node_id}/logs",
+    tags=["Nodes"],
+    summary="ingest_node_logs",
+    operation_id="ingest_node_logs",
+    response_model=NodeLogIngestResponse)
+async def ingest_node_logs(node_id: str, request: Request):
+    """Agent log shipping (X-Pods-Node-Token auth — same path as checkin).
+
+    Body (identity/gzip/zstd per Content-Encoding): {"entries": [{"source", "ts", "line"}]}.
+    source = container name or "agent"; ts = epoch seconds or ISO-8601 (falls back to
+    receipt time). Batches are clamped (batch size, line length, decompressed body
+    bytes) and per-node retention (rows + age) is applied immediately — the response
+    reports accepted/dropped/truncated plus the caps so agents can adapt.
+    """
+    node = _get_node_or_404(node_id)
+    _require_agent(request, node)
+
+    body = await request.body()
+    try:
+        raw = decode_payload(body, request.headers.get("content-encoding"), NODES_LOGS_MAX_BODY_BYTES)
+        payload = parse_json_payload(raw)
+        rows, dropped, truncated = normalize_log_entries(
+            payload.get("entries"), _utcnow(), NODES_LOGS_MAX_BATCH, NODES_LOGS_MAX_LINE_CHARS)
+    except ValueError as e:
+        raise ResourceError(f"Log ingest rejected: {e}", 400)
+
+    if rows:
+        now = _utcnow()
+        values = [{**r, "node_id": node.node_id, "ingest_ts": now,
+                   "tenant_id": node.tenant_id, "site_id": node.site_id} for r in rows]
+        store = _telemetry_store(NodeLog)
+        store.run("execute", pg_insert(NodeLog).values(values))
+        _prune_telemetry(store, NodeLog, node.node_id, NODES_LOGS_MAX_ROWS, NODES_LOGS_MAX_AGE_DAYS)
+
+    return ok(
+        result={"accepted": len(rows), "dropped": dropped, "truncated": truncated,
+                "retention": _log_retention_info()},
+        msg=f"Stored {len(rows)} log line(s).")
+
+
+@router.get(
+    "/pods/nodes/{node_id}/logs",
+    tags=["Nodes"],
+    summary="get_node_logs",
+    operation_id="get_node_logs",
+    response_model=NodeLogsResponse)
+async def get_node_logs(
+    node_id: str,
+    source: Optional[str] = Query(None, description="Only lines from this source (container name or 'agent')."),
+    since: Optional[str] = Query(None, description="Only lines after this time (epoch seconds or ISO-8601) — tail-follow with the newest ts you have."),
+    before: Optional[str] = Query(None, description="Only lines before this time — page back from a previous page's oldest ts."),
+    limit: int = Query(500, ge=1, le=5000, description="Max lines returned (newest window of the match, oldest-first in the response)."),
+):
+    """Stored log lines for a node (node READ permission).
+
+    Returns the NEWEST `limit` lines matching the filters, oldest-first for display,
+    plus the distinct source list (viewer filter chips) and has_more for paging back.
+    """
+    node = _get_node_or_404(node_id)
+    store = _telemetry_store(NodeLog)
+
+    stmt = sa_select(NodeLog).where(NodeLog.node_id == node.node_id)
+    if source:
+        stmt = stmt.where(NodeLog.source == source)
+    for name, value, op in (("since", since, "gt"), ("before", before, "lt")):
+        if value:
+            dt = parse_ts(value)
+            if dt is None:
+                raise ResourceError(f"'{name}' must be epoch seconds or ISO-8601, got: {value}", 400)
+            stmt = stmt.where(NodeLog.ts > dt if op == "gt" else NodeLog.ts < dt)
+    stmt = stmt.order_by(NodeLog.ts.desc(), NodeLog.id.desc()).limit(limit + 1)
+    log_rows = store.run("execute", stmt, scalars=True, all=True)
+
+    has_more = len(log_rows) > limit
+    page = list(reversed(log_rows[:limit]))
+    src_stmt = sa_select(NodeLog.source).where(NodeLog.node_id == node.node_id).distinct()
+    sources = sorted(store.run("execute", src_stmt, scalars=True, all=True))
+
+    return ok(
+        result={
+            "entries": [{"source": r.source, "ts": r.ts, "line": r.line} for r in page],
+            "sources": sources,
+            "has_more": has_more,
+        },
+        msg=f"Retrieved {len(page)} log line(s).")
+
+
+@router.get(
+    "/pods/nodes/{node_id}/metrics",
+    tags=["Nodes"],
+    summary="get_node_metrics",
+    operation_id="get_node_metrics",
+    response_model=NodeMetricsResponse)
+async def get_node_metrics(
+    node_id: str,
+    window_s: int = Query(3600, description="History window in seconds (600..2592000 — up to 30 days)."),
+    step_s: int = Query(60, description="Bucket step in seconds (>=30; raised automatically to cap points at 500)."),
+):
+    """Metrics history series for a node (node READ permission) — chart food.
+
+    Buckets with no samples are OMITTED (never interpolated), and start_ts/end_ts
+    frame the requested window regardless of where samples exist — so charts can
+    anchor a full-window x-axis and render off periods honestly. `caps` carries the
+    latest-known cpu_count / mem_total_bytes for static y-axis scaling.
+    """
+    node = _get_node_or_404(node_id)
+    window_s, step_s = clamp_window_step(window_s, step_s)
+    end = _utcnow()
+    start = end - datetime.timedelta(seconds=window_s)
+    start_epoch = start.replace(tzinfo=datetime.timezone.utc).timestamp()
+
+    store = _telemetry_store(NodeMetric)
+    stmt = (
+        sa_select(NodeMetric)
+        .where(NodeMetric.node_id == node.node_id, NodeMetric.ts >= start, NodeMetric.ts <= end)
+        .order_by(NodeMetric.ts.asc()))
+    metric_rows = store.run("execute", stmt, scalars=True, all=True)
+
+    sample_dicts = [{"ts": r.ts, **{f: getattr(r, f) for f in METRIC_FIELDS}} for r in metric_rows]
+    series = downsample_samples(sample_dicts, start_epoch, window_s, step_s)
+
+    caps = {}
+    for r in reversed(metric_rows):
+        if "cpu_count" not in caps and r.cpu_count is not None:
+            caps["cpu_count"] = r.cpu_count
+        if "mem_total_bytes" not in caps and r.mem_total_bytes is not None:
+            caps["mem_total_bytes"] = r.mem_total_bytes
+        if "cpu_count" in caps and "mem_total_bytes" in caps:
+            break
+
+    return ok(
+        result={
+            "series": series,
+            "window_s": window_s,
+            "step_s": step_s,
+            "start_ts": start_epoch,
+            "end_ts": start_epoch + window_s,
+            "caps": caps,
+            "sample_count": len(metric_rows),
+        },
+        msg="Node metrics history retrieved.")
 
 
 # Routes — publish v0 (Tapis JWT auth, node-permission gated) -----------------

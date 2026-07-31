@@ -14,6 +14,7 @@ sqlmodel==0.0.24
 uvicorn
 
 # Databases/APIs
+zstandard # node telemetry ingest Content-Encoding: zstd (gzip is the stdlib fallback)
 sqlalchemy==2.0.41
 alembic==1.15.2
 psycopg2==2.9.9

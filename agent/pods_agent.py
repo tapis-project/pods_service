@@ -28,6 +28,17 @@ Environment:
   PODS_AGENT_INSECURE         "true" to skip TLS verification (dev only)
   DOCKER_SOCK                 docker socket path (default /var/run/docker.sock)
 
+Telemetry (Phase 3 — pure API traffic, no host commands, so no confirmation needed):
+  PODS_AGENT_METRICS          "false" disables metrics sampling (default: on)
+  PODS_AGENT_METRICS_INTERVAL sample cadence in seconds (default 60); samples buffer
+                              across offline stretches (newest ~1500 kept) and flush
+                              with the next successful checkin
+  PODS_AGENT_SHIP_LOGS        "false" disables log shipping (default: on). Ships the
+                              agent's own lines + running docker containers' stdout/err
+                              (per-container since-cursors persisted in state — restart
+                              never re-ships what central already has)
+  PODS_AGENT_LOGS_TAIL        first-contact tail per container (default 200 lines)
+
 Host-command confirmation (the agent NEVER runs host commands like `tailscale up` silently):
   PODS_AGENT_HOST_CMDS        "ask" (default) | "always" | "never"
                               ask: interactive terminal -> (Y/n) prompt per command;
@@ -44,6 +55,7 @@ backs off (capped) and keeps running; it never exits on network errors. A 403 me
 agent token was revoked (admin ran /regenerate) — the agent parks and waits for a re-join.
 """
 import argparse
+import gzip
 import hashlib
 import http.client
 import json
@@ -60,7 +72,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 
-AGENT_VERSION = "0.2.0"
+AGENT_VERSION = "0.3.0"
 TOKEN_HEADER = "X-Pods-Node-Token"
 DOCKER_SOCK = os.environ.get("DOCKER_SOCK", "/var/run/docker.sock")
 K8S_SA_DIR = "/var/run/secrets/kubernetes.io/serviceaccount"
@@ -69,8 +81,17 @@ STARTED_AT = datetime.now(timezone.utc)
 _stop = {"flag": False}
 
 
+# The agent's own lines double as a shippable log source ("agent" in central's
+# node log viewer). Ring-buffered; cleared as batches are acked by the server.
+SELF_LOG_BUF = []          # [(epoch_seconds, line)]
+SELF_LOG_BUF_MAX = 1000
+
+
 def log(msg):
-    print(f"[{datetime.now(timezone.utc).isoformat(timespec='seconds')}] {msg}", flush=True)
+    now = datetime.now(timezone.utc)
+    print(f"[{now.isoformat(timespec='seconds')}] {msg}", flush=True)
+    SELF_LOG_BUF.append((now.timestamp(), msg))
+    del SELF_LOG_BUF[:-SELF_LOG_BUF_MAX]
 
 
 # State ------------------------------------------------------------------------
@@ -368,8 +389,9 @@ def sample_status(caps, inv=None):
         "agent_started_at": STARTED_AT.isoformat(timespec="seconds"),
         "agent_uptime_seconds": int((datetime.now(timezone.utc) - STARTED_AT).total_seconds()),
     }
-    # Metrics-lite: cheap host + workload numbers every checkin (sub-KB — the full
-    # metrics pipeline with history tables is Phase 3).
+    # Metrics-lite: cheap host + workload numbers every checkin (sub-KB). The same
+    # reads, timestamped, also feed the Phase 3 history pipeline via metrics_samples
+    # (see metrics_sample) — this block stays the instant "now" view on the node row.
     try:
         load1, load5, load15 = os.getloadavg()
         status["load_avg"] = [round(load1, 2), round(load5, 2), round(load15, 2)]
@@ -432,6 +454,230 @@ def collect_inventory(caps, state_ns=None):
 
 def inventory_hash(inv):
     return hashlib.sha256(json.dumps(inv, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+# Telemetry — Phase 3 (metrics samples + log shipping) ---------------------------
+# All pure API traffic over connections the agent already uses (central HTTPS +
+# the docker socket) — no host commands, so none of this needs confirmation.
+
+METRICS_BUF_MAX = 1500     # ~25 h @ 60 s; matches central's per-checkin batch cap
+
+
+def metrics_sample(caps, inv):
+    """One timestamped gauge sample from the same cheap reads as sample_status.
+    Fields match central's nodemetric columns; absent gauges stay None."""
+    sample = {"ts": round(datetime.now(timezone.utc).timestamp(), 3)}
+    try:
+        sample["load1"] = round(os.getloadavg()[0], 3)
+    except OSError:
+        pass
+    cpus = os.cpu_count()
+    if cpus:
+        sample["cpu_count"] = cpus
+    mem = _meminfo()
+    if mem:
+        total_kb, avail_kb = mem
+        sample["mem_total_bytes"] = total_kb * 1024
+        sample["mem_used_bytes"] = max(0, (total_kb - avail_kb) * 1024)
+    try:
+        du = shutil.disk_usage("/")
+        sample["root_disk_pct"] = round(du.used / du.total * 100, 2)
+    except OSError:
+        pass
+    containers = (inv or {}).get("docker_containers")
+    if containers is not None:
+        sample["docker_running"] = sum(1 for c in containers if c.get("state") == "running")
+        sample["docker_total"] = len(containers)
+    k8s_pods = (inv or {}).get("k8s_pods")
+    if k8s_pods is not None:
+        sample["k8s_running"] = sum(1 for p in k8s_pods if p.get("phase") == "Running")
+        sample["k8s_total"] = len(k8s_pods)
+    return sample
+
+
+def docker_get_bytes(path):
+    """GET against the docker Engine API returning raw bytes (log streams are
+    NOT json and NOT necessarily utf-8-clean); None on any failure."""
+    if not os.path.exists(DOCKER_SOCK):
+        return None
+    conn = None
+    try:
+        conn = _UnixHTTPConnection(DOCKER_SOCK, timeout=15)
+        conn.request("GET", path)
+        resp = conn.getresponse()
+        raw = resp.read()
+        return raw if resp.status == 200 else None
+    except Exception:
+        return None
+    finally:
+        if conn:
+            conn.close()
+
+
+def demux_docker_logs(raw):
+    """Docker's log endpoint returns multiplexed 8-byte-header frames for non-TTY
+    containers and a raw byte stream for TTY ones. Try frames first; on any
+    malformed header fall back to treating the whole payload as raw text."""
+    out = []
+    i = 0
+    n = len(raw)
+    while i + 8 <= n:
+        stream_type = raw[i]
+        if stream_type not in (0, 1, 2) or raw[i + 1:i + 4] != b"\x00\x00\x00":
+            return raw.decode("utf-8", errors="replace")
+        length = int.from_bytes(raw[i + 4:i + 8], "big")
+        if i + 8 + length > n:
+            return raw.decode("utf-8", errors="replace")
+        out.append(raw[i + 8:i + 8 + length])
+        i += 8 + length
+    if i != n:
+        return raw.decode("utf-8", errors="replace")
+    return b"".join(out).decode("utf-8", errors="replace")
+
+
+def _parse_rfc3339_nano(ts):
+    """Docker's timestamps=1 prefix ('2026-07-30T12:00:00.123456789Z') -> epoch
+    float. fromisoformat can't take 9 fractional digits, so parse manually."""
+    try:
+        base, _, frac = ts.partition(".")
+        frac = frac.rstrip("Z")
+        base = base.rstrip("Z")
+        dt = datetime.strptime(base, "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+        ns = int((frac + "000000000")[:9]) if frac else 0
+        return dt.timestamp() + ns / 1e9
+    except (ValueError, AttributeError):
+        return None
+
+
+def parse_docker_log_lines(text, after_epoch):
+    """Timestamped log text -> [(epoch, line)], strictly newer than after_epoch.
+    Docker's `since` filter is inclusive-ish at second granularity, so the exact
+    per-line cutoff here is what prevents boundary duplicates."""
+    out = []
+    for raw_line in text.splitlines():
+        if not raw_line.strip():
+            continue
+        ts_str, _, rest = raw_line.partition(" ")
+        epoch = _parse_rfc3339_nano(ts_str)
+        if epoch is None:
+            # No parseable prefix — keep the line, order it at the cursor edge.
+            out.append((after_epoch or 0.0, raw_line))
+            continue
+        if after_epoch and epoch <= after_epoch:
+            continue
+        out.append((epoch, rest))
+    return out
+
+
+def _self_container_id():
+    """Our own container id prefix when running containerized (hostname default),
+    so the agent doesn't ship its container's stdout AND its self-log source."""
+    if not os.path.exists("/.dockerenv"):
+        return None
+    return socket.gethostname()[:12]
+
+
+def collect_container_logs(inv, cursors, tail, per_container_cap=500, total_cap=2000):
+    """New log lines per running container, strictly after each cursor.
+    Returns (entries, advanced) where advanced = {name: newest_epoch_included}.
+    Cursors only ever advance to the newest line actually COLLECTED (per-container
+    and total caps leave the rest on docker for the next pass), and the caller
+    commits them only AFTER a successful ship — a failed ship re-collects the
+    same lines next pass, so nothing is lost."""
+    entries = []
+    advanced = {}
+    self_id = _self_container_id()
+    for c in (inv or {}).get("docker_containers", []):
+        room = min(per_container_cap, total_cap - len(entries))
+        if room <= 0:
+            break
+        if c.get("state") != "running":
+            continue
+        cid = c.get("id")
+        name = (c.get("names") or [cid])[0]
+        if self_id and cid and cid.startswith(self_id):
+            continue
+        cursor = cursors.get(name)
+        query = f"/containers/{cid}/logs?stdout=1&stderr=1&timestamps=1"
+        # First contact tails; afterwards `since` bounds the fetch server-side.
+        query += f"&since={cursor:.9f}" if cursor else f"&tail={tail}"
+        raw = docker_get_bytes(query)
+        if raw is None:
+            continue
+        lines = parse_docker_log_lines(demux_docker_logs(raw), cursor)[:room]
+        if not lines:
+            continue
+        entries.extend({"source": name, "ts": epoch, "line": line} for epoch, line in lines)
+        advanced[name] = max(epoch for epoch, _ in lines)
+    return entries, advanced
+
+
+def ship_log_batch(state, headers, entries):
+    """POST one batch to central's log-ingest endpoint. gzip always (stdlib);
+    zstd automatically when this interpreter has it (3.14+) AND central
+    advertised it. Raises on failure — the caller decides what to retry."""
+    url = state.get("log_ingest") or f"{state['api_base']}/nodes/{state['node_id']}/logs"
+    raw = json.dumps({"entries": entries}).encode()
+    encoding = "gzip"
+    body = gzip.compress(raw)
+    if "zstd" in (state.get("log_encodings") or ""):
+        try:
+            from compression import zstd as _zstd   # stdlib, Python 3.14+
+            body = _zstd.compress(raw)
+            encoding = "zstd"
+        except ImportError:
+            pass
+    req = urllib.request.Request(
+        url, data=body, method="POST",
+        headers={**headers, "Content-Type": "application/json",
+                 "Content-Encoding": encoding,
+                 "User-Agent": f"pods-agent/{AGENT_VERSION}"})
+    ctx = None
+    if os.environ.get("PODS_AGENT_INSECURE", "").lower() == "true":
+        ctx = ssl._create_unverified_context()
+    with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
+        return json.loads(resp.read().decode() or "{}")
+
+
+def ship_pending_logs(state, headers, inv, tail, max_batch):
+    """Collect + ship one batch (agent self-lines + container logs since cursors).
+    Cursors and the self-buffer are committed ONLY on success — except 400/413
+    rejections, where the batch is dropped loudly instead of poisoning every
+    subsequent pass. Returns the (possibly server-lowered) max batch size."""
+    self_snapshot = list(SELF_LOG_BUF)
+    budget = max(0, max_batch - len(self_snapshot))
+    cursors = dict(state.get("log_cursors") or {})
+    entries, advanced = collect_container_logs(inv, cursors, tail, total_cap=budget)
+    entries.extend({"source": "agent", "ts": ts, "line": line} for ts, line in self_snapshot)
+    if not entries:
+        return max_batch
+
+    def commit():
+        if advanced:
+            cursors.update(advanced)
+            state["log_cursors"] = cursors
+            save_state(state)
+        del SELF_LOG_BUF[:len(self_snapshot)]
+
+    try:
+        result = ship_log_batch(state, headers, entries).get("result") or {}
+        commit()
+        dropped = result.get("dropped") or 0
+        if dropped:
+            log(f"log ship: central dropped {dropped} of {len(entries)} entr(ies)")
+        server_cap = (result.get("retention") or {}).get("max_batch")
+        if isinstance(server_cap, int) and 0 < server_cap < max_batch:
+            log(f"central caps log batches at {server_cap} — adopting")
+            return server_cap
+    except urllib.error.HTTPError as e:
+        if e.code in (400, 413):
+            log(f"log ship rejected ({e.code}): {http_error_detail(e)} — dropping this batch so it can't wedge the loop")
+            commit()
+        else:
+            log(f"log ship failed ({e.code}): {http_error_detail(e)} — retrying next pass")
+    except Exception as e:
+        log(f"log ship failed ({getattr(e, 'reason', e)}) — retrying next pass")
+    return max_batch
 
 
 # Commands ----------------------------------------------------------------------
@@ -546,12 +792,31 @@ def run():
     send_full = True  # first checkin always carries the full inventory
     backoff = interval
 
+    # Telemetry (Phase 3): metrics buffer across offline stretches; log shipping
+    # driven by per-container cursors persisted in state.
+    metrics_enabled = os.environ.get("PODS_AGENT_METRICS", "true").lower() != "false"
+    metrics_interval = int(os.environ.get("PODS_AGENT_METRICS_INTERVAL", "60"))
+    metrics_buf = []
+    last_sample_mono = 0.0
+    ship_logs_enabled = os.environ.get("PODS_AGENT_SHIP_LOGS", "true").lower() != "false"
+    logs_tail = int(os.environ.get("PODS_AGENT_LOGS_TAIL", "200"))
+    logs_max_batch = 2000  # lowered automatically if central advertises a smaller cap
+
     log_probe_policy()
     log(f"checkin loop starting for node '{node_id}' against {state['api_base']} (interval {interval}s)")
     while not _stop["flag"]:
         caps = detect_capabilities(state.get("namespace"))
         inv = collect_inventory(caps, state.get("namespace"))
         h = inventory_hash(inv)
+
+        # Sample on cadence (one per loop pass at most — during offline backoff the
+        # cadence stretches with the loop, and the resulting gaps are honest data:
+        # central's charts render them as off periods rather than interpolating).
+        if metrics_enabled and time.monotonic() - last_sample_mono >= metrics_interval * 0.9:
+            metrics_buf.append(metrics_sample(caps, inv))
+            del metrics_buf[:-METRICS_BUF_MAX]
+            last_sample_mono = time.monotonic()
+
         body = {
             "agent_version": AGENT_VERSION,
             "capabilities": caps,
@@ -560,6 +825,9 @@ def run():
         }
         if send_full or h != last_acked_hash:
             body["inventory"] = inv
+        metrics_batch = list(metrics_buf)
+        if metrics_batch:
+            body["metrics_samples"] = metrics_batch
 
         try:
             resp = http_json("POST", f"{state['api_base']}/nodes/{node_id}/checkin", body=body, headers=headers)
@@ -568,6 +836,8 @@ def run():
             send_full = bool(result.get("resync"))
             interval = int(result.get("poll_after_seconds") or interval)
             backoff = interval
+            # 200 = stored (dedupe makes resends harmless) — clear what was sent.
+            del metrics_buf[:len(metrics_batch)]
 
             # Config-as-data: adopt central's currently-published endpoints.
             endpoints = result.get("endpoints") or {}
@@ -576,6 +846,13 @@ def run():
                 log(f"central republished api_base: {state['api_base']} -> {new_base} (adopting)")
                 state["api_base"] = new_base
                 save_state(state)
+            for key in ("log_ingest", "log_encodings"):
+                if adopt_endpoints and endpoints.get(key) and endpoints.get(key) != state.get(key):
+                    state[key] = endpoints[key]
+                    save_state(state)
+
+            if ship_logs_enabled:
+                logs_max_batch = ship_pending_logs(state, headers, inv, logs_tail, logs_max_batch)
 
             try:
                 cmds = http_json("GET", f"{state['api_base']}/nodes/{node_id}/commands", headers=headers)
