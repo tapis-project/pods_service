@@ -141,6 +141,7 @@ The edge release. Pods learned to leave the cluster.
 - An API client whose token fails validation gets an explicit 403 instead of the browser OAuth redirect; only browser navigations still get bounced to re-login.
 - `config_content` writes honor `sub_path` — the file used to be seeded at the volume root while the pod mounted only the subdirectory, so the config never appeared.
 - Adopted pods are never claimed by the stack member matcher, `depends_on` works in both directions with adopted pods, and leaving a stack prunes dangling dependency references (a missing dependency hard-blocks the dependent's next start).
+- Action-log validators seed only when the log is empty — with assignment validation on, the creation entry was silently clobbering appended entries.
 
 
 ## 26Q2.1
