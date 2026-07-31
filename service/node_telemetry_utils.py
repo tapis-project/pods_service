@@ -383,6 +383,9 @@ AGENT_SETTING_DEFS = {
     "log_encoding": ("enum", ["auto", "identity", "gzip", "zstd"]),
     # storage watch: structured per-path entries (see sanitize_watch_paths)
     "watch_paths": "watches",
+    # agent self-update gate — default OFF; the agent refuses update commands
+    # without it, and the trigger endpoint prechecks it for a clear error
+    "allow_self_update": "bool",
 }
 
 

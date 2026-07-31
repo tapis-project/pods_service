@@ -134,6 +134,7 @@ The edge release. Pods learned to leave the cluster.
 - Command dispatcher (exactly-once delivery over the agent's existing poll) and an edge benchmark suite: compression matrix, wire-path probes, latency legs, Docker socket cost, and clock skew. Every cold start also self-documents through startup milestones.
 - **Agent settings channel** — cadence, log filters, and container globs are edited centrally and adopted by the agent within one heartbeat, no redeploy. The box can pin any setting with an env var and wins. Every change and every adoption lands in a per-node audit ledger.
 - **Storage watch** — point a node at `/scratch` with a `90%` or `200G` threshold and get ledger warnings with hysteresis, plus disk usage graphed against the real filesystem size. Scans are I/O-budgeted so watching never competes with real work.
+- **Remote agent lifecycle** — restart and self-update from the UI. Updates are sha256-verified against a hash the agent fetches separately, install atomically with a fallback copy, and survive container restarts. A crash-loop guard abandons a bad update after three failed handoffs, so a broken update costs a few restarts, never the node.
 
 ### Bug fixes:
 - Permission guards return proper 4xx codes instead of bare errors that mapped to 500.
