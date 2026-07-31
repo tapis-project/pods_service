@@ -76,6 +76,36 @@ docs live at https://tapis.readthedocs.io/en/latest/technical/pods.html.
 3. Watch it: `docker logs -f pods-agent`, then `GET /pods/nodes/edge-dev` — `liveness`
    should read `live`, and capabilities should include `runtime.docker`.
 
+## How command delivery works (long-poll)
+
+The agent is the only side that ever opens a connection — edges live behind
+NAT/firewalls, so central can never dial out. That never changes. What the
+long-poll adds (agent 0.5.0+ against a central that advertises `commands_wait`
+in its checkin endpoints) is central *answering slowly on purpose*:
+
+1. Between heartbeats, the agent sends `GET /nodes/{id}/commands?wait=20` —
+   an ordinary outbound GET.
+2. If nothing is queued, central **holds the request open** for up to that many
+   seconds, re-checking the queue (and the settings overlay) about once a
+   second. Empty at the deadline → it answers "nothing", and the agent
+   immediately sends the next one. The result is a standing "call me when you
+   have something" line built entirely of agent-initiated requests — NATs and
+   proxies see nothing unusual, and a held connection costs neither side CPU.
+3. The moment someone queues a command (Update, Restart, Bench, Decommission)
+   or changes the node's settings, central ends the hold and the response
+   carries the command and/or the fresh settings overlay. Delivery latency
+   drops from "up to one checkin interval" to roughly one round-trip.
+
+Nothing about the queue changes: commands still live in the same table with
+the same exactly-once delivery (queued → delivered atomically) — long-polling
+only moves *when* the dequeue attempt happens, never the order or semantics.
+Heartbeat checkins continue at their normal cadence regardless (liveness,
+metrics, status, log shipping); the long-poll just fills the silence between
+them. If the long-poll errors (central restarting, network blip), the agent
+falls back to a plain sleep until the next heartbeat and tries again — offline
+remains a normal state. Older agents ignore `commands_wait` and keep classic
+polling; older centrals never advertise it and agents never hold. No flag day.
+
 ## Behavior notes
 
 - **Tokens**: the join response's `node_token` (`pna_...`) is stored in `state.json`

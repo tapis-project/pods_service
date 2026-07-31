@@ -77,7 +77,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 
-AGENT_VERSION = "0.4.1"
+AGENT_VERSION = "0.5.1"
 TOKEN_HEADER = "X-Pods-Node-Token"
 DOCKER_SOCK = os.environ.get("DOCKER_SOCK", "/var/run/docker.sock")
 K8S_SA_DIR = "/var/run/secrets/kubernetes.io/serviceaccount"
@@ -1703,6 +1703,100 @@ def do_decommission_command(state, headers, cid):
     raise SystemExit(0)
 
 
+def adopt_central_settings(state, new_settings):
+    """Adopt a central settings overlay (from a checkin response OR a long-poll
+    commands response — both carry it). Env pins still win inside setting();
+    persisting in state keeps last-adopted values across offline restarts.
+    Returns True when something actually changed."""
+    if new_settings is None or new_settings == CENTRAL_SETTINGS:
+        return False
+    log(f"central settings adopted: {json.dumps(new_settings, sort_keys=True)}")
+    CENTRAL_SETTINGS.clear()
+    CENTRAL_SETTINGS.update(new_settings)
+    state["central_settings"] = dict(new_settings)
+    save_state(state)
+    return True
+
+
+def handle_commands(pending, state, headers, caps, inv):
+    """Execute delivered commands — shared by the post-checkin one-shot poll
+    and the long-poll line. restart/update/decommission never return (they
+    exec or exit); bench blocks one pass; failures are fault-isolated."""
+    for cmd in pending:
+        cid, ctype = cmd.get("command_id"), cmd.get("type")
+        if ctype == "bench":
+            log(f"bench command {cid} — running warm suite (blocks this loop pass, ~10-20s)")
+            try:
+                report = run_bench_suite(cmd.get("params") or {}, state, headers, caps, inv)
+                post_command_result(state, headers, cid, "done", report)
+                log(f"bench {cid} complete in {report['meta']['duration_ms']}ms")
+            except Exception as e:
+                post_command_result(state, headers, cid, "error",
+                                    {"error": f"{type(e).__name__}: {e}"[:300]})
+                log(f"bench {cid} FAILED: {e}")
+        elif ctype == "decommission":
+            do_decommission_command(state, headers, cid)  # never returns
+        elif ctype == "restart":
+            log(f"restart command {cid} — acking, then re-exec'ing in place")
+            do_restart_command(state, headers, cid)  # never returns
+        elif ctype == "update":
+            log(f"self-update command {cid} — starting (gate, fetch, verify, install, exec)")
+            try:
+                do_update_command(state, headers, cid)  # never returns on success
+            except Exception as e:
+                detail = f"{type(e).__name__}: {e}"[:400]
+                log(f"self-update {cid} FAILED: {detail}")
+                try:
+                    post_command_result(state, headers, cid, "error", {"error": detail})
+                except Exception:
+                    pass
+        else:
+            log(f"unsupported command type '{ctype}' ({cid}) — reporting error")
+            post_command_result(state, headers, cid, "error",
+                                {"error": f"unsupported command type '{ctype}'"})
+
+
+def longpoll_commands_until(state, headers, caps, inv, deadline, wait_hint):
+    """The long-poll line (transport discipline #3): spend the gap between
+    heartbeats holding GET /commands?wait=N open. Central answers the moment a
+    command is queued or the settings overlay changes — commands and settings
+    both land sub-second instead of next-heartbeat. Direction never changes:
+    these are ordinary agent-initiated GETs that central answers slowly on
+    purpose, so NAT/proxies see nothing unusual. Any error falls back to a
+    plain interruptible sleep for the remainder — offline stays a normal state.
+    """
+    node_id = state["node_id"]
+    while not _stop["flag"]:
+        remaining = deadline - time.monotonic()
+        if remaining <= 2:
+            return
+        wait_s = max(1, int(min(wait_hint, remaining - 1)))
+        try:
+            resp = http_json(
+                "GET",
+                f"{state['api_base']}/nodes/{node_id}/commands?wait={wait_s}",
+                headers=headers, timeout=wait_s + 15)
+        except Exception as e:
+            log(f"long-poll interrupted ({getattr(e, 'reason', e)}) — plain sleep "
+                f"until the next heartbeat")
+            while not _stop["flag"] and time.monotonic() < deadline:
+                time.sleep(1)
+            return
+        milestone("first_longpoll_ok")
+        result = resp.get("result", {})
+        adopted = adopt_central_settings(state, result.get("settings"))
+        pending = result.get("commands") or []
+        if pending:
+            handle_commands(pending, state, headers, caps, inv)
+        if adopted:
+            # Report the adoption NOW: applied_settings ride checkin status, and
+            # central (and the UI, and the update-trigger precheck) all read the
+            # REPORTED value — so cut the long-poll short and let the loop take
+            # its next heartbeat immediately instead of at the scheduled time.
+            log("settings adopted via long-poll — heartbeating early to report applied state")
+            return
+
+
 def deletion_park_message(node_id):
     """Logged (loudly) when central confirms this node's row is gone. The agent
     parks — hourly re-check only — and tells the human exactly how to remove it.
@@ -1848,6 +1942,7 @@ def run():
     log(f"checkin loop starting for node '{node_id}' against {state['api_base']} (interval {interval}s)")
     record_container_milestones()
     while not _stop["flag"]:
+        checkin_ok = False
         caps = detect_capabilities(state.get("namespace"))
         milestone("caps_detected")
         inv = collect_inventory(caps, state.get("namespace"))
@@ -1915,61 +2010,25 @@ def run():
             # Facts, not routing — adopt regardless of adopt_endpoints (an agent
             # with adoption off still needs to KNOW what central serves; the
             # fetch URL derives from its own api_base, see agent_source_url).
-            for key in ("agent_source_sha256", "agent_source_version"):
+            for key in ("agent_source_sha256", "agent_source_version", "commands_wait"):
                 if endpoints.get(key) and endpoints.get(key) != state.get(key):
                     state[key] = endpoints[key]
                     save_state(state)
 
             # Settings channel: adopt central's per-node agent settings (env pins win
             # inside setting(); the settings themselves are whitelisted server-side).
-            new_settings = result.get("settings")
-            if new_settings is not None and new_settings != CENTRAL_SETTINGS:
-                log(f"central settings adopted: {json.dumps(new_settings, sort_keys=True)}")
-                CENTRAL_SETTINGS.clear()
-                CENTRAL_SETTINGS.update(new_settings)
-                state["central_settings"] = dict(new_settings)
-                save_state(state)
+            adopt_central_settings(state, result.get("settings"))
 
             if setting("ship_logs"):
                 logs_max_batch = ship_pending_logs(state, headers, inv, setting("logs_tail"), logs_max_batch)
 
             try:
                 cmds = http_json("GET", f"{state['api_base']}/nodes/{node_id}/commands", headers=headers)
-                pending = (cmds.get("result") or {}).get("commands") or []
-                for cmd in pending:
-                    cid, ctype = cmd.get("command_id"), cmd.get("type")
-                    if ctype == "bench":
-                        log(f"bench command {cid} — running warm suite (blocks this loop pass, ~10-20s)")
-                        try:
-                            report = run_bench_suite(cmd.get("params") or {}, state, headers, caps, inv)
-                            post_command_result(state, headers, cid, "done", report)
-                            log(f"bench {cid} complete in {report['meta']['duration_ms']}ms")
-                        except Exception as e:
-                            post_command_result(state, headers, cid, "error",
-                                                {"error": f"{type(e).__name__}: {e}"[:300]})
-                            log(f"bench {cid} FAILED: {e}")
-                    elif ctype == "decommission":
-                        do_decommission_command(state, headers, cid)  # never returns
-                    elif ctype == "restart":
-                        log(f"restart command {cid} — acking, then re-exec'ing in place")
-                        do_restart_command(state, headers, cid)  # never returns
-                    elif ctype == "update":
-                        log(f"self-update command {cid} — starting (gate, fetch, verify, install, exec)")
-                        try:
-                            do_update_command(state, headers, cid)  # never returns on success
-                        except Exception as e:
-                            detail = f"{type(e).__name__}: {e}"[:400]
-                            log(f"self-update {cid} FAILED: {detail}")
-                            try:
-                                post_command_result(state, headers, cid, "error", {"error": detail})
-                            except Exception:
-                                pass
-                    else:
-                        log(f"unsupported command type '{ctype}' ({cid}) — reporting error")
-                        post_command_result(state, headers, cid, "error",
-                                            {"error": f"unsupported command type '{ctype}'"})
+                handle_commands((cmds.get("result") or {}).get("commands") or [],
+                                state, headers, caps, inv)
             except (urllib.error.HTTPError, urllib.error.URLError):
                 pass  # command poll is best-effort; next loop retries
+            checkin_ok = True
 
         except urllib.error.HTTPError as e:
             if e.code == 403:
@@ -1995,10 +2054,16 @@ def run():
             log(f"central unreachable ({reason}) — offline is a normal state, backing off {min(backoff * 2, 600)}s")
             backoff = min(max(backoff * 2, 5), 600)
 
-        # Interruptible sleep
+        # Between heartbeats: long-poll the command line when central healthy
+        # AND advertised the capability; otherwise the classic interruptible
+        # sleep (offline, backoff, or an older central).
         deadline = time.monotonic() + backoff
-        while not _stop["flag"] and time.monotonic() < deadline:
-            time.sleep(1)
+        wait_hint = int(state.get("commands_wait") or 0)
+        if checkin_ok and wait_hint > 0:
+            longpoll_commands_until(state, headers, caps, inv, deadline, wait_hint)
+        else:
+            while not _stop["flag"] and time.monotonic() < deadline:
+                time.sleep(1)
 
     log("stop requested — exiting cleanly")
     return 0

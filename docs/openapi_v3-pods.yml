@@ -2338,7 +2338,13 @@ paths:
         \ first consumer: bench).\n\nQueued commands are handed over EXACTLY ONCE\
         \ (status -> delivered here); the agent\nreports completion via POST .../commands/{command_id}/result.\
         \ No redelivery in v1 \u2014\na delivered-but-never-completed command stays\
-        \ visible in the run history as such."
+        \ visible in the run history as such.\n\nWith ?wait=N this becomes a LONG\
+        \ POLL: an empty queue holds the request open up to\nN seconds, so a standing\
+        \ \"call me when you have something\" line exists made purely\nof agent-initiated\
+        \ GETs \u2014 queue semantics unchanged, only WHEN the dequeue attempt\nhappens\
+        \ moves. The response always piggybacks the current settings overlay, and\
+        \ a\nsettings change ends the hold early \u2014 command delivery AND settings\
+        \ adoption both\ndrop to sub-second on long-polling agents."
       operationId: get_node_commands
       parameters:
       - name: node_id
@@ -2347,6 +2353,21 @@ paths:
         schema:
           type: string
           title: Node Id
+      - name: wait
+        in: query
+        required: false
+        schema:
+          type: integer
+          description: "Long-poll hold in seconds (0 = classic immediate poll; clamped\
+            \ to the advertised commands_wait). While held, the server re-checks ~1/s\
+            \ and answers EARLY on a new command or a settings change \u2014 in-process\
+            \ triggers wake it instantly."
+          default: 0
+          title: Wait
+        description: "Long-poll hold in seconds (0 = classic immediate poll; clamped\
+          \ to the advertised commands_wait). While held, the server re-checks ~1/s\
+          \ and answers EARLY on a new command or a settings change \u2014 in-process\
+          \ triggers wake it instantly."
       responses:
         '200':
           description: Successful Response
@@ -2564,9 +2585,11 @@ paths:
       description: "Replace this node's central agent settings (node ADMIN permission).\n\
         \nThe dict is a SPARSE overlay \u2014 absent keys mean agent defaults. Unknown\
         \ or\ninvalid keys are ignored (reported in the response message). The agent\n\
-        adopts changes on its next heartbeat; env vars on the box always win over\n\
-        these, and the agent reports env-pinned keys back in its status. Every\nchange\
-        \ (and every agent adoption) lands in the node's action ledger."
+        adopts changes within seconds on long-polling (0.5.0+) agents \u2014 the change\n\
+        wakes any held commands poll, which piggybacks the new overlay \u2014 and\
+        \ on the\nnext heartbeat otherwise; env vars on the box always win over these,\
+        \ and\nthe agent reports env-pinned keys back in its status. Every change\
+        \ (and\nevery agent adoption) lands in the node's action ledger."
       operationId: update_node_settings
       parameters:
       - name: node_id
@@ -6482,11 +6505,12 @@ components:
     NodeCheckinResult:
       properties:
         endpoints:
-          additionalProperties:
-            type: string
+          additionalProperties: true
           type: object
           title: Endpoints
-          description: Current central endpoints (api_base, login_server, ...).
+          description: Current central endpoints + capabilities (api_base, login_server,
+            log_ingest, agent_source*, commands_wait, ...). Values are strings except
+            numeric capabilities like commands_wait.
         resync:
           type: boolean
           title: Resync
@@ -6629,6 +6653,13 @@ components:
           type: integer
           title: Poll After Seconds
           description: Seconds until the agent should poll again.
+        settings:
+          additionalProperties: true
+          type: object
+          title: Settings
+          description: "Current central agent-settings overlay \u2014 piggybacked\
+            \ on every commands response so a long-poll wake delivers settings changes\
+            \ in the same round-trip (adoption drops from one-heartbeat to sub-second)."
       additionalProperties: false
       type: object
       required:

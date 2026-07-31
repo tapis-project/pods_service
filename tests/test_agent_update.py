@@ -196,3 +196,19 @@ def test_agent_source_url_derives_when_not_adopted():
     assert agent.agent_source_url(st) == "http://pods-api:8000/pods/nodes/mickey/agent-source"
     st["agent_source"] = "https://tacc.tapis.io/v3/pods/nodes/mickey/agent-source"
     assert agent.agent_source_url(st) == st["agent_source"]
+
+
+def test_adopt_central_settings_shared_helper():
+    with TmpState():
+        agent.CENTRAL_SETTINGS.clear()
+        state = {}
+        agent.adopt_central_settings(state, {"logs_tail": 321})
+        assert agent.CENTRAL_SETTINGS == {"logs_tail": 321}
+        assert state["central_settings"] == {"logs_tail": 321}
+        assert (agent.load_state() or {}).get("central_settings") == {"logs_tail": 321}
+        # unchanged overlay = no-op (no state churn)
+        agent.adopt_central_settings(state, {"logs_tail": 321})
+        # None = nothing advertised = no-op
+        agent.adopt_central_settings(state, None)
+        assert agent.CENTRAL_SETTINGS == {"logs_tail": 321}
+        agent.CENTRAL_SETTINGS.clear()

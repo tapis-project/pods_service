@@ -256,7 +256,7 @@ class NodeJoinResult(TapisApiModel):
 class NodeCheckinResult(TapisApiModel):
     # Config-as-data: central publishes its current endpoints on every checkin so edges
     # never cache stale values (bootstrap values are first-contact only).
-    endpoints: Dict[str, str] = Field(..., description="Current central endpoints (api_base, login_server, ...).")
+    endpoints: Dict[str, Any] = Field(..., description="Current central endpoints + capabilities (api_base, login_server, log_ingest, agent_source*, commands_wait, ...). Values are strings except numeric capabilities like commands_wait.")
     resync: bool = Field(False, description="True when central wants the full inventory on the next checkin.")
     poll_after_seconds: int = Field(..., description="Seconds until the agent should check in again.")
     desired: Dict[str, Any] = Field(default_factory=dict, description="Desired state for this node (reserved; command dispatch lands with the agent).")
@@ -266,6 +266,7 @@ class NodeCheckinResult(TapisApiModel):
 class NodeCommandsResult(TapisApiModel):
     commands: List[Dict[str, Any]] = Field([], description="Pending commands for this node.")
     poll_after_seconds: int = Field(..., description="Seconds until the agent should poll again.")
+    settings: Dict[str, Any] = Field(default_factory=dict, description="Current central agent-settings overlay — piggybacked on every commands response so a long-poll wake delivers settings changes in the same round-trip (adoption drops from one-heartbeat to sub-second).")
 
 
 # ---------------------------------------------------------------------------
