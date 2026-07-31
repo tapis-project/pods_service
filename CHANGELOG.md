@@ -139,6 +139,7 @@ The edge release. Pods learned to leave the cluster.
 - **Long-poll command delivery** — the agent holds a request open between heartbeats, so a restart you click lands in under a second, and settings adopt just as fast. Idle cost is near zero, and older agents keep working unchanged.
 - **Node shell** — one-shot commands with recorded exit code and output, auditable after the fact. Deliberately not a PTY, and enabled only by an environment variable on the box itself: central cannot turn on arbitrary code execution remotely.
 - **No-downtime token rotation** — central mints a new token, both work during the handshake, and the old one is revoked only once the agent proves it persisted the new one by using it.
+- Agents can share their dialable addresses (tailnet and LAN) so publishing a port offers one-click suggestions instead of a hand-typed host. Off by default — addresses are new disclosure, so an operator or node admin opts in.
 
 ### Bug fixes:
 - Permission guards return proper 4xx codes instead of bare errors that mapped to 500.

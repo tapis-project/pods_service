@@ -157,6 +157,13 @@ polling; older centrals never advertise it and agents never hold. No flag day.
   silently. `PODS_AGENT_HOST_CMDS=ask` (default) prompts (Y/n) on a terminal and refuses
   when there's no TTY; `always` pre-approves for unattended installs; `never` is a
   hard opt-out. Every skip is logged with the env that controls it.
+- **Address sharing (default OFF)**: `PODS_AGENT_SHARE_ADDRESSES=true` (or the
+  per-node setting from central) adds an `addresses` block to checkin status —
+  tailnet IPv4/IPv6/DNS name (only while the tailscale daemon is actually
+  Running; stale IPs from a stopped daemon are never shipped) plus the primary
+  LAN IP. This is what lets TapisUI autofill a publish route's `backend_host`
+  instead of making you type it. Unlike the hostname (shared by default),
+  addresses are treated as new disclosure — nothing ships until someone opts in.
 - **Tailnet**: if join returns a headscale preauth key, a `tailscale` binary exists,
   tailscale is NOT already in use (a host runs one tailscale — an existing tailnet is
   never touched), and you confirm, the agent runs `tailscale up`. In every other

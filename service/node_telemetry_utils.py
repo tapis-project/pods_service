@@ -368,6 +368,9 @@ def sanitize_watch_paths(value: Any) -> Tuple[List[Dict[str, Any]], List[str]]:
 AGENT_SETTING_DEFS = {
     # key: (kind, validator/clamp)
     "share_hostname": "bool",
+    # addresses (tailnet IPs/name + LAN IP) — agent default OFF; enabling here
+    # (the UI Options toggle) is the intended opt-in path, env pin on the box wins
+    "share_addresses": "bool",
     "metrics": "bool",
     "check_docker": "bool",
     "check_k8s": "bool",
