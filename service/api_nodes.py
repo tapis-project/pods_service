@@ -52,6 +52,7 @@ from node_telemetry_utils import (
     normalize_metric_samples,
     clamp_window_step,
     downsample_samples,
+    latest_extras_caps,
     sanitize_bench_settings,
     supported_encodings,
     METRIC_FIELDS,
@@ -455,6 +456,24 @@ async def checkin_node(node_id: str, checkin: NodeCheckinRequest, request: Reque
         old_applied = (node.status or {}).get("applied_settings")
         if new_applied is not None and new_applied != old_applied:
             node.log_action(f"agent adopted settings: {json.dumps(new_applied, sort_keys=True)[:400]}")
+        # Storage-watch ledger: EDGE-triggered only — a path crossing into warn
+        # and a warn clearing both get one entry; steady states never ledger.
+        new_watches = checkin.status.get("watches")
+        old_watches = (node.status or {}).get("watches") or {}
+        if isinstance(new_watches, dict):
+            for path, w in new_watches.items():
+                if not isinstance(w, dict):
+                    continue
+                old_w = old_watches.get(path) if isinstance(old_watches.get(path), dict) else {}
+                new_state, old_state = w.get("state"), old_w.get("state")
+                if new_state == "warn" and old_state != "warn":
+                    node.log_action(
+                        f"storage watch WARN: {path} at {w.get('pct', '?')}% "
+                        f"({w.get('used_h', '?')} used, threshold {w.get('threshold', '?')})")
+                elif new_state == "ok" and old_state == "warn":
+                    node.log_action(
+                        f"storage watch cleared: {path} back under threshold "
+                        f"({w.get('pct', '?')}%, {w.get('used_h', '?')} used)")
         node.status = checkin.status
 
     resync = False
@@ -858,10 +877,14 @@ async def get_node_metrics(
         .order_by(NodeMetric.ts.asc()))
     metric_rows = store.run("execute", stmt, scalars=True, all=True)
 
-    sample_dicts = [{"ts": r.ts, **{f: getattr(r, f) for f in METRIC_FIELDS}} for r in metric_rows]
+    sample_dicts = [
+        {"ts": r.ts, "extras": r.extras, **{f: getattr(r, f) for f in METRIC_FIELDS}}
+        for r in metric_rows]
     series = downsample_samples(sample_dicts, start_epoch, window_s, step_s)
 
-    caps = {}
+    # Caps = static y-axis ceilings: fixed gauges + every extras ":total" key
+    # (per-watched-path filesystem sizes), latest known value wins.
+    caps: dict = latest_extras_caps(sample_dicts)
     for r in reversed(metric_rows):
         if "cpu_count" not in caps and r.cpu_count is not None:
             caps["cpu_count"] = r.cpu_count

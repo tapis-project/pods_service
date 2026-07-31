@@ -22,8 +22,13 @@ from node_telemetry_utils import (
     normalize_metric_samples,
     clamp_window_step,
     downsample_samples,
+    latest_extras_caps,
+    parse_size_or_pct,
+    sanitize_agent_settings,
     sanitize_bench_settings,
+    sanitize_watch_paths,
     supported_encodings,
+    EXTRAS_MAX_KEYS,
     METRIC_FIELDS,
     BENCH_DEFAULT_ENCODINGS,
     BENCH_DEFAULT_CORPORA,
@@ -275,3 +280,92 @@ def test_bench_settings_empty_selections_fall_back():
     s = sanitize_bench_settings({"encodings": ["nope"], "line_bytes": [1]})
     assert s["encodings"] == BENCH_DEFAULT_ENCODINGS
     assert len(s["line_bytes"]) == 3
+
+
+# ── storage watch: threshold parse + watch_paths sanitizer ───────────────────
+
+def test_parse_size_or_pct():
+    assert parse_size_or_pct("90%") == ("pct", 90.0)
+    assert parse_size_or_pct("200G") == ("bytes", 200 * 1024 ** 3)
+    assert parse_size_or_pct("1.5TiB") == ("bytes", 1.5 * 1024 ** 4)
+    assert parse_size_or_pct("512M") == ("bytes", 512 * 1024 ** 2)
+    assert parse_size_or_pct("100B") == ("bytes", 100.0)
+    assert parse_size_or_pct("0%") is None          # pct must be 0 < p <= 100
+    assert parse_size_or_pct("101%") is None
+    assert parse_size_or_pct("banana") is None
+    assert parse_size_or_pct("90") is None          # bare number rejected — ambiguous
+    assert parse_size_or_pct(90) is None            # non-string rejected
+
+
+def test_sanitize_watch_paths_valid_and_defaults():
+    clean, ignored = sanitize_watch_paths([
+        {"path": "/scratch", "warn": "90%", "interval_s": 1800},
+        {"path": "/data/", "du": False},            # trailing slash normalized
+    ])
+    assert clean == [
+        {"path": "/scratch", "warn": "90%", "interval_s": 1800},
+        {"path": "/data", "du": False},
+    ]
+    assert ignored == []
+
+
+def test_sanitize_watch_paths_rejects_and_reports():
+    clean, ignored = sanitize_watch_paths([
+        {"path": "relative/nope"},                   # not absolute
+        {"path": "/ok", "warn": "banana", "bogus": 1},
+        "just-a-string",
+        {"path": "/ok"},                             # duplicate path
+        {"path": "/fine", "interval_s": 5},          # clamped up to 300
+    ])
+    assert [e["path"] for e in clean] == ["/ok", "/fine"]
+    assert clean[0] == {"path": "/ok"}               # bad warn + bogus dropped
+    assert clean[1]["interval_s"] == 300
+    assert any(".warn" in n for n in ignored)
+    assert any(".bogus" in n for n in ignored)
+    assert any("not an object" in n for n in ignored)
+    assert any("duplicate" in n for n in ignored)
+    assert any(".path" in n for n in ignored)
+
+
+def test_sanitize_agent_settings_carries_watch_paths():
+    clean, ignored = sanitize_agent_settings({
+        "watch_paths": [{"path": "/scratch", "warn": "80%"}],
+        "ship_logs": True,
+    })
+    assert clean["watch_paths"] == [{"path": "/scratch", "warn": "80%"}]
+    assert clean["ship_logs"] is True
+    assert ignored == []
+
+
+# ── extras: normalize + downsample + caps ────────────────────────────────────
+
+def test_normalize_metric_samples_extras():
+    rows, dropped = normalize_metric_samples([
+        {"ts": NOW.isoformat(), "extras": {"disk:/scratch:used": 100, "disk:/scratch:total": 1000}},
+        {"ts": NOW.isoformat(), "load1": 0.5, "extras": {"bad": float("nan"), "also_bad": True, 3: 1}},
+        {"ts": NOW.isoformat(), "extras": {"empty_after_clean": float("inf")}},  # dropped: no values at all
+    ], NOW, 10)
+    assert dropped == 1
+    assert rows[0]["extras"] == {"disk:/scratch:used": 100.0, "disk:/scratch:total": 1000.0}
+    assert rows[1]["extras"] is None and rows[1]["load1"] == 0.5
+
+
+def test_normalize_metric_samples_extras_key_cap():
+    big = {f"k{i}": float(i) for i in range(EXTRAS_MAX_KEYS + 10)}
+    rows, _ = normalize_metric_samples([{"ts": NOW.isoformat(), "extras": big}], NOW, 10)
+    assert len(rows[0]["extras"]) == EXTRAS_MAX_KEYS
+
+
+def test_downsample_extras_series_and_total_caps():
+    base = datetime(2026, 7, 30, 12, 0, 0)
+    rows = [
+        {"ts": base, "extras": {"disk:/s:used": 100.0, "disk:/s:total": 1000.0}},
+        {"ts": base + timedelta(seconds=30), "extras": {"disk:/s:used": 200.0, "disk:/s:total": 1000.0}},
+        {"ts": base + timedelta(seconds=90), "extras": None},
+    ]
+    start = base.replace(tzinfo=__import__("datetime").timezone.utc).timestamp()
+    series = downsample_samples(rows, start, 600, 60)
+    assert series["disk:/s:used"] == [[start, 150.0]]        # two samples meaned in bucket 0
+    assert "disk:/s:total" not in series                     # :total is a cap, never a series
+    caps = latest_extras_caps(rows)
+    assert caps == {"disk:/s:total": 1000.0}
