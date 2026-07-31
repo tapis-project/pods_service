@@ -370,26 +370,84 @@ async def get_node(node_id: str):
     return ok(result=node.display(), msg="Node retrieved successfully.")
 
 
+DECOMMISSION_TIMEOUT_MINUTES = lambda: int(os.environ.get("NODES_DECOMMISSION_TIMEOUT_MINUTES", "60"))
+
+
+def _hard_delete_node(node: Node):
+    """The full cascade: routes, telemetry, commands, then the row. The agent's
+    token stops working the instant the row is gone."""
+    for route in Route.db_get_for_node(node.node_id, tenant=g.request_tenant_id, site=g.site_id):
+        route.db_delete()
+    store = _telemetry_store(NodeLog)
+    store.run("execute", sa_delete(NodeLog).where(NodeLog.node_id == node.node_id))
+    store.run("execute", sa_delete(NodeMetric).where(NodeMetric.node_id == node.node_id))
+    store.run("execute", sa_delete(NodeCommand).where(NodeCommand.node_id == node.node_id))
+    node.db_delete()
+
+
 @router.delete(
     "/pods/nodes/{node_id}",
     tags=["Nodes"],
     summary="delete_node",
     operation_id="delete_node",
     response_model=NodeDeleteResponse)
-async def delete_node(node_id: str):
-    """Delete a node. The agent's token stops working immediately."""
-    logger.info(f"DELETE /pods/nodes/{node_id} - Top of delete_node.")
+async def delete_node(
+    node_id: str,
+    decommission: bool = Query(False, description="Instead of deleting immediately, ask the agent to remove itself first: the row enters a decommissioning state, the agent picks up a decommission command on its next poll, confirms, and the row hard-deletes on that confirmation (or after the timeout). Plain delete always works as the force path."),
+):
+    """Delete a node (node ADMIN).
+
+    Plain delete: the row + routes + telemetry go now; the agent's token dies with
+    it, and the agent on the box parks itself within a few heartbeats (it is NOT
+    removed — the box owner removes it, and the agent logs the exact commands).
+
+    ?decommission=true: the polite ordering — the agent is asked to remove itself
+    FIRST (wipe its state/token, remove its own container when it can), and the
+    row deletes on the agent's confirmation or after the timeout. Plain delete
+    remains available the whole time as the immediate force path.
+    """
+    logger.info(f"DELETE /pods/nodes/{node_id} (decommission={decommission}) - Top of delete_node.")
     node = _get_node_or_404(node_id)
     # TODO Phase 2: expire the headscale node/preauth key so the machine leaves the tailnet.
-    # Routes die with their node — they'd otherwise keep rendering into the proxy config.
-    for route in Route.db_get_for_node(node_id, tenant=g.request_tenant_id, site=g.site_id):
-        route.db_delete()
-    # Telemetry + commands die with the node (rows would otherwise orphan).
-    store = _telemetry_store(NodeLog)
-    store.run("execute", sa_delete(NodeLog).where(NodeLog.node_id == node_id))
-    store.run("execute", sa_delete(NodeMetric).where(NodeMetric.node_id == node_id))
-    store.run("execute", sa_delete(NodeCommand).where(NodeCommand.node_id == node_id))
-    node.db_delete()
+
+    if decommission:
+        if not node.agent_token_hash:
+            # Never claimed — there is no agent to ask; instant delete is the
+            # honest interpretation, and the message says which path ran.
+            _hard_delete_node(node)
+            return ok(result="", msg="Node deleted immediately — it was never claimed, so there was no agent to decommission.")
+        if node.decommission_ts:
+            raise ResourceError(
+                f"Already decommissioning (since {node.decommission_ts}). The agent has "
+                f"until the {DECOMMISSION_TIMEOUT_MINUTES()}-minute timeout to confirm; "
+                f"a plain delete (no ?decommission) force-removes the row right now.", 409)
+        _expire_or_reject_active(node, "decommission", "decommission")
+        # A decommission supersedes any pending restart/update — mark them, don't 409.
+        store = _telemetry_store(NodeCommand)
+        store.run("execute",
+                  sa_update(NodeCommand)
+                  .where(NodeCommand.node_id == node.node_id,
+                         NodeCommand.type.in_(["restart", "update"]),
+                         NodeCommand.status.in_(["queued", "delivered"]))
+                  .values(status="error",
+                          result={"error": "superseded by decommission"},
+                          completed_ts=_utcnow()))
+        cmd = _queue_lifecycle_command(node, "decommission", {})
+        node.decommission_ts = _utcnow()
+        node.log_action(
+            f"decommission requested by '{getattr(g, 'username', '?')}' ({cmd.command_id[:14]}…) — "
+            f"agent will remove itself; row deletes on its confirmation or after "
+            f"{DECOMMISSION_TIMEOUT_MINUTES()} minutes")
+        node.db_update(user_update=False)
+        return ok(result="",
+                  msg=f"Decommission queued — the agent picks it up on its next poll (within one "
+                      f"checkin interval), removes what it can of itself (full removal bare-host and "
+                      f"docker-with-socket; a socket-less container still needs one docker rm), and "
+                      f"this node then deletes itself on the confirmation — or automatically after "
+                      f"{DECOMMISSION_TIMEOUT_MINUTES()} minutes. If you already stopped the agent "
+                      f"yourself it can never confirm: use plain delete to force-remove now.")
+
+    _hard_delete_node(node)
     return ok(result="", msg="Node deleted successfully.")
 
 
@@ -648,6 +706,24 @@ async def post_node_command_result(node_id: str, command_id: str, body: NodeComm
         node.log_action(
             f"agent {cmd.type} {'completed' if body.status == 'done' else 'FAILED'}"
             f" ({command_id[:14]}…){': ' + str(detail)[:200] if detail else ''}")
+        node.db_update(user_update=False)
+    elif cmd.type == "decommission":
+        if body.status == "done":
+            # The agent confirmed its removal plan — this ack is its last authed
+            # request by design (state/token are wiped right after posting it).
+            # The row and every dependent go now.
+            logger.info(
+                f"node {node.node_id}: agent confirmed decommission "
+                f"({result.get('outcome', '?')}: {str(result.get('detail', ''))[:200]}) — deleting row.")
+            _hard_delete_node(node)
+            return ok(result={"command_id": command_id, "status": body.status},
+                      msg="Decommission confirmed — node deleted.")
+        # error = the agent refused/failed; keep the row so the timeout or a
+        # force delete resolves it, and say why in the ledger.
+        node.log_action(
+            f"agent decommission FAILED ({command_id[:14]}…): "
+            f"{str(result.get('error', ''))[:200]} — row kept; force delete or the "
+            f"timeout will remove it")
         node.db_update(user_update=False)
     return ok(result={"command_id": command_id, "status": body.status},
               msg="Command result recorded.")

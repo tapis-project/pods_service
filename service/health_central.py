@@ -25,7 +25,11 @@ from kubernetes_utils import get_current_k8_services, get_current_k8_pods, rm_co
 from codes import AVAILABLE, DELETING, STOPPED, ERROR, REQUESTED, COMPLETE, RESTART, ON, OFF
 from stores import pg_store, SITE_TENANT_DICT
 from models_pods import Pod
+from models_node import Node
+from models_node_telemetry import NodeLog, NodeMetric
+from models_node_commands import NodeCommand
 from models_routes import Route
+from sqlalchemy import delete as sa_delete
 from models_templates_utils import combine_pod_and_template_recursively
 from models_volumes import Volume
 from models_snapshots import Snapshot
@@ -686,6 +690,44 @@ def set_traefik_proxy():
     update_traefik_configmap(tcp_proxy_info, http_proxy_info, postgres_proxy_info)
 
 
+def sweep_decommissioning_nodes(timeout_minutes=None):
+    """Hard-delete nodes whose decommission was never confirmed by the agent
+    within the timeout (agent offline/stopped — including 'the user already
+    stopped the thing', which is exactly the case the timeout exists for; the
+    UI also offers an immediate force delete). Explicit tenant iteration — no g
+    context in the health loop, per the background-task rules. Timeout is read
+    per call (NODES_DECOMMISSION_TIMEOUT_MINUTES, default 60) so tests can turn
+    it down without a restart. Returns the number of nodes removed.
+    """
+    if timeout_minutes is None:
+        timeout_minutes = int(os.environ.get("NODES_DECOMMISSION_TIMEOUT_MINUTES", "60"))
+    cutoff = datetime.utcnow() - timedelta(minutes=timeout_minutes)
+    removed = 0
+    for tenant in SITE_TENANT_DICT[conf.site_id]:
+        try:
+            store = pg_store[conf.site_id][tenant]
+            stale = store.run(
+                "execute",
+                select(Node).where(Node.decommission_ts != None,  # noqa: E711 — SQL IS NOT NULL
+                                   Node.decommission_ts < cutoff),
+                scalars=True, all=True)
+            for node in stale:
+                logger.warning(
+                    f"decommission timeout: node '{node.node_id}' (tenant {tenant}) requested "
+                    f"{node.decommission_ts}, no agent confirmation within {timeout_minutes} min — "
+                    f"hard-deleting row + routes + telemetry. If the agent is merely offline it "
+                    f"will park itself on its next checkin (404) and log removal instructions.")
+                store.run("execute", sa_delete(Route).where(Route.node_id == node.node_id))
+                store.run("execute", sa_delete(NodeLog).where(NodeLog.node_id == node.node_id))
+                store.run("execute", sa_delete(NodeMetric).where(NodeMetric.node_id == node.node_id))
+                store.run("execute", sa_delete(NodeCommand).where(NodeCommand.node_id == node.node_id))
+                store.run("execute", sa_delete(Node).where(Node.node_id == node.node_id))
+                removed += 1
+        except Exception as e:
+            logger.error(f"decommission sweep failed for tenant {tenant}: {e}")
+    return removed
+
+
 def main():
     """
     Main function for health checks.
@@ -731,6 +773,14 @@ def main():
                 check_volume_sizes()
             except Exception as e:
                 logger.error(f"Error running check_volume_sizes. e: {e}", exc_info=True)
+
+        # Decommission timeout sweep every ~3 min (60 ticks × 3 s) — cheap
+        # (one indexed-null select per tenant) and the timeout is coarse anyway.
+        if _tick % 60 == 0:
+            try:
+                sweep_decommissioning_nodes()
+            except Exception as e:
+                logger.error(f"Error running sweep_decommissioning_nodes. e: {e}", exc_info=True)
 
         _tick += 1
         time.sleep(3)

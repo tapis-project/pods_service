@@ -49,6 +49,7 @@ class NodeBaseRead(NodeBase):
     inventory_hash: Optional[str] = Field(None, description="Hash of the last stored workload inventory; agents compare against this to skip resending unchanged inventory.")
     last_checkin_ts: Optional[datetime] = Field(None, description="Time (UTC) of the last agent checkin.")
     claimed_at: Optional[datetime] = Field(None, description="Time (UTC) the node was claimed by an agent via join. Null = unclaimed.")
+    decommission_ts: Optional[datetime] = Field(None, description="Time (UTC) a decommission was requested. Non-null = waiting for the agent to remove itself; the row hard-deletes on the agent's confirmation or after the timeout.")
     claim_token_expires: Optional[datetime] = Field(None, description="Expiry of the outstanding single-use claim token, if any.")
     # Provided — headscale provisioning metadata
     ts_preauthkey_id: Optional[str] = Field(None, description="Identifier of the issued headscale preauth key.")

@@ -2172,7 +2172,14 @@ paths:
       tags:
       - Nodes
       summary: delete_node
-      description: Delete a node. The agent's token stops working immediately.
+      description: "Delete a node (node ADMIN).\n\nPlain delete: the row + routes\
+        \ + telemetry go now; the agent's token dies with\nit, and the agent on the\
+        \ box parks itself within a few heartbeats (it is NOT\nremoved \u2014 the\
+        \ box owner removes it, and the agent logs the exact commands).\n\n?decommission=true:\
+        \ the polite ordering \u2014 the agent is asked to remove itself\nFIRST (wipe\
+        \ its state/token, remove its own container when it can), and the\nrow deletes\
+        \ on the agent's confirmation or after the timeout. Plain delete\nremains\
+        \ available the whole time as the immediate force path."
       operationId: delete_node
       parameters:
       - name: node_id
@@ -2181,6 +2188,21 @@ paths:
         schema:
           type: string
           title: Node Id
+      - name: decommission
+        in: query
+        required: false
+        schema:
+          type: boolean
+          description: 'Instead of deleting immediately, ask the agent to remove itself
+            first: the row enters a decommissioning state, the agent picks up a decommission
+            command on its next poll, confirms, and the row hard-deletes on that confirmation
+            (or after the timeout). Plain delete always works as the force path.'
+          default: false
+          title: Decommission
+        description: 'Instead of deleting immediately, ask the agent to remove itself
+          first: the row enters a decommissioning state, the agent picks up a decommission
+          command on its next poll, confirms, and the row hard-deletes on that confirmation
+          (or after the timeout). Plain delete always works as the force path.'
       responses:
         '200':
           description: Successful Response
@@ -7136,6 +7158,15 @@ components:
           title: Claimed At
           description: Time (UTC) the node was claimed by an agent via join. Null
             = unclaimed.
+        decommission_ts:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Decommission Ts
+          description: Time (UTC) a decommission was requested. Non-null = waiting
+            for the agent to remove itself; the row hard-deletes on the agent's confirmation
+            or after the timeout.
         claim_token_expires:
           anyOf:
           - type: string
