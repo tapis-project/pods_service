@@ -291,6 +291,11 @@ def check_route_permissions(request):
         # self-update; both process-control, so node ADMIN
         ["/pods/nodes/{node_id}/restart", "POST", codes.ADMIN],
         ["/pods/nodes/{node_id}/update", "POST", codes.ADMIN],
+        # shell = arbitrary commands on the box (env-only enable at the edge);
+        # rotate = no-downtime agent token replacement. Both node ADMIN.
+        ["/pods/nodes/{node_id}/shell", "POST", codes.ADMIN],
+        ["/pods/nodes/{node_id}/shell", "GET", codes.READ],
+        ["/pods/nodes/{node_id}/rotate", "POST", codes.ADMIN],
         # route forwardAuth browser flow — like pod /auth, tenant from host, no token
         ["/pods/routes/{route_id}/auth", "GET", "NEED-BASEURL"],
         ["/pods/routes/{route_id}/auth/callback", "GET", "NEED-BASEURL"],

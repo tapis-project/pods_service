@@ -76,6 +76,43 @@ docs live at https://tapis.readthedocs.io/en/latest/technical/pods.html.
 3. Watch it: `docker logs -f pods-agent`, then `GET /pods/nodes/edge-dev` — `liveness`
    should read `live`, and capabilities should include `runtime.docker`.
 
+## Shell commands (off by default, env-only to enable)
+
+Central can ask the agent to run a one-shot shell command — but ONLY if the box
+itself opted in with `PODS_AGENT_ALLOW_SHELL=true`. This is the single
+capability central can never switch on remotely: unlike self-update (which
+fetches central's own hash-verified code), a shell command is arbitrary code,
+so its enable lives physically on the machine. The agent ignores any central
+setting of this key entirely, and the server's settings whitelist won't even
+store one.
+
+With it enabled: node-ADMIN users queue a command, the agent runs it through
+the box's shell as the agent's own user, and reports exit code, stdout, stderr,
+and duration. Every run is bounded — a server-clamped timeout (default 60 s,
+max 300 s) after which the process is killed, and output capped at 20 000
+characters per stream. The command and its exit code are written to the node's
+action ledger, so shell use is auditable after the fact. This is deliberately
+NOT an interactive shell: no PTY, no session, no streaming — one command, one
+recorded result. Long-running work belongs in a pod.
+
+## Token rotation with no downtime
+
+`/regenerate` revokes the agent's token immediately and parks the agent until a
+human re-runs a join on the box. Rotation is the online alternative:
+
+1. central mints a new token and stores it as *pending* — both the current and
+   the pending token authenticate from this moment,
+2. the new token rides a `rotate` command down the already-authed channel,
+3. the agent persists it and then confirms **using the new token**,
+4. that confirmation is the proof it landed: central promotes pending → active
+   and revokes the old one.
+
+If anything goes wrong — agent offline, crash between persist and confirm,
+confirmation that never arrives — the old token is still active, the agent
+keeps checking in, and the unconfirmed pending simply expires (default 60 min).
+An agent whose confirmation fails rolls its own state back to the old token, so
+both sides agree. Rotation never requires touching the box.
+
 ## How command delivery works (long-poll)
 
 The agent is the only side that ever opens a connection — edges live behind

@@ -68,6 +68,12 @@ class NodeBaseFull(NodeBaseRead):
     # Secrets — SHA-256 hashes only; raw tokens are returned exactly once at create/join.
     claim_token_hash: Optional[str] = Field(None, description="SHA-256 of the single-use claim token. Never returned.")
     agent_token_hash: Optional[str] = Field(None, description="SHA-256 of the node-scoped agent bearer token. Never returned.")
+    # No-downtime rotation: during a rotate the NEW token's hash lives here and BOTH
+    # tokens authenticate. The agent proves it persisted the new one by confirming
+    # with it, which promotes pending -> active and revokes the old — so a rotate
+    # that never lands leaves the running agent perfectly authed (no park, no re-join).
+    pending_agent_token_hash: Optional[str] = Field(None, description="SHA-256 of a newly minted agent token awaiting the agent's confirmation. Never returned.")
+    pending_token_ts: Optional[datetime] = Field(None, description="When the pending token was minted; unconfirmed pendings expire.")
     # Agent-reported workload inventory (hash-gated by the checkin protocol). Kept out of
     # display() so list/get responses stay light — a dedicated inventory endpoint can expose it.
     inventory: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON), description="Workload inventory last reported by the agent.")
@@ -101,6 +107,9 @@ class NodeBaseFull(NodeBaseRead):
         display.pop('permissions', None)
         display.pop('claim_token_hash', None)
         display.pop('agent_token_hash', None)
+        display.pop('pending_agent_token_hash', None)
+        # Rotation is a transient internal state — the ledger is its record.
+        display.pop('pending_token_ts', None)
         display.pop('inventory', None)
         display['liveness'] = self.liveness()
         display['last_checkin_age_seconds'] = self.checkin_age_seconds()

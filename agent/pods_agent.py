@@ -77,7 +77,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 
-AGENT_VERSION = "0.5.1"
+AGENT_VERSION = "0.6.0"
 TOKEN_HEADER = "X-Pods-Node-Token"
 DOCKER_SOCK = os.environ.get("DOCKER_SOCK", "/var/run/docker.sock")
 K8S_SA_DIR = "/var/run/secrets/kubernetes.io/serviceaccount"
@@ -114,7 +114,12 @@ _SETTING_ENVS = {
     "log_encoding": "PODS_AGENT_LOG_ENCODING",
     "watch_paths": "PODS_AGENT_WATCH_PATHS",
     "allow_self_update": "PODS_AGENT_ALLOW_SELF_UPDATE",
+    "allow_shell": "PODS_AGENT_ALLOW_SHELL",
 }
+# ENV-ONLY settings: central can never turn these on, not even by storing them
+# (the server's whitelist rejects the key too). Arbitrary command execution is
+# the one capability whose enable must live physically on the box.
+_ENV_ONLY_KEYS = {"allow_shell"}
 _SETTING_DEFAULTS = {
     "share_hostname": True, "metrics": True, "check_docker": True, "check_k8s": True,
     "ship_logs": True, "metrics_interval": 60, "logs_tail": 200,
@@ -122,16 +127,20 @@ _SETTING_DEFAULTS = {
     "log_encoding": "auto",
     "watch_paths": [],
     "allow_self_update": False,
+    "allow_shell": False,
 }
 # default-False safety gates: env only enables with the exact string "true"
 # (any other value stays off), unlike default-True bools where env disables
-_OPT_IN_KEYS = {"container_label_optin", "allow_self_update"}
+_OPT_IN_KEYS = {"container_label_optin", "allow_self_update", "allow_shell"}
 
 
 def setting(key):
-    """Effective value for one setting: env > central > default."""
+    """Effective value for one setting: env > central > default (env ONLY for
+    keys in _ENV_ONLY_KEYS — central's overlay is ignored there entirely)."""
     env = os.environ.get(_SETTING_ENVS[key])
     default = _SETTING_DEFAULTS[key]
+    if key in _ENV_ONLY_KEYS:
+        return (env or "").lower() == "true"
     if env not in (None, ""):
         if key == "watch_paths":
             return parse_watch_env(env)
@@ -1174,10 +1183,20 @@ def bench_ingest(params, state, headers):
     dry = "true" if params.get("dry_run", True) else "false"
     url_base = (state.get("log_ingest") or
                 f"{state['api_base']}/nodes/{state['node_id']}/logs")
+    # Only probe encodings CENTRAL advertised (config-as-data from checkin) —
+    # compressing locally proves nothing if the server 400s the decode. The
+    # skip row tells the user exactly why (usually: image lacks zstandard).
+    server_encs = state.get("log_encodings") or "identity,gzip"
     rows = []
     for count in params["line_counts"]:
         raw = _entries_body(synth_corpus("json", mid_size, count))
         for enc, comp, _ in bench_encoders(params["encodings"]):
+            base = enc.partition(":")[0]
+            if base != "identity" and base not in server_encs:
+                rows.append({"encoding": enc, "lines": count,
+                             "skipped": f"central doesn't advertise {base} "
+                                        f"(supported: {server_encs}) — service image rebuild adds zstd"})
+                continue
             body = comp(raw)
             req_headers = {**headers, "Content-Type": "application/json",
                            "User-Agent": f"pods-agent/{AGENT_VERSION}"}
@@ -1703,6 +1722,92 @@ def do_decommission_command(state, headers, cid):
     raise SystemExit(0)
 
 
+# Shell exec — the strictest capability, so the strictest enable: env-only
+# (PODS_AGENT_ALLOW_SHELL=true on the box; central can never switch it on).
+# Every run is bounded (timeout, output caps) and fully reported: exit code,
+# stdout/stderr, duration — the ledger records the command and its exit.
+
+SHELL_OUTPUT_MAX_CHARS = 20000
+
+
+def do_shell_command(state, headers, cid, params):
+    """Run one shell command and report the outcome. Refusals and failures are
+    results, never crashes — the loop keeps running whatever happens."""
+    command = (params or {}).get("command") or ""
+    timeout = int((params or {}).get("timeout") or 60)
+    if not setting("allow_shell"):
+        log(f"shell {cid} REFUSED — PODS_AGENT_ALLOW_SHELL is not 'true' on this box")
+        post_command_result(state, headers, cid, "error", {
+            "error": "shell disabled on this node — set PODS_AGENT_ALLOW_SHELL=true on "
+                     "the box and restart the agent (central cannot enable this remotely)"})
+        return
+    log(f"shell {cid} running (timeout {timeout}s): {command[:200]}")
+    started = time.monotonic()
+    try:
+        proc = subprocess.run(command, shell=True, capture_output=True,
+                              text=True, timeout=timeout)
+        out, err, code = proc.stdout, proc.stderr, proc.returncode
+        timed_out = False
+    except subprocess.TimeoutExpired as e:
+        out = (e.stdout or "") if isinstance(e.stdout, str) else (e.stdout or b"").decode(errors="replace")
+        err = (e.stderr or "") if isinstance(e.stderr, str) else (e.stderr or b"").decode(errors="replace")
+        code, timed_out = None, True
+    except Exception as e:
+        post_command_result(state, headers, cid, "error",
+                            {"error": f"{type(e).__name__}: {e}"[:400], "command": command})
+        log(f"shell {cid} FAILED to run: {e}")
+        return
+    duration_ms = round((time.monotonic() - started) * 1000, 1)
+
+    def clip(s):
+        s = s or ""
+        return s if len(s) <= SHELL_OUTPUT_MAX_CHARS else (
+            s[:SHELL_OUTPUT_MAX_CHARS] + f"\n…[truncated, {len(s)} chars total]")
+
+    result = {"command": command, "exit_code": code, "duration_ms": duration_ms,
+              "stdout": clip(out), "stderr": clip(err), "timed_out": timed_out}
+    if timed_out:
+        result["error"] = f"timed out after {timeout}s (killed)"
+        post_command_result(state, headers, cid, "error", result)
+        log(f"shell {cid} TIMED OUT after {timeout}s")
+    else:
+        post_command_result(state, headers, cid, "done", result)
+        log(f"shell {cid} exit {code} in {duration_ms}ms")
+
+
+def do_rotate_command(state, headers, cid, params):
+    """No-downtime token rotation: persist the new token FIRST, then confirm
+    using it — that confirmation is what tells central to promote it and revoke
+    the old one. If anything fails before the confirm lands, the old token is
+    still active and the agent keeps working."""
+    new_token = (params or {}).get("node_token")
+    if not new_token:
+        post_command_result(state, headers, cid, "error",
+                            {"error": "rotate command carried no node_token"})
+        return
+    old_token = state.get("node_token")
+    state["node_token"] = new_token
+    save_state(state)  # persisted BEFORE confirming — a crash here is survivable
+    new_headers = {TOKEN_HEADER: new_token, **base_headers(state.get("tenant"))}
+    # NOTE: post_command_result swallows its exceptions and reports success as a
+    # BOOLEAN — it never raises. Checking the return value is the only way to see
+    # a failed confirmation; a try/except here would be dead code and the agent
+    # would fall through to the new token that central never promoted, 403 on
+    # every subsequent request, and park until someone re-joins it by hand.
+    if not post_command_result(state, new_headers, cid, "done",
+                               {"detail": "new token persisted and confirmed with it"}):
+        # Confirmation failed: central never promotes, so the OLD token is still
+        # the active one — roll back so this agent keeps checking in.
+        state["node_token"] = old_token
+        save_state(state)
+        log(f"rotate {cid} confirmation failed — rolled back to the current token "
+            f"(still valid; central expires the unconfirmed pending)")
+        return
+    headers.clear()
+    headers.update(new_headers)  # the running loop uses the new token from here on
+    log(f"rotate {cid}: token rotated with no downtime — old token revoked by central")
+
+
 def adopt_central_settings(state, new_settings):
     """Adopt a central settings overlay (from a checkin response OR a long-poll
     commands response — both carry it). Env pins still win inside setting();
@@ -1734,6 +1839,10 @@ def handle_commands(pending, state, headers, caps, inv):
                 post_command_result(state, headers, cid, "error",
                                     {"error": f"{type(e).__name__}: {e}"[:300]})
                 log(f"bench {cid} FAILED: {e}")
+        elif ctype == "shell":
+            do_shell_command(state, headers, cid, cmd.get("params") or {})
+        elif ctype == "rotate":
+            do_rotate_command(state, headers, cid, cmd.get("params") or {})
         elif ctype == "decommission":
             do_decommission_command(state, headers, cid)  # never returns
         elif ctype == "restart":

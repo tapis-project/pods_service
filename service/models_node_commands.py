@@ -15,7 +15,7 @@ from sqlalchemy import DateTime, Index
 from sqlmodel import Field, Column, String, JSON
 from models_base import TapisModel, TapisApiModel
 
-COMMAND_TYPES = ["bench"]
+COMMAND_TYPES = ["bench", "restart", "update", "decommission", "shell", "rotate"]
 COMMAND_STATUSES = ["queued", "delivered", "done", "error"]
 
 # Result JSON cap — bench reports are small aggregates; anything bigger is a bug

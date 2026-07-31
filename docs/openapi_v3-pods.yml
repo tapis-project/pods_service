@@ -2577,6 +2577,111 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /pods/nodes/{node_id}/shell:
+    post:
+      tags:
+      - Nodes
+      summary: trigger_node_shell
+      description: "Queue a shell command on this node (node ADMIN).\n\nThe strictest\
+        \ capability in the system, so its enable is the strictest too:\nthe box must\
+        \ set PODS_AGENT_ALLOW_SHELL=true \u2014 central CANNOT turn this on\nthrough\
+        \ the settings channel (unlike self-update). The agent reports the\neffective\
+        \ value in its status; this endpoint refuses early when it is off so\nthe\
+        \ operator gets a real explanation instead of a silent agent-side refusal.\n\
+        \nBody: {\"command\": \"df -h /scratch\", \"timeout\": 60}. The command is\
+        \ recorded\nverbatim in the ledger with the requester, and its exit code is\
+        \ recorded on\ncompletion \u2014 every shell run is auditable after the fact."
+      operationId: trigger_node_shell
+      parameters:
+      - name: node_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Node Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              title: Body
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeCommandResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    get:
+      tags:
+      - Nodes
+      summary: list_node_shell_runs
+      description: Shell run history for a node (node READ permission), newest first.
+      operationId: list_node_shell_runs
+      parameters:
+      - name: node_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Node Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeCommandsListResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /pods/nodes/{node_id}/rotate:
+    post:
+      tags:
+      - Nodes
+      summary: trigger_node_rotate
+      description: "Rotate this node's agent token with NO downtime (node ADMIN).\n\
+        \nUnlike /regenerate \u2014 which revokes immediately and parks the agent\
+        \ until a\nhuman re-runs a join on the box \u2014 this is a two-phase handshake\
+        \ over the\nalready-authed channel:\n\n  1. central mints a new token and\
+        \ stores it as PENDING (both tokens work),\n  2. the new token rides a `rotate`\
+        \ command to the agent,\n  3. the agent persists it and CONFIRMS using the\
+        \ new token,\n  4. that confirmation promotes pending -> active and revokes\
+        \ the old one.\n\nA rotate that never lands (agent offline, crash mid-swap)\
+        \ simply expires \u2014\nthe running agent keeps working on its existing token\
+        \ the whole time."
+      operationId: trigger_node_rotate
+      parameters:
+      - name: node_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Node Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeCommandResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /pods/nodes/{node_id}/settings:
     put:
       tags:
