@@ -656,6 +656,20 @@ class VolumeMount(TapisModel):
                 raise ValueError(f"config_filename can only contain alphanumeric characters, dots, underscores, and hyphens. Got: {v}")
         return v
 
+    @field_validator('sub_path')
+    @classmethod
+    def check_sub_path(cls, v):
+        # sub_path is joined into the on-disk config write path at spawn time; a
+        # '..' would let config_content escape the volume/tenant base (arbitrary
+        # file write as the service user). Same guard mount_path/config_filename
+        # already carry — sub_path was the gap.
+        if v:
+            if '..' in v or v.startswith('/') or '\\' in v:
+                raise ValueError(f"sub_path cannot contain '..', backslashes, or be absolute. Got: {v}")
+            if len(v) > 255:
+                raise ValueError(f"sub_path must be less than 255 characters. Got: {len(v)}")
+        return v
+
     @model_validator(mode="after")
     def validate_type_requirements(cls, values):
         """Validate fields based on type."""

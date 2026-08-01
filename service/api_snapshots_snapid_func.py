@@ -2,7 +2,7 @@ from fastapi import APIRouter
 from models_pods import Pod
 from models_snapshots import Snapshot, SnapshotPermissionsResponse
 from models_misc import SetPermission, FilesListResponse
-from volume_utils import files_listfiles, files_insert, files_download
+from volume_utils import files_listfiles, files_insert, files_download, object_root
 from fastapi import Query, Path, File
 from fastapi.responses import StreamingResponse
 from channels import CommandChannel
@@ -30,9 +30,10 @@ async def list_snapshot_files(snapshot_id, path: str = Query(default="")):
 
     snapshot = Snapshot.db_get_with_pk(snapshot_id, tenant=g.request_tenant_id, site=g.site_id)
 
+    # base_path is the SNAPSHOT root, not the tenant root — see volume_utils.object_root.
+    # ?path=../othersnapshot must not resolve, and a tenant-base guard would allow it.
     sub = path.strip("/") if path else ""
-    full_path = f"/snapshots/{snapshot.snapshot_id}/{sub}" if sub else f"/snapshots/{snapshot.snapshot_id}/"
-    list_of_files = files_listfiles(path=full_path)
+    list_of_files = files_listfiles(path=sub, base_path=object_root("snapshots", snapshot.snapshot_id))
     
     pruned_list_of_files = []
     for file in list_of_files:
@@ -74,7 +75,7 @@ async def get_snapshot_contents(
 
     # Call files_download from snapshot_utils
     file_content, filename = files_download(
-        path = f"/snapshots/{snapshot.snapshot_id}/{path}",
+        path=path, base_path=object_root("snapshots", snapshot.snapshot_id),
         zip=zip)
     
     if zip:
@@ -120,7 +121,7 @@ async def download_snapshot_file(
 
     # Call files_download from volume_utils (without zip for single file)
     file_content, filename = files_download(
-        path=f"/snapshots/{snapshot.snapshot_id}/{path}",
+        path=path, base_path=object_root("snapshots", snapshot.snapshot_id),
         zip=False)
     
     # Extract just the filename for cleaner download name

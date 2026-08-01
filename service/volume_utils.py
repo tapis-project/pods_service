@@ -79,17 +79,14 @@ def files_mkdir(path: str = "", tenant_id: str = "", base_path: str = "") -> Non
         name (_type_): _description_
     """
     logger.debug("top of volume_utils.files_mkdir().")
-    # Normalize path
-    path = os.path.abspath(path)
-
     # Establish base_path w/ tenant
     base_path = base_path or f"{conf.nfs_base_path}/{tenant_id or g.tenant_id}"
-    base_path = os.path.abspath(base_path)
+    full_path = _contained_path(base_path, path)
 
     # Note: os.makedirs(path) will give 'FileExistsError' whether file or folder already exists
     # Note: os.makedirs(path, exist_ok) will give 'FileExistsError' only for files already existing
     try:
-        os.makedirs(f"{base_path}/{path}", exist_ok=True)
+        os.makedirs(full_path, exist_ok=True)
     except FileExistsError:
         msg = f"Got exception trying to run mkdir. File or folder already exists in path: {path}"
         logger.info(msg)
@@ -158,17 +155,14 @@ def files_listfiles(path: str, limit: int = 1000, offset:int = 0, recurse: bool 
         name (_type_): _description_
     """
     logger.debug(f"top of volume_utils.files_listfiles(), using tenant: {tenant_id}.")
-    # Normalize path
-    path = os.path.abspath(path)
-
     # Establish base_path w/ tenant
     base_path = base_path or f"{conf.nfs_base_path}/{tenant_id or g.tenant_id}"
-    base_path = os.path.abspath(base_path)
+    full_path = _contained_path(base_path, path)
 
     # We expect list_files to give FileNotFoundError, if no pre-existing folder/file
     try:
         ls_files = list_files(
-            path = f"{base_path}/{path}",
+            path = full_path,
             recursive = recurse,
             depth = 2)
     except FileNotFoundError:
@@ -190,20 +184,17 @@ def files_delete(path: str = "", tenant_id: str = "", base_path: str = "") -> No
         name (_type_): _description_
     """
     logger.debug("top of volume_utils.files_delete().")
-    # Normalize path
-    path = os.path.abspath(path)
-
     # Establish base_path w/ tenant
     base_path = base_path or f"{conf.nfs_base_path}/{tenant_id or g.tenant_id}"
-    base_path = os.path.abspath(base_path)
+    full_path = _contained_path(base_path, path)
 
     # Note: os.remove() will error when a file/folder doesn't exist.
     # delete /{path} folder
     try:
-        if os.path.isfile(f"{base_path}/{path}"):
-            os.remove(f"{base_path}/{path}")
+        if os.path.isfile(full_path):
+            os.remove(full_path)
         else:
-            shutil.rmtree(f"{base_path}/{path}")
+            shutil.rmtree(full_path)
     except Exception as e:
         msg = f"Got exception trying to delete file. path: {path}"
         logger.info(msg)
@@ -212,28 +203,54 @@ def files_delete(path: str = "", tenant_id: str = "", base_path: str = "") -> No
     logger.info(f"Successfully deleted file. path: {path}")
 
 
+def _contained_path(base_path: str, path: str) -> str:
+    """Join path under base_path and REFUSE to leave it. os.path.join drops
+    base_path entirely if `path` is absolute, and normpath keeps leading '..',
+    so join-then-check is the only safe form. Callers should already validate
+    inputs (e.g. sub_path), but this is the last-line sink guard so no future
+    caller can traverse out of the tenant base."""
+    base_path = os.path.abspath(base_path)
+    full_path = os.path.abspath(os.path.join(base_path, path.lstrip("/")))
+    if full_path != base_path and not full_path.startswith(base_path + os.sep):
+        raise VolumesError(f"Resolved path escapes the base directory (path traversal blocked): {path}")
+    return full_path
+
+
+def object_root(kind: str, object_id: str, tenant_id: str = "") -> str:
+    """NFS root of ONE volume/snapshot — the containment boundary for endpoints
+    that accept a user-supplied sub-path.
+
+    Containing at the TENANT base is not enough. '/volumes/volA/../volB' never
+    leaves the tenant, so a tenant-base guard resolves it happily to a sibling
+    volume the caller has no permission on — and '/volumes/volA/../..' resolves
+    to the tenant root, listing every volume and snapshot in the tenant. Passing
+    this as base_path makes _contained_path refuse both.
+
+    kind is 'volumes' or 'snapshots'.
+    """
+    if kind not in ("volumes", "snapshots"):
+        raise VolumesError(f"object_root: unknown kind {kind!r}")
+    return f"{conf.nfs_base_path}/{tenant_id or g.tenant_id}/{kind}/{object_id}"
+
+
 def file_exists(path: str, tenant_id: str = "", base_path: str = "") -> bool:
     """
     Check if a file exists in NFS.
-    
+
     Args:
         path: Path to check (relative to base_path)
         tenant_id: Tenant ID for path resolution
         base_path: Optional explicit base path
-        
+
     Returns:
         True if file exists, False otherwise
     """
     logger.debug(f"top of volume_utils.file_exists() - path: {path}")
-    
-    # Normalize path (remove . and .. but keep relative)
-    path = os.path.normpath(path)
-    
+
     # Establish base_path w/ tenant
     base_path = base_path or f"{conf.nfs_base_path}/{tenant_id or g.tenant_id}"
-    base_path = os.path.abspath(base_path)
-    
-    full_path = os.path.join(base_path, path)
+
+    full_path = _contained_path(base_path, path)
     return os.path.isfile(full_path)
 
 
@@ -249,16 +266,15 @@ def files_write_content(content: str, path: str, tenant_id: str = "", base_path:
         permissions: Unix file permissions as octal string (e.g., '0644')
     """
     logger.debug(f"top of volume_utils.files_write_content() - path: {path}")
-    
-    # Normalize path (remove . and .. but keep relative)
-    path = os.path.normpath(path)
-    
+
     # Establish base_path w/ tenant
     base_path = base_path or f"{conf.nfs_base_path}/{tenant_id or g.tenant_id}"
-    base_path = os.path.abspath(base_path)
-    
-    full_path = os.path.join(base_path, path)
-    
+
+    # Containment sink guard: refuse any path that resolves outside base_path
+    # (config_content sub_path traversal). Validated at the model too; this is
+    # defense-in-depth at the write itself.
+    full_path = _contained_path(base_path, path)
+
     # Ensure parent directory exists
     parent_dir = os.path.dirname(full_path)
     os.makedirs(parent_dir, exist_ok=True)
@@ -284,16 +300,13 @@ def files_write_content(content: str, path: str, tenant_id: str = "", base_path:
 
 def files_insert(file, path: str, tenant_id: str = "", base_path: str = "") -> None:
     logger.debug("top of volume_utils.files_insert().")
-    # Normalize path
-    path = os.path.abspath(path)
-
     # Establish base_path w/ tenant
     base_path = base_path or f"{conf.nfs_base_path}/{tenant_id or g.tenant_id}"
-    base_path = os.path.abspath(base_path)
+    full_path = _contained_path(base_path, path)
 
     try:
         # Save file to /{path}
-        with open(f"{base_path}/{path}", "wb") as f:
+        with open(full_path, "wb") as f:
             shutil.copyfileobj(file, f)
     except Exception as e:
         msg = f"Got exception trying to save file. path: {path}."
@@ -320,14 +333,9 @@ def files_download(path: str, zip: bool = False, tenant_id: str = "", base_path:
 
     logger.debug("top of volume_utils.files_download().")
 
-    # Normalize path
-    path = os.path.abspath(path)
-
     # Establish base_path w/ tenant
     base_path = base_path or f"{conf.nfs_base_path}/{tenant_id or g.tenant_id}"
-    base_path = os.path.abspath(base_path)
-
-    nfs_file_path = f"{base_path}/{path}"
+    nfs_file_path = _contained_path(base_path, path)
     logger.debug(f"Attempting to download file/dir from path: {nfs_file_path}")
     if os.path.isdir(nfs_file_path):
         if zip:
@@ -357,17 +365,15 @@ def files_download(path: str, zip: bool = False, tenant_id: str = "", base_path:
 
 def files_move(source_path:str, new_path: str, tenant_id: str = "", base_path: str = "") -> None:
     logger.debug("top of volume_utils.files_move().")
-    # Normalize paths
-    source_path = os.path.abspath(source_path)
-    new_path = os.path.abspath(new_path)
-
-    # Establish base_path w/ tenant
+    # Establish base_path w/ tenant. BOTH ends are contained — a move is a read
+    # AND a write, so an escape on either side is a traversal.
     base_path = base_path or f"{conf.nfs_base_path}/{tenant_id or g.tenant_id}"
-    base_path = os.path.abspath(base_path)
+    full_source = _contained_path(base_path, source_path)
+    full_new = _contained_path(base_path, new_path)
 
     # move from source_path to new_path
     try:
-        shutil.move(f"{base_path}/{source_path}", f"{base_path}/{new_path}")
+        shutil.move(full_source, full_new)
     except FileNotFoundError:
         msg = f"No folder/file found when moving path. path: {source_path}"
         logger.info(msg)
@@ -381,20 +387,17 @@ def files_move(source_path:str, new_path: str, tenant_id: str = "", base_path: s
 
 def files_copy(source_path:str, new_path: str, tenant_id: str = "", base_path: str = "") -> None:
     logger.debug("top of volume_utils.files_copy().")
-    # Normalize paths
-    source_path = os.path.abspath(source_path)
-    new_path = os.path.abspath(new_path)
-
-    # Establish base_path w/ tenant
+    # Establish base_path w/ tenant. BOTH ends are contained — see files_move.
     base_path = base_path or f"{conf.nfs_base_path}/{tenant_id or g.tenant_id}"
-    base_path = os.path.abspath(base_path)
+    full_source = _contained_path(base_path, source_path)
+    full_new = _contained_path(base_path, new_path)
 
     # copy from source_path to new_path
     try:
-        if os.path.isfile(f"{base_path}/{source_path}"):
-            shutil.copy(f"{base_path}/{source_path}", f"{base_path}/{new_path}")
+        if os.path.isfile(full_source):
+            shutil.copy(full_source, full_new)
         else:
-            shutil.copytree(f"{base_path}/{source_path}", f"{base_path}/{new_path}", dirs_exist_ok=True)
+            shutil.copytree(full_source, full_new, dirs_exist_ok=True)
     except FileNotFoundError:
         msg = f"No folder/file found when copying path. path: {source_path}"
         logger.info(msg)
