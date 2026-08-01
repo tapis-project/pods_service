@@ -137,3 +137,5 @@ deployment
 *jupyter
 .bash_history
 .vscode
+# LLM review outputs (AI-derived working artifacts — never committed)
+ci/reviews/

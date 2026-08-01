@@ -1,0 +1,19 @@
+# Ruff — Python formatter + linter (one binary; black-compatible format). Written
+# as if enabled, but the CI gate (ci/lint.sh) is OFF until RUFF=1. `make fmt`
+# applies formatting; `make lint` runs the checks. Tune freely before flipping on.
+target-version = "py311"
+line-length = 100
+extend-exclude = [
+    "alembic/versions",   # generated migrations
+    "deploymentTemplate",
+    "mcp/experiments",    # research scratch
+]
+
+[format]
+quote-style = "double"
+
+[lint]
+# pyflakes(F) + pycodestyle(E,W) + isort(I) + pyupgrade(UP) + bugbear(B).
+select = ["E", "F", "W", "I", "UP", "B"]
+# E501 (line length) is the formatter's job; don't double-report it.
+ignore = ["E501"]
