@@ -186,7 +186,7 @@ def check_route_permissions(request):
         # IMAGES
         ["/pods/images/{image_id:path}", "GET", codes.NONE],
         ["/pods/images/{image_id:path}", "PUT", codes.NONE],
-        ["/pods/images/{image_id:path}", "DELETE", codes.NONE],#"ONLY-ADMIN"], # this should require admin, but can't use codes.ADMIN as permissions not defined on # just need to edit tests for this to work
+        ["/pods/images/{image_id:path}", "DELETE", codes.NONE], # admin-gated IN-HANDLER (g.admin_active) — siteadmintable has no per-object perms so codes.ADMIN can't apply; add/update/delete all check admin mode
         ["/pods/images", "GET", codes.NONE],
         ["/pods/images", "POST", codes.NONE],
         ["/pods/images/bulk", "POST", codes.NONE],

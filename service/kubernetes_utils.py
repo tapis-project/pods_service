@@ -6,6 +6,7 @@ import timeit
 import datetime
 import random
 import re
+import yaml
 from typing import Literal, Dict, List, Optional
 from models_base import HealthcheckProbe, PodHealthchecks
 
@@ -1206,6 +1207,22 @@ def update_traefik_configmap(tcp_proxy_info: Dict[str, Dict[str, str]],
                                         http_proxy_info = http_proxy_info,
                                         postgres_proxy_info = postgres_proxy_info,
                                         namespace = NAMESPACE)
+
+    # Fail CLOSED on a malformed render. Traefik rejects the ENTIRE dynamic config
+    # file if any part is invalid YAML — one bad stanza would 404 every router for
+    # every pod on the site (cross-tenant outage). A successful render can still be
+    # invalid (a stray quote/newline/backtick in a user field breaking a scalar),
+    # and the string-diff below wouldn't catch it. Parse first; if it doesn't load,
+    # keep the last-known-good configmap and alert instead of pushing a bricked file.
+    try:
+        yaml.safe_load(rendered_template)
+    except yaml.YAMLError as e:
+        logger.error(
+            f"Refusing to update Traefik configmap: rendered template is not valid YAML "
+            f"({e}). Keeping the existing config. This usually means a user-supplied "
+            f"networking field (CORS origin, excluded path, custom domain) contains a "
+            f"character that broke the render — the offending pod's fields need validation.")
+        return
 
     # Only update the configmap if the current configmap is out of date.
     current_template = k8.read_namespaced_config_map(name='pods-traefik-conf', namespace=NAMESPACE)

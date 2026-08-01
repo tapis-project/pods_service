@@ -3,6 +3,7 @@ from models_images import Image, ImagesResponse, ImageResponse, NewImage
 from channels import CommandChannel
 from tapisservice.tapisfastapi.utils import g, ok
 from codes import PermissionLevel
+from errors import PermissionsException
 from tapisservice.config import conf
 from tapisservice.logs import get_logger
 logger = get_logger(__name__)
@@ -120,6 +121,14 @@ async def add_image(new_image: NewImage):
     """
     logger.info("POST /pods/images - Top of add_image.")
 
+    # The image allowlist is a real control (pod create rejects images not on it),
+    # and images live in the site-global siteadmintable with no per-object perms —
+    # so, exactly like update_image (PUT), adding requires admin mode. Without this
+    # any authenticated user could allowlist an arbitrary image (incl. tenants:["**"])
+    # and run an unvetted container in the shared cluster.
+    if not getattr(g, 'admin_active', False):
+        raise PermissionsException("Adding images requires admin mode. Send X-Pods-Admin: true header.")
+
     # Create image object. Validates as well.
     image = Image(**new_image.dict())
 
@@ -150,6 +159,9 @@ async def add_images(new_images: list[NewImage], skip_duplicates: bool = Query(F
     Returns new image objects.
     """
     logger.info("POST /pods/images/bulk - Top of add_images.")
+
+    if not getattr(g, 'admin_active', False):
+        raise PermissionsException("Adding images requires admin mode. Send X-Pods-Admin: true header.")
 
     duplicate_images = []
     

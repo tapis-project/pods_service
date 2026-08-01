@@ -24,6 +24,12 @@ async def delete_image(image_id):
     """
     logger.info(f"DELETE /pods/images/{image_id} - Top of delete_image.")
 
+    # Admin-only, like add/update: an ungated delete lets any user remove an image
+    # other tenants' pods depend on (integrity/DoS). siteadmintable has no per-object
+    # perms, so gate in-handler on admin mode (mirrors update_image).
+    if not getattr(g, 'admin_active', False):
+        raise PermissionsException("Deleting images requires admin mode. Send X-Pods-Admin: true header.")
+
     # Needs to delete image
     image = Image.db_get_with_pk(image_id, tenant="siteadmintable", site=g.site_id)
     if not image:
