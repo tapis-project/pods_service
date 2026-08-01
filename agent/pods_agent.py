@@ -41,6 +41,11 @@ Telemetry (Phase 3 — pure API traffic, no host commands, so no confirmation ne
   PODS_AGENT_SHARE_HOSTNAME   "false" withholds the machine hostname from status and
                               bench reports (identity rests on the operator-chosen
                               node_id alone)
+  PODS_AGENT_SHARE_ADDRESSES  "true" ships the node's addresses in status (tailnet
+                              IPv4/IPv6/DNS name when tailscale is Running, plus the
+                              primary LAN IP) so publish routes can autofill
+                              backend_host. DEFAULT OFF — addresses are disclosure;
+                              also flippable per-node from central (env pin wins)
 
 Host-command confirmation (the agent NEVER runs host commands like `tailscale up` silently):
   PODS_AGENT_HOST_CMDS        "ask" (default) | "always" | "never"
@@ -77,7 +82,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 
-AGENT_VERSION = "0.6.0"
+AGENT_VERSION = "0.7.0"
 TOKEN_HEADER = "X-Pods-Node-Token"
 DOCKER_SOCK = os.environ.get("DOCKER_SOCK", "/var/run/docker.sock")
 K8S_SA_DIR = "/var/run/secrets/kubernetes.io/serviceaccount"
@@ -102,6 +107,7 @@ CENTRAL_SETTINGS = {}
 
 _SETTING_ENVS = {
     "share_hostname": "PODS_AGENT_SHARE_HOSTNAME",
+    "share_addresses": "PODS_AGENT_SHARE_ADDRESSES",
     "metrics": "PODS_AGENT_METRICS",
     "check_docker": "PODS_AGENT_CHECK_DOCKER",
     "check_k8s": "PODS_AGENT_CHECK_K8S",
@@ -121,7 +127,11 @@ _SETTING_ENVS = {
 # the one capability whose enable must live physically on the box.
 _ENV_ONLY_KEYS = {"allow_shell"}
 _SETTING_DEFAULTS = {
-    "share_hostname": True, "metrics": True, "check_docker": True, "check_k8s": True,
+    # share_addresses defaults OFF (unlike hostname): IP addresses are new
+    # disclosure — publish-route autofill is the payoff, the operator (env) or a
+    # node admin (Options) opts in.
+    "share_hostname": True, "share_addresses": False,
+    "metrics": True, "check_docker": True, "check_k8s": True,
     "ship_logs": True, "metrics_interval": 60, "logs_tail": 200,
     "containers": [], "containers_exclude": [], "container_label_optin": False,
     "log_encoding": "auto",
@@ -488,6 +498,55 @@ def share_hostname():
     return setting("share_hostname")
 
 
+def share_addresses():
+    """Default FALSE — addresses are new disclosure, unlike the hostname.
+    env > central setting > default-off: flipping it on in the UI Options is the
+    intended path; an env pin on the box always wins."""
+    return setting("share_addresses")
+
+
+def node_addresses():
+    """Addresses worth publishing when sharing is on: the tailnet identity (the
+    point — publish routes autofill backend_host from an address central can
+    actually dial) plus the primary LAN IP as the non-tailnet fallback.
+    Best-effort; never raises. Empty dict = sharing is on but nothing detected."""
+    addrs = {}
+    if shutil.which("tailscale"):
+        try:
+            out = subprocess.run(["tailscale", "status", "--json"],
+                                 capture_output=True, timeout=10)
+            if out.returncode == 0:
+                st = json.loads(out.stdout.decode() or "{}")
+                self_ = st.get("Self") or {}
+                # Only a Running daemon's addresses are dialable — a stopped or
+                # logged-out tailscale still remembers stale IPs; don't ship those.
+                if st.get("BackendState") == "Running":
+                    ips = self_.get("TailscaleIPs") or []
+                    v4 = [i for i in ips if "." in i]
+                    v6 = [i for i in ips if ":" in i]
+                    if v4:
+                        addrs["tailnet_ip4"] = v4[0]
+                    if v6:
+                        addrs["tailnet_ip6"] = v6[0]
+                    dns = (self_.get("DNSName") or "").rstrip(".")
+                    if dns:
+                        addrs["tailnet_name"] = dns
+        except Exception:
+            pass
+    try:
+        # UDP connect() picks the egress interface without sending a packet —
+        # the classic primary-IP probe. Fails cleanly with no default route.
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("203.0.113.1", 53))
+            addrs["lan_ip"] = s.getsockname()[0]
+        finally:
+            s.close()
+    except Exception:
+        pass
+    return addrs
+
+
 def sample_status(caps, inv=None):
     status = {
         "os": platform.system().lower(),
@@ -497,6 +556,11 @@ def sample_status(caps, inv=None):
         "agent_started_at": STARTED_AT.isoformat(timespec="seconds"),
         "agent_uptime_seconds": int((datetime.now(timezone.utc) - STARTED_AT).total_seconds()),
     }
+    # Addresses ship ONLY when shared (default off — new disclosure). A present-
+    # but-empty dict means "sharing on, nothing detected"; the UI tells "not
+    # sharing" apart from that via applied_settings.share_addresses.
+    if share_addresses():
+        status["addresses"] = node_addresses()
     # Metrics-lite: cheap host + workload numbers every checkin (sub-KB). The same
     # reads, timestamped, also feed the Phase 3 history pipeline via metrics_samples
     # (see metrics_sample) — this block stays the instant "now" view on the node row.
