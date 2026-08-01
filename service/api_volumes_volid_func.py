@@ -2,7 +2,7 @@ from fastapi import APIRouter, UploadFile
 from models_pods import Pod
 from models_volumes import Volume, VolumePermissionsResponse
 from models_misc import SetPermission, FilesListResponse, FilesUploadResponse
-from volume_utils import files_listfiles, files_insert, files_download
+from volume_utils import files_listfiles, files_insert, files_download, object_root
 from fastapi import Query, Path, File
 from fastapi.responses import StreamingResponse
 from channels import CommandChannel
@@ -32,9 +32,10 @@ async def list_volume_files(volume_id, path: str = Query(default="")):
 
     volume = Volume.db_get_with_pk(volume_id, tenant=g.request_tenant_id, site=g.site_id)
 
+    # base_path is the VOLUME root, not the tenant root — see volume_utils.object_root.
+    # ?path=../othervolume must not resolve, and a tenant-base guard would allow it.
     sub = path.strip("/") if path else ""
-    full_path = f"/volumes/{volume.volume_id}/{sub}" if sub else f"/volumes/{volume.volume_id}"
-    list_of_files = files_listfiles(path=full_path)
+    list_of_files = files_listfiles(path=sub, base_path=object_root("volumes", volume.volume_id))
     
     pruned_list_of_files = []
     for file in list_of_files:
@@ -76,7 +77,7 @@ async def get_volume_contents(
 
     # Call files_download from volume_utils
     file_content, filename = files_download(
-        path = f"/volumes/{volume.volume_id}/{path}",
+        path=path, base_path=object_root("volumes", volume.volume_id),
         zip=zip)
     
     if zip:
@@ -112,7 +113,7 @@ async def upload_to_volume(
 
     insert_res = files_insert(
         file = file.file,
-        path = f"/volumes/{volume.volume_id}/{path}")
+        path=path, base_path=object_root("volumes", volume.volume_id))
 
     return ok(result=f"{insert_res}", msg = "Volume file upload successful.")
 
@@ -152,7 +153,7 @@ async def download_volume_file(
 
     # Call files_download from volume_utils (without zip for single file)
     file_content, filename = files_download(
-        path=f"/volumes/{volume.volume_id}/{path}",
+        path=path, base_path=object_root("volumes", volume.volume_id),
         zip=False)
     
     # Extract just the filename for cleaner download name
