@@ -1310,3 +1310,150 @@ dependency order. (UI: the stack shows an "update available" chip → review mod
   volumes should be retained before relying on it for stateful members.
 
 Migration: `d7c3e9a14f08_init23` adds `templatetag.kind`/`stack_definition` and `stack.secret_map`/`from_template`.
+
+## Edge Nodes & Agent
+
+The edge-node feature (register a remote machine, run the stdlib `pods-agent` on
+it, ship telemetry, drive it over a command channel) has its own references:
+
+- **`docs/node_security_model.md`** — auth/permission matrix for every node
+  route, the agent credential model, what a stolen token grants, the
+  self-update-vs-shell trust distinction, and the publish/SSRF containment.
+  Read this before touching node routes, the agent, or the publish surface.
+- **`agent/README.md`** — running the agent, its settings/env vars, shell +
+  rotation + long-poll behavior notes.
+
+The rest of this section is the **server-side reference**: the schemas and
+contracts you look up while writing code, rather than the operator or security
+view the two documents above cover.
+
+### Agent Settings Channel
+
+`node.agent_settings` is a **sparse overlay** — an absent key means "the agent's
+own default", exactly like pod/template layering. `PUT /pods/nodes/{id}/settings`
+(node ADMIN) runs `sanitize_agent_settings`: unknown keys are **ignored and
+reported** in the response rather than stored, and values are clamped, so an
+edge box never has to trust a raw payload.
+
+| Key | Type | Bounds / values |
+|-----|------|-----------------|
+| `share_hostname` | bool | — |
+| `share_addresses` | bool | agent default **OFF** (IPs are new disclosure) |
+| `metrics` | bool | — |
+| `check_docker` | bool | — |
+| `check_k8s` | bool | — |
+| `ship_logs` | bool | — |
+| `metrics_interval` | int | 15–3600 s |
+| `logs_tail` | int | 10–1000 lines |
+| `containers` | globs | allowlist, ≤32 entries, ≤128 chars each; empty/absent = all running |
+| `containers_exclude` | globs | denylist, applied **after** the allowlist |
+| `container_label_optin` | bool | only ship containers labeled `pods.agent.logs=true` |
+| `log_encoding` | enum | `auto` \| `identity` \| `gzip` \| `zstd` |
+| `watch_paths` | watches | see below |
+| `allow_self_update` | bool | default **OFF** |
+
+**Precedence at the edge is `env > central > default`** — the box can always pin
+a setting and win. The agent reports `applied_settings` and `env_pinned` in its
+checkin status, so the UI shows intended-vs-applied honestly instead of assuming
+a PUT took effect. Adoption lands within one heartbeat, or sub-second on a
+long-polling agent.
+
+Two key sets in the agent change how a setting resolves:
+
+- **`_ENV_ONLY_KEYS = {allow_shell}`** — central's overlay is ignored *entirely*.
+  The server whitelist also refuses to store it. This is what makes "central
+  cannot remotely enable arbitrary code execution" true by construction, not by
+  policy. Contrast `allow_self_update`, which IS centrally settable because it
+  only fetches central's own hash-verified source.
+- **`_OPT_IN_KEYS = {container_label_optin, allow_self_update, allow_shell}`** —
+  env parsing is strict: only the exact string `true` enables. Anything else,
+  including `1`/`yes`/`True`, leaves it off.
+
+#### `watch_paths` (storage watch)
+
+A list of structured entries, ≤16 paths (`WATCH_MAX_PATHS`), deduped:
+
+| Field | Required | Notes |
+|-------|----------|-------|
+| `path` | yes | absolute, ≤256 chars (`WATCH_PATH_MAX_LEN`) |
+| `warn` | no | `"90%"` or `"200G"` (1024-based). **Strict regex** — a malformed value is ignored, never coerced, so a stray colon can't become a threshold. **Absent = graph-only, never warns.** |
+| `interval_s` | no | 300–86400, default 900. The floor is deliberately slow: a `du` walk is real I/O. |
+| `du` | no | bool; enables the apparent-size walk on top of the free `statvfs` sample |
+
+Per-subfield rejections are reported back individually, so a bad `warn` doesn't
+silently discard the whole entry. Warn state is **hysteretic** (clears at 95% of
+the threshold) and persisted, so an agent restart cannot flap the ledger, and
+only *edges* are ledgered — steady states never write.
+
+### Command Dispatcher Contract
+
+One-shot, user-queued commands delivered over the agent's existing poll.
+
+- **Exactly-once delivery**: `queued -> delivered` flips atomically on read.
+  **There is no redelivery in v1** — an agent that dies mid-run leaves the
+  command `delivered` with no result, and the one-active-per-type guard expires
+  it after 15 minutes rather than reissuing it.
+- **Completion** is a node-token POST to `/commands/{id}/result` with
+  `done|error`; results are capped at 256 KB.
+- **Cross-blocking**: restart 409s while an update is queued and vice versa.
+- Node delete cascades commands.
+- **Long-poll**: `GET /commands?wait=N` (clamped by `NODES_COMMANDS_MAX_WAIT`,
+  default 20 s; `wait=0` is the classic immediate poll). The correctness floor is
+  a 1-second DB re-check — queued commands, the settings overlay, and node
+  deletion — so behavior is right even with multiple replicas where an
+  in-process wake event would not reach the holding worker. The wake registry is
+  an optimization layered on top, never the guarantee.
+- The capability is advertised in checkin (`commands_wait`) rather than
+  versioned, so capable agents hold, old agents ignore it, and old centrals
+  never advertise — no flag day.
+
+### Telemetry Retention
+
+Retention is enforced **at ingest**, not by a background sweeper — there is no
+cron to forget. All caps are env-tunable (`service/api_nodes.py`):
+
+| Var | Default | Applies to |
+|-----|---------|-----------|
+| `NODES_LOGS_MAX_BODY_BYTES` | 8 MB | decompressed body (bomb guard) |
+| `NODES_LOGS_MAX_BATCH` | 5000 | lines per POST |
+| `NODES_LOGS_MAX_LINE_CHARS` | 8192 | per line |
+| `NODES_LOGS_MAX_ROWS` | 100000 | retained per node |
+| `NODES_LOGS_MAX_AGE_DAYS` | 7 | retained per node |
+| `NODES_METRICS_MAX_BATCH` | 1500 | samples per checkin (~25 h @ 60 s) |
+| `NODES_METRICS_MAX_ROWS` | 100000 | retained per node |
+| `NODES_METRICS_MAX_AGE_DAYS` | 30 | retained per node |
+| `NODES_STATUS_MAX_BYTES` | 256 KB | agent-supplied status blob (413 past it) |
+| `NODES_INVENTORY_MAX_BYTES` | 1 MB | agent-supplied inventory (413 past it) |
+| `NODES_CAPABILITIES_MAX` | 128 | capability entries |
+| `NODES_ACTION_LOG_MAX` | 500 | ledger ring cap |
+
+The ingest response returns `accepted`/`dropped`/`truncated` **plus the current
+caps**, so an agent adapts instead of guessing. Metrics use a `(node_id, ts)`
+unique constraint with `ON CONFLICT DO NOTHING`, which makes a lost-ack resend
+harmless.
+
+**`NodeMetric.extras`** is an open-ended JSON gauge column: new numeric series
+never need new columns. Ingest whitelists 32 keys (≤128 chars) and requires
+finite numbers. Keys ending `:total` become **static y-axis caps** rather than
+plotted series — which is how disk graphs get a real filesystem size as their
+ceiling instead of auto-scaling noise into significance. Empty buckets are
+**omitted, never zero-filled**, so an off period stays visible as a gap.
+
+### Node Tokens & Timings
+
+| Var | Default | Meaning |
+|-----|---------|---------|
+| `NODES_CLAIM_TTL_HOURS` | 4 | claim-token lifetime before first join |
+| `NODES_PENDING_TOKEN_TTL_MINUTES` | 60 | unconfirmed rotation discarded after |
+| `NODES_SHELL_TIMEOUT_DEFAULT` | 60 s | shell command timeout |
+| `NODES_SHELL_TIMEOUT_MAX` | 300 s | server clamp on requested timeout |
+| `NODES_COMMANDS_POLL_AFTER` | 25 s | advertised poll interval |
+| `TS_LOGIN_SERVER` | — | default headscale control plane |
+
+**Rotation is a two-phase handshake.** Central writes
+`node.pending_agent_token_hash`; **both** tokens authenticate during the window,
+and `_require_agent` reports which one the caller used. Promotion happens *only*
+when the agent confirms **using the new token** — that request is itself the
+proof it persisted. Confirming with the old token explicitly does not promote.
+A failure or timeout discards the pending token and leaves the running agent
+perfectly authed, so a botched rotation can never park a node.
