@@ -172,6 +172,18 @@ class TapisModel(SQLModel):
                         '.nin': 'laterprocessing',
                         '.in': 'laterprocessing'}
 
+        # Column-object operators — NEVER eval(). `val` is frequently a raw URL
+        # path param (e.g. tag_id), so splicing it into an eval string was an
+        # authenticated RCE; SQLAlchemy comparison methods parameterize instead.
+        scalar_ops = {
+            '.eq':  lambda c, v: c == v,
+            '.neq': lambda c, v: c != v,
+            '.lt':  lambda c, v: c < v,
+            '.lte': lambda c, v: c <= v,
+            '.gt':  lambda c, v: c > v,
+            '.gte': lambda c, v: c >= v,
+        }
+
         # Create base statement
         stmt = select(cls)
         for key, oper, val in where_params:
@@ -179,25 +191,26 @@ class TapisModel(SQLModel):
                 raise KeyError(f"key: {key} not found in model attrs: {cls.__fields__.keys()}")
             if oper not in oper_aliases:
                 raise KeyError(f"oper: {oper} not found in oper aliases: {oper_aliases}")
-            
-            # Create where statement and add to stmt
+
+            col = getattr(cls, key)
             if oper == '.in':
-                stmt = stmt.where(eval(f"cls.{key}.in_({val})")) # User.key.in_([123,456])
+                if not isinstance(val, (list, tuple, set)):
+                    raise ValueError(f".in operator requires a list value, got {type(val).__name__}")
+                stmt = stmt.where(col.in_(list(val)))
             elif oper == '.nin':
-                stmt = stmt.where(eval(f"cls.{key}.not_in({val})")) # User.key.in_([123,456])
+                if not isinstance(val, (list, tuple, set)):
+                    raise ValueError(f".nin operator requires a list value, got {type(val).__name__}")
+                stmt = stmt.where(col.not_in(list(val)))
             else:
-                if isinstance(val, str):
-                    stmt = stmt.where(eval(f"cls.{key} {oper_aliases[oper]} '{val}'"))
-                else:
-                    stmt = stmt.where(eval(f"cls.{key} {oper_aliases[oper]} {val}"))
+                stmt = stmt.where(scalar_ops[oper](col, val))
         # Add sort order
         if sort_column:
+            if sort_column not in cls.__fields__.keys():
+                raise KeyError(f"sort_column: {sort_column} not found in model attrs")
             if sort_dir not in ['asc', 'desc']:
                 raise ValueError(f"sort_dir must be 'asc' or 'desc'. Got {sort_dir}")
-            if sort_dir == 'asc':
-                stmt = stmt.order_by(eval(f"cls.{sort_column}.asc()"))
-            elif sort_dir == 'desc':
-                stmt = stmt.order_by(eval(f"cls.{sort_column}.desc()"))
+            sort_col = getattr(cls, sort_column)
+            stmt = stmt.order_by(sort_col.asc() if sort_dir == 'asc' else sort_col.desc())
 
         # Run command
         results = store.run("execute", stmt, scalars=True, all=True)
@@ -214,9 +227,9 @@ class TapisModel(SQLModel):
         table_name = cls.table_name()
         logger.debug(f'Top of {table_name}.db_get_all() for tenant.site: {tenant}.{site}')
 
-        # Create statement
+        # Create statement — getattr(), never eval() (parity with db_get_where).
         primary_key = inspect(cls).primary_key[0].name
-        stmt = select(cls).where(eval(f"cls.{primary_key}.in_([pk_id])"))
+        stmt = select(cls).where(getattr(cls, primary_key).in_([pk_id]))
 
         # Run command
         result = store.run("scalar", stmt)
