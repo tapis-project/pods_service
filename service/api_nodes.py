@@ -2,9 +2,11 @@ import asyncio
 import datetime
 import hashlib
 import hmac
+import ipaddress
 import os
 import re
 import secrets
+import socket
 import time
 
 import json
@@ -96,6 +98,15 @@ NODES_LOGS_MAX_AGE_DAYS = int(os.environ.get("NODES_LOGS_MAX_AGE_DAYS", "7"))
 NODES_METRICS_MAX_BATCH = int(os.environ.get("NODES_METRICS_MAX_BATCH", "1500"))    # ~25 h @ 60 s
 NODES_METRICS_MAX_ROWS = int(os.environ.get("NODES_METRICS_MAX_ROWS", "100000"))    # per node
 NODES_METRICS_MAX_AGE_DAYS = int(os.environ.get("NODES_METRICS_MAX_AGE_DAYS", "30"))
+
+# Checkin blob caps — status and inventory are agent-controlled JSON written
+# verbatim to the node row; a compromised agent (it holds a valid token) could
+# otherwise ship a giant blob to OOM central at parse or bloat the row unbounded.
+# These are generous vs. a real agent's sub-KB status / modest inventory.
+NODES_STATUS_MAX_BYTES = int(os.environ.get("NODES_STATUS_MAX_BYTES", str(256 * 1024)))
+NODES_INVENTORY_MAX_BYTES = int(os.environ.get("NODES_INVENTORY_MAX_BYTES", str(1024 * 1024)))
+NODES_CAPABILITIES_MAX = int(os.environ.get("NODES_CAPABILITIES_MAX", "128"))
+NODES_ACTION_LOG_MAX = int(os.environ.get("NODES_ACTION_LOG_MAX", "500"))  # ring cap
 
 # Agents authenticate with this header on checkin/commands — NOT Authorization, so the
 # Tapis token middleware never tries to parse it as a JWT.
@@ -597,6 +608,16 @@ async def checkin_node(node_id: str, checkin: NodeCheckinRequest, request: Reque
     """
     node = _get_node_or_404(node_id)
     _require_agent(request, node)
+
+    # Agent-controlled JSON is bounded before it touches the row — a valid token
+    # is not licence to OOM/bloat central. Oversize is a 413, not a silent trim,
+    # so a misbehaving agent is visible rather than quietly truncated.
+    if checkin.status is not None and len(json.dumps(checkin.status)) > NODES_STATUS_MAX_BYTES:
+        raise ResourceError(f"status exceeds {NODES_STATUS_MAX_BYTES} bytes.", 413)
+    if checkin.inventory is not None and len(json.dumps(checkin.inventory)) > NODES_INVENTORY_MAX_BYTES:
+        raise ResourceError(f"inventory exceeds {NODES_INVENTORY_MAX_BYTES} bytes.", 413)
+    if checkin.capabilities and len(checkin.capabilities) > NODES_CAPABILITIES_MAX:
+        raise ResourceError(f"capabilities list exceeds {NODES_CAPABILITIES_MAX} entries.", 413)
 
     node.last_checkin_ts = _utcnow()
     # Expire an unconfirmed rotation: the agent is demonstrably alive on some
@@ -1512,6 +1533,77 @@ async def list_node_routes(node_id: str):
     return ok(result=[route.display() for route in routes], msg="Routes retrieved successfully.")
 
 
+# Hostname suffixes/names that resolve to cluster- or cloud-internal targets.
+_INTERNAL_HOST_SUFFIXES = (".svc", ".cluster.local", ".internal", ".local")
+_INTERNAL_HOST_EXACT = {"metadata", "metadata.google.internal", "localhost"}
+
+
+def _ip_is_internal(ip_str: str) -> bool:
+    """True for any address a public route/probe must never reach: private
+    (RFC1918), loopback, link-local (incl. 169.254 cloud metadata), CGNAT
+    (100.64/10), reserved, multicast, or unspecified — v4 and v6 alike."""
+    try:
+        ip = ipaddress.ip_address(ip_str)
+    except ValueError:
+        return False
+    if (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
+            or ip.is_multicast or ip.is_unspecified):
+        return True
+    # 100.64.0.0/10 (CGNAT) is not flagged is_private on every Python version.
+    if isinstance(ip, ipaddress.IPv4Address) and ip in ipaddress.ip_network("100.64.0.0/10"):
+        return True
+    return False
+
+
+def _backend_host_is_internal(host: str) -> bool:
+    """Shape + resolution check for a backend_host. An IP literal is judged
+    directly; a hostname is judged by its suffix AND by resolving it (a public
+    name pointed at an internal A record is the sharp case). Resolution failure
+    is treated as internal=False here — the probe re-checks at dial time, and an
+    unresolvable host simply won't route. Never raises."""
+    host = (host or "").strip().lower().rstrip(".")
+    if not host:
+        return False
+    # Bare single-label names resolve to in-cluster k8s services.
+    if "." not in host:
+        return True
+    if host in _INTERNAL_HOST_EXACT or host.endswith(_INTERNAL_HOST_SUFFIXES):
+        return True
+    if ".svc." in host:
+        return True
+    # IP literal → judge directly.
+    try:
+        ipaddress.ip_address(host)
+        return _ip_is_internal(host)
+    except ValueError:
+        pass
+    # Hostname → resolve and reject if ANY resolved address is internal.
+    try:
+        infos = socket.getaddrinfo(host, None)
+        return any(_ip_is_internal(info[4][0]) for info in infos)
+    except (socket.gaierror, socket.timeout, UnicodeError, ValueError):
+        return False
+
+
+def _reject_internal_backend(backend_host: str):
+    """Publish hardening (SSRF containment): routes exist to expose EDGE services
+    (tailnet/LAN addresses), never the cluster's own or a cloud metadata endpoint.
+    Any authenticated user can create a node and publish a route on it, and a
+    route with tapis_auth off is world-reachable — so a backend pointed at
+    10.x/169.254.169.254/a k8s ClusterIP/*.svc would put an internal service on
+    the public internet. Admins keep the escape hatch (central-side publishes are
+    a legitimate admin move)."""
+    if getattr(g, "admin", False):
+        return
+    if _backend_host_is_internal(backend_host):
+        raise ResourceError(
+            "backend_host may not point at a cluster-internal, loopback, "
+            "link-local (incl. cloud metadata 169.254.169.254), or private "
+            "address. Publish node ports on tailnet/LAN addresses reachable from "
+            "central. (A platform admin can override for central-side backends.)",
+            400)
+
+
 @router.post(
     "/pods/nodes/{node_id}/routes",
     tags=["Nodes"],
@@ -1528,6 +1620,7 @@ async def create_node_route(node_id: str, new_route: NewRoute):
     """
     logger.info(f"POST /pods/nodes/{node_id}/routes - Top of create_node_route.")
     node = _get_node_or_404(node_id)
+    _reject_internal_backend(new_route.backend_host)
     _check_route_hostname_free(new_route.route_id)
     if Route.db_get_with_pk(new_route.route_id, tenant=g.request_tenant_id, site=g.site_id):
         raise ResourceError(f"Route with route_id '{new_route.route_id}' already exists.", 400)
@@ -1619,7 +1712,18 @@ async def probe_node_route(node_id: str, route_id: str):
     _get_node_or_404(node_id)
     route = _get_route_or_404(node_id, route_id)
 
-    direct = _probe_http(f"http://{route.backend_host}:{route.port}/")
+    # SSRF containment on the reflecting leg: the probe dials backend_host from
+    # central and hands the caller (node USER) a body snippet. Re-check the
+    # target at dial time — an admin-created internal backend, or a hostname
+    # whose A record moved internal after create, must not be reflected to a
+    # non-admin. Admins may probe internal backends (they can set them).
+    if not getattr(g, "admin", False) and _backend_host_is_internal(route.backend_host):
+        direct = {"ok": False, "status_code": None, "latency_ms": None,
+                  "error": "backend resolves to an internal address; probe refused "
+                           "(a platform admin can probe central-side backends).",
+                  "snippet": None}
+    else:
+        direct = _probe_http(f"http://{route.backend_host}:{route.port}/")
     via_proxy = _probe_http(f"http://{TRAEFIK_SERVICE}/", host_header=route.url)
 
     if direct["ok"] and via_proxy["ok"]:

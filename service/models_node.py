@@ -1,7 +1,7 @@
 import os
 import re
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, ClassVar, Optional
 from pydantic import validator, model_validator, create_model
 from codes import PermissionLevel
 
@@ -188,9 +188,16 @@ class Node(TapisNodeBaseFull, table=True, validate=True):
             raise ValueError(f"description field must be less than 255 characters. Inputted length: {len(v)}")
         return v
 
+    # Ring cap on the ledger: agent-driven entries (settings adoption, storage-watch
+    # edges) append here, so a flapping/compromised agent could otherwise grow the
+    # array without bound. Keep the newest N; the ledger is recent-history, not an
+    # archive (durable audit belongs in a telemetry table if ever needed).
+    ACTION_LOG_MAX: ClassVar[int] = int(os.environ.get("NODES_ACTION_LOG_MAX", "500"))
+
     def log_action(self, msg: str):
         """Append a timestamped entry to action_logs (db_update only auto-logs for pods)."""
-        self.action_logs = (self.action_logs or []) + [f"{datetime.utcnow().strftime('%y/%m/%d %H:%M')}: {msg}"]
+        entries = (self.action_logs or []) + [f"{datetime.utcnow().strftime('%y/%m/%d %H:%M')}: {msg}"]
+        self.action_logs = entries[-self.ACTION_LOG_MAX:]
 
     @classmethod
     def db_get_all_with_permission(cls, user, level, tenant, site):
