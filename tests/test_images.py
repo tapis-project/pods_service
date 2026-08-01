@@ -3,7 +3,7 @@ import sys
 import json
 import time
 import pytest
-from tests.test_utils import headers, response_format, basic_response_checks, delete_pods, t
+from tests.test_utils import headers, regular_headers, response_format, basic_response_checks, delete_pods, t
 
 # Allows us to import pods's modules.
 sys.path.append('/home/tapis/service')
@@ -15,6 +15,12 @@ from fastapi.testclient import TestClient
 # base_url: The base URL to use for requests, must be valid Tapis URL.
 # raise_server_exceptions: If True, the client will raise exceptions from the server rather the normal client errors.
 client = TestClient(api, base_url="https://dev.develop.tapis.io", raise_server_exceptions=False)
+
+
+def _admin(hdrs):
+    # Image add/update/delete require admin MODE (X-Pods-Admin: true), not just the
+    # admin role — mirrors update_image. The test admin user holds the role.
+    return {**hdrs, "X-Pods-Admin": "true"}
 
 
 # Set up test variables
@@ -40,7 +46,7 @@ def teardown(headers):
         rsp = client.delete(f'/pods/{pod_id}', headers=headers)
     images = [test_image_1_no_tag]
     for image in images:
-        rsp = client.delete(f'/pods/images/{image}', headers=headers)
+        rsp = client.delete(f'/pods/images/{image}', headers=_admin(headers))
 
 
 ### Testing Images
@@ -58,7 +64,7 @@ def test_create_image(headers):
         "description": "Postgres 14 image"
     }
     # Create image
-    rsp = client.post("/pods/images", data=json.dumps(image_def), headers=headers)
+    rsp = client.post("/pods/images", data=json.dumps(image_def), headers=_admin(headers))
     
     result = basic_response_checks(rsp)
     rsp_dict = json.loads(rsp.content.decode('utf-8'))
@@ -148,6 +154,27 @@ def test_create_pod_with_new_image(headers):
     assert result['image'] in test_image_1_no_tag
 
 
+##### Authz testing
+def test_add_image_requires_admin_mode(headers, regular_headers):
+    # Security regression: adding an image must require admin mode. The allowlist
+    # is codes.NONE (siteadmintable has no per-object perms), so without the
+    # in-handler gate any user could allowlist an arbitrary image and run it.
+    image_def = {"image": "attacker/evil:latest", "tenants": ["**"], "description": "nope"}
+    # Denied = not created. PermissionsException currently maps to 400 (a known
+    # separate finding: it should be 403); assert on the denial, robust to that fix.
+    def denied(rsp):
+        return rsp.status_code in (400, 401, 403) and "admin mode" in json.dumps(response_format(rsp))
+    # admin ROLE but NOT admin mode (no X-Pods-Admin header) -> rejected
+    assert denied(client.post("/pods/images", data=json.dumps(image_def), headers=headers))
+    # a regular (non-admin) user -> rejected
+    assert client.post("/pods/images", data=json.dumps(image_def), headers=regular_headers).status_code in (400, 401, 403)
+    # delete likewise requires admin mode
+    assert denied(client.delete(f"/pods/images/{test_image_1_no_tag}", headers=headers))
+    # the attacker image must NOT have been created (lookup reports not-found)
+    got = response_format(client.get("/pods/images/attacker/evil", headers=headers))
+    assert got["status"] == "error" and "not found" in got["message"].lower()
+
+
 ##### Error testing
 def test_description_length_400(headers):
     # Definition
@@ -156,7 +183,7 @@ def test_description_length_400(headers):
         "description": "Test" * 200
     }
     # Attempt to create image
-    rsp = client.post("/pods/images", data=json.dumps(image_def), headers=headers)
+    rsp = client.post("/pods/images", data=json.dumps(image_def), headers=_admin(headers))
     data = response_format(rsp)
     # Test error response.
     assert rsp.status_code == 400
@@ -170,7 +197,7 @@ def test_description_is_ascii_400(headers):
         "description": "cafè"
     }
     # Attempt to create image
-    rsp = client.post("/pods/images", data=json.dumps(image_def), headers=headers)
+    rsp = client.post("/pods/images", data=json.dumps(image_def), headers=_admin(headers))
     data = response_format(rsp)
     # Test error response.
     assert rsp.status_code == 400

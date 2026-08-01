@@ -152,6 +152,8 @@ The edge release. Pods learned to leave the cluster.
 - Adopted pods are never claimed by the stack member matcher, `depends_on` works in both directions with adopted pods, and leaving a stack prunes dangling dependency references (a missing dependency hard-blocks the dependent's next start).
 - Action-log validators seed only when the log is empty — with assignment validation on, the creation entry was silently clobbering appended entries.
 - **Removed `eval()` from the database layer.** The shared query builder spliced caller values into an eval'd string, and one path reached it straight from a URL parameter — an authenticated remote code execution. Replaced with SQLAlchemy column operators, which parameterize properly. Regression-tested with breakout payloads.
+- Image allowlist writes require admin mode — previously any authenticated user could allowlist an arbitrary container image or delete one other tenants depended on.
+- Traefik config renders are validated before being pushed and fail closed, keeping the last known-good config. A stray quote in one pod's networking field could previously 404 every route on the site.
 
 
 ## 26Q2.1
