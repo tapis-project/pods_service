@@ -529,6 +529,26 @@ def test_get_template_tag_with_include_dependencies(headers):
         assert 'dependant_tags_count' in dependents
 
 
+def test_tag_id_injection_is_not_evaluated(headers):
+    """Security regression: tag_id (a raw URL path param) flows into db_get_where.
+    It used to be spliced into an eval() string — arbitrary Python RCE. Now it's a
+    parameterized column comparison, so an injection payload is simply a tag name
+    that matches nothing (200 with empty result), never executed, never a 500."""
+    payloads = [
+        "'+str(__import__('os').getpid())+'",
+        "x' or '1'='1",
+        "'; import os; os.system('id'); '",
+        "latest') | (TemplateTag.tag == 'latest",
+    ]
+    for p in payloads:
+        rsp = client.get(f"/pods/templates/{test_template_1}/tags/{p}", headers=headers)
+        # Not a 500 (would mean the string reached an interpreter/query error) and
+        # not a match — the payload is treated as an opaque tag name.
+        assert rsp.status_code in (200, 404), f"payload {p!r} gave {rsp.status_code}"
+        if rsp.status_code == 200:
+            assert response_format(rsp)["result"] == [], f"payload {p!r} matched a tag"
+
+
 def test_get_template_with_include_dependencies(headers):
     """Test that get_template endpoint returns tag_dependents when include_dependencies=true."""
     rsp = client.get(f"/pods/templates/{test_template_1}?include_dependencies=true", headers=headers)

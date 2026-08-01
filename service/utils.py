@@ -143,7 +143,7 @@ def check_permissions(user, level, object, object_type, roles=None, tenant=None)
     tenant: tenant_id of incoming request to check against tenant-scoped permissions (tenant.dev:READ)
     """
     # Running something like: Checking pod_id: {pod.pod_id} permissions for user {user}
-    logger.debug(f"Checking {object_type}_id: {eval(f'object.{object_type}_id')} permissions for user {user}")
+    logger.debug(f"Checking {object_type}_id: {getattr(object, f'{object_type}_id')} permissions for user {user}")
 
     # Admin bypass only when admin mode is explicitly activated via X-Pods-Admin header.
     # g.admin_active is already gated by g.admin (which checks ADMIN_ROLE or hardcoded usernames)
@@ -162,7 +162,7 @@ def check_permissions(user, level, object, object_type, roles=None, tenant=None)
         if site_wide_level:
             site_pem = codes.PermissionLevel(site_wide_level)
             if site_pem >= level:
-                logger.info(f"Allowing request - site-wide '**' permission grants {site_wide_level} for {object_type}: {eval(f'object.{object_type}_id')}.")
+                logger.info(f"Allowing request - site-wide '**' permission grants {site_wide_level} for {object_type}: {getattr(object, f'{object_type}_id')}.")
                 return True
         
         # tenant-wide(tenant.*:READ) check requires incoming tenant arg to check against
@@ -172,14 +172,14 @@ def check_permissions(user, level, object, object_type, roles=None, tenant=None)
             if tenant_scoped_level:
                 tenant_pem = codes.PermissionLevel(tenant_scoped_level)
                 if tenant_pem >= level:
-                    logger.info(f"Allowing request - {tenant_key} permission grants {tenant_scoped_level} for {object_type}: {eval(f'object.{object_type}_id')}.")
+                    logger.info(f"Allowing request - {tenant_key} permission grants {tenant_scoped_level} for {object_type}: {getattr(object, f'{object_type}_id')}.")
                     return True
     
     # Attempt to get permission level for particular user.
     user_level = permissions.get(user)
     wildcard_level = permissions.get("*")
     if not user_level and not wildcard_level:
-        logger.info(f"Found no permissions for user {user} on {object_type}: {eval(f'object.{object_type}_id')}. Permissions: {permissions}")
+        logger.info(f"Found no permissions for user {user} on {object_type}: {getattr(object, f'{object_type}_id')}. Permissions: {permissions}")
         if object_type == "pod" and _pod_stack_grants(user, level, object, roles=roles, tenant=tenant):
             return True
         return False
@@ -192,14 +192,14 @@ def check_permissions(user, level, object, object_type, roles=None, tenant=None)
     # Get user pem and compare to level.
     user_pem = codes.PermissionLevel(user_level)
     if user_pem >= level:
-        logger.info(f"Allowing request - user has appropriate permission for {object_type}: {eval(f'object.{object_type}_id')}.")
+        logger.info(f"Allowing request - user has appropriate permission for {object_type}: {getattr(object, f'{object_type}_id')}.")
         return True
     elif tenant_wide_level and codes.PermissionLevel(tenant_wide_level) >= level:
-        logger.info(f"Allowing request - TENANT has appropriate permission for {object_type}: {eval(f'object.{object_type}_id')}.")
+        logger.info(f"Allowing request - TENANT has appropriate permission for {object_type}: {getattr(object, f'{object_type}_id')}.")
         return True
     else:
         # we found the permission for the user but it was insufficient; try stack inheritance for pods
-        logger.info(f"Found permission {level} for  {object_type}: {eval(f'object.{object_type}_id')}, insufficient permission, rejecting request.")
+        logger.info(f"Found permission {level} for  {object_type}: {getattr(object, f'{object_type}_id')}, insufficient permission, rejecting request.")
         if object_type == "pod" and _pod_stack_grants(user, level, object, roles=roles, tenant=tenant):
             return True
         return False
