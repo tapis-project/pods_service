@@ -20,6 +20,7 @@ if not os.path.exists(os.path.join(AGENT_DIR, "pods_agent.py")):
         raise SystemExit("agent/ not present")
 sys.path.insert(0, AGENT_DIR)
 
+import pytest
 import pods_agent as agent
 
 GOOD_SRC = 'AGENT_VERSION = "9.9.9"\nprint("hi")\n'
@@ -212,3 +213,82 @@ def test_adopt_central_settings_shared_helper():
         agent.adopt_central_settings(state, None)
         assert agent.CENTRAL_SETTINGS == {"logs_tail": 321}
         agent.CENTRAL_SETTINGS.clear()
+
+
+# ── self-update trust boundary ───────────────────────────────────────────────
+#
+# The update path fetches code this process then execs, so every input to it is a
+# trust decision. These pin the refusals added in the pre-push review.
+
+def test_origin_pinning_accepts_join_origin_and_refuses_others():
+    st = {"join_origin": "https://tacc.tapis.io", "api_base": "https://tacc.tapis.io/pods"}
+    assert agent._adoptable(st, "https://tacc.tapis.io/pods", "api_base") is True
+    assert agent._adoptable(st, "https://evil.example/pods", "api_base") is False   # redirect
+    assert agent._adoptable(st, "http://tacc.tapis.io/pods", "api_base") is False   # downgrade
+    assert agent._adoptable(st, "/pods", "api_base") is False                       # relative
+    assert agent._adoptable(st, "", "api_base") is False
+
+
+def test_origin_pinning_falls_back_to_api_base_for_pre_existing_state():
+    """Nodes joined before join_origin existed must still be constrained."""
+    st = {"api_base": "https://tacc.tapis.io/pods"}
+    assert agent._adoptable(st, "https://tacc.tapis.io/x", "api_base") is True
+    assert agent._adoptable(st, "https://evil.example/x", "api_base") is False
+
+
+def test_join_keeps_dialed_url_when_central_returns_other_origin():
+    assert agent._central_base_or_joined(
+        "https://evil.example/pods", "https://tacc.tapis.io/pods") == "https://tacc.tapis.io/pods"
+    # a path refinement on the same origin is fine
+    assert agent._central_base_or_joined(
+        "https://tacc.tapis.io/v3/pods", "https://tacc.tapis.io/pods") == "https://tacc.tapis.io/v3/pods"
+
+
+def test_fetch_agent_source_refuses_when_tls_verification_is_off():
+    os.environ["PODS_AGENT_INSECURE"] = "true"
+    try:
+        st = {"join_origin": "https://tacc.tapis.io",
+              "api_base": "https://tacc.tapis.io/pods", "node_id": "n1"}
+        with pytest.raises(RuntimeError) as e:
+            agent.fetch_agent_source(st, {})
+        assert "PODS_AGENT_INSECURE" in str(e.value)
+    finally:
+        os.environ.pop("PODS_AGENT_INSECURE", None)
+
+
+def test_fetch_agent_source_refuses_off_origin_source_url():
+    st = {"join_origin": "https://tacc.tapis.io", "node_id": "n1",
+          "api_base": "https://tacc.tapis.io/pods",
+          "agent_source": "https://evil.example/pods/nodes/n1/agent-source"}
+    with pytest.raises(RuntimeError) as e:
+        agent.fetch_agent_source(st, {})
+    assert "not on the origin" in str(e.value)
+
+
+def _stub_update(monkey_sha, served_sha):
+    calls = []
+    saved = (agent.fetch_agent_source, agent.post_command_result, agent.setting)
+    agent.fetch_agent_source = lambda s, h: (b"print('x')\n", "9.9.9", served_sha)
+    agent.post_command_result = lambda s, h, cid, status, result: calls.append((status, result))
+    agent.setting = lambda k, d=None: True if k == "allow_self_update" else d
+    st = {"node_id": "n1", "api_base": "https://x/pods"}
+    if monkey_sha:
+        st["agent_source_sha256"] = monkey_sha
+    try:
+        agent.do_update_command(st, {}, "nc_1")
+    finally:
+        agent.fetch_agent_source, agent.post_command_result, agent.setting = saved
+    return calls
+
+
+def test_update_refuses_without_a_checkin_advertised_sha():
+    """The response's own header is not independent verification."""
+    calls = _stub_update(None, "deadbeefdeadbeef")
+    assert calls and calls[0][0] == "error"
+    assert "not advertised agent_source_sha256" in calls[0][1]["error"]
+
+
+def test_update_refuses_when_advertised_shas_disagree():
+    calls = _stub_update("aaaaaaaaaaaa", "bbbbbbbbbbbb")
+    assert calls and calls[0][0] == "error"
+    assert "disagrees" in calls[0][1]["error"]

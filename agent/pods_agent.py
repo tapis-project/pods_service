@@ -79,10 +79,14 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 
 AGENT_VERSION = "0.7.0"
+# Cap on the self-update payload — the agent is a single stdlib file, so anything
+# near this is wrong. Bounds a hostile/broken central OOMing the box.
+AGENT_SOURCE_MAX_BYTES = 4 * 1024 * 1024
 TOKEN_HEADER = "X-Pods-Node-Token"
 DOCKER_SOCK = os.environ.get("DOCKER_SOCK", "/var/run/docker.sock")
 K8S_SA_DIR = "/var/run/secrets/kubernetes.io/serviceaccount"
@@ -1480,6 +1484,51 @@ def base_headers(tenant=None):
     return h
 
 
+def _origin_of(u):
+    """scheme://host[:port] of a URL, lowercased. Empty string if not absolute http(s)."""
+    try:
+        parts = urllib.parse.urlsplit(u or "")
+    except Exception:
+        return ""
+    if parts.scheme.lower() not in ("http", "https") or not parts.netloc:
+        return ""
+    return f"{parts.scheme.lower()}://{parts.netloc.lower()}"
+
+
+def _adoptable(state, candidate, what):
+    """Whether an endpoint central republished may be adopted.
+
+    Central advertises its own endpoints in every checkin and the agent follows
+    them carrying this node's token — and for agent_source, carrying code it will
+    verify and then EXECUTE. Unconstrained, a compromised central or an on-path
+    attacker can hand the agent a new origin and inherit both.
+
+    The join URL the operator typed is the trust anchor: an endpoint that leaves
+    that origin is not a config change, it is a redirect somewhere else. Refuse it.
+    A central that genuinely moves hostname is a re-join, not a silent hop.
+    """
+    join_origin = state.get("join_origin") or _origin_of(state.get("api_base", ""))
+    cand_origin = _origin_of(candidate)
+    if not cand_origin:
+        log(f"refusing to adopt {what}: not an absolute http(s) URL ({candidate!r})")
+        return False
+    if join_origin and cand_origin != join_origin:
+        log(f"refusing to adopt {what}: {cand_origin} is not the origin this node joined "
+            f"({join_origin}) — re-join if central really moved")
+        return False
+    return True
+
+
+def _central_base_or_joined(central_base, url):
+    """Central may refine the PATH it serves from, but never move to another origin.
+    The URL the operator dialed wins if they disagree."""
+    if central_base and _origin_of(central_base) != _origin_of(url):
+        log(f"central returned central_base_url on a different origin "
+            f"({_origin_of(central_base)} != {_origin_of(url)}) — keeping the joined URL")
+        return url
+    return central_base or url
+
+
 def _hint_if_container_localhost(url):
     if ("localhost" in url or "127.0.0.1" in url) and os.path.exists("/.dockerenv"):
         log(
@@ -1516,7 +1565,8 @@ def join(url, node_id, claim_token, tenant=None):
         "node_id": result.get("node_id", node_id),
         "node_token": result["node_token"],
         "tenant": tenant,
-        "api_base": result.get("central_base_url") or url,
+        "join_origin": _origin_of(url),
+        "api_base": _central_base_or_joined(result.get("central_base_url"), url),
         "login_server": result.get("login_server"),
         "checkin_interval_seconds": result.get("checkin_interval_seconds", 60),
         "namespace": result.get("namespace"),
@@ -1636,13 +1686,28 @@ def fetch_agent_source(state, headers):
     """(bytes, advertised_version, advertised_sha) from central's agent-source
     endpoint. Raises with a precise reason on any failure."""
     url = agent_source_url(state)
+    # This request returns CODE this process will exec. Two refusals, both fail-closed:
+    #  - PODS_AGENT_INSECURE disables certificate verification. That is a dev
+    #    convenience on the checkin path; on the code-download path it hands an
+    #    on-path attacker arbitrary code execution, so self-update is simply
+    #    unavailable while it is set.
+    #  - the source must live on the origin this node joined, so a republished
+    #    agent_source cannot aim the updater somewhere else (see _adoptable).
+    if os.environ.get("PODS_AGENT_INSECURE", "").lower() == "true":
+        raise RuntimeError(
+            "refusing to self-update while PODS_AGENT_INSECURE=true — TLS verification "
+            "is off, so fetched code cannot be trusted. Unset it and retry.")
+    if not _adoptable(state, url, "agent_source (self-update fetch)"):
+        raise RuntimeError(
+            f"refusing to self-update: source URL {url} is not on the origin this node "
+            f"joined ({state.get('join_origin')}).")
     req = urllib.request.Request(
         url, headers={**headers, "User-Agent": f"pods-agent/{AGENT_VERSION}"})
-    ctx = None
-    if os.environ.get("PODS_AGENT_INSECURE", "").lower() == "true":
-        ctx = ssl._create_unverified_context()
-    with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
-        raw = resp.read()
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        raw = resp.read(AGENT_SOURCE_MAX_BYTES + 1)
+        if len(raw) > AGENT_SOURCE_MAX_BYTES:
+            raise RuntimeError(
+                f"refusing to self-update: source exceeds {AGENT_SOURCE_MAX_BYTES} bytes")
         return (raw,
                 resp.headers.get("X-Agent-Version") or "unknown",
                 resp.headers.get("X-Agent-Sha256") or "")
@@ -2011,7 +2076,22 @@ def do_update_command(state, headers, cid):
     raw, adv_version, adv_sha = fetch_agent_source(state, headers)
     # Prefer the sha the CHECKIN advertised (separate request/channel from the
     # bytes themselves); the response header is the fallback.
-    expected = state.get("agent_source_sha256") or adv_sha
+    # The sha MUST come from the checkin — a separate request from the one carrying
+    # the bytes. Falling back to the response's own X-Agent-Sha256 header is not
+    # verification at all: whoever served the code also served the digest, so a
+    # tampered response simply ships a matching one. No checkin sha, no update.
+    expected = state.get("agent_source_sha256")
+    if not expected:
+        post_command_result(state, headers, cid, "error", {
+            "error": "self-update refused — central has not advertised agent_source_sha256 "
+                     "in checkin, and the response header alone is not independent "
+                     "verification. Upgrade central or retry after the next checkin."})
+        return
+    if adv_sha and adv_sha != expected:
+        post_command_result(state, headers, cid, "error", {
+            "error": f"self-update refused — sha advertised in checkin ({expected[:12]}…) "
+                     f"disagrees with the one served with the bytes ({adv_sha[:12]}…)"})
+        return
     log(f"self-update: fetched {len(raw)} bytes (serves {adv_version}, "
         f"sha {adv_sha[:12]}…) — verifying against {expected[:12]}…")
     path, new_version = apply_update(raw, expected, state)
@@ -2172,12 +2252,19 @@ def run():
             # Config-as-data: adopt central's currently-published endpoints.
             endpoints = result.get("endpoints") or {}
             new_base = endpoints.get("api_base")
-            if adopt_endpoints and new_base and new_base != state["api_base"]:
+            if (adopt_endpoints and new_base and new_base != state["api_base"]
+                    and _adoptable(state, new_base, "api_base")):
                 log(f"central republished api_base: {state['api_base']} -> {new_base} (adopting)")
                 state["api_base"] = new_base
                 save_state(state)
             for key in ("log_ingest", "log_encodings", "agent_source"):
                 if adopt_endpoints and endpoints.get(key) and endpoints.get(key) != state.get(key):
+                    # log_encodings is a capability list, not a URL — only the URL-valued
+                    # keys get origin-pinned. agent_source matters most: it is where
+                    # self-update fetches the code this process will exec.
+                    if key in ("log_ingest", "agent_source") and not _adoptable(
+                            state, endpoints[key], key):
+                        continue
                     state[key] = endpoints[key]
                     save_state(state)
             # Facts, not routing — adopt regardless of adopt_endpoints (an agent
