@@ -181,7 +181,9 @@ def validate_token(request: Request, token: str = None):
     logger.debug(f"Running get_userinfo with url: {url} (token_tenant: {token_tenant})")
     headers = {'X-Tapis-Token': token}
     try:
-        rsp = requests.get(url, headers=headers)
+        # This runs inside the traefik forwardAuth path (pre-auth, every proxied
+        # request) — without a timeout, one hung tenant host pins API workers.
+        rsp = requests.get(url, headers=headers, timeout=(3.05, 10))
         rsp.raise_for_status()
         username = rsp.json()['result'].get('username')
         email = rsp.json()['result'].get('email')
@@ -520,7 +522,7 @@ def run_tapis_auth_callback(request: Request, entity: TapisAuthEntity):
     }
 
     try:
-        response = requests.post(url, data=data, auth=(entity.client_id, res.client_key))
+        response = requests.post(url, data=data, auth=(entity.client_id, res.client_key), timeout=(3.05, 10))
         response.raise_for_status()
         logger.debug(f"auth callback for {entity.label} token request response: {response.text}")
         json_resp = response.json()

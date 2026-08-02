@@ -51,6 +51,7 @@ The edge release. Pods learned to leave the cluster.
 - **Slimmer runtime image, dev tools on the side** — jupyterlab and pylint move out of the runtime image into a `devtools` build stage (`tapis/pods-api:dev-devtools`, published on dev pushes). jupyterlab alone accounted for 27 known-CVE advisories in the image without ever being imported by service code; existing `docker build`/`make build` invocations still produce the slim image unchanged.
 
 ### Bug fixes:
+- Outbound auth calls carry timeouts — the token-validation call runs in the per-request proxy auth path, and a hung tenant host could previously pin API workers indefinitely on unauthenticated traffic.
 - Permission guards return proper 4xx codes instead of bare errors that mapped to 500.
 - Client errors return proper 4xx instead of 500 across pod, volume, snapshot, and template guards — the error handler only mapped Tapis errors, so bare raises leaked as server errors.
 - The Traefik template can no longer render a bare `tcp.middlewares:` — the resulting YAML null made Traefik reject the entire dynamic config, 404ing every route on the site.
