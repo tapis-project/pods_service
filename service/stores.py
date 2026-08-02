@@ -51,6 +51,65 @@ def get_site_rabbitmq_uri(site):
     return rabbitmq_uri
 
 
+def _redact(text, secrets):
+    """
+    Scrub secrets out of anything headed for a log line or an exception message.
+    The rabbitmqadmin invocation carries the admin password on argv and the declares
+    carry the per-site password, so rabbitmqadmin's own error output can echo them
+    straight back at us.
+    """
+    for secret in secrets:
+        if secret and isinstance(secret, str):
+            text = text.replace(secret, '***')
+    return text
+
+
+def _summarize_rabbitmqadmin_error(output):
+    """
+    Reduce rabbitmqadmin's output to the one line worth reading.
+
+    rabbitmqadmin is a python script that prints a full traceback on failure and then
+    its own one-line summary prefixed with '***' (e.g. '*** Could not connect: timed
+    out'). Quoting the whole traceback buries the actual cause, so prefer the '***'
+    summary, fall back to the last non-empty line, and cap the length either way.
+    """
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    if not lines:
+        return ""
+    starred = [line for line in lines if line.startswith('***')]
+    summary = starred[-1] if starred else lines[-1]
+    return summary[:500]
+
+
+def _rabbitmqadmin_declare(fn_call, subcommand, doing, secrets=()):
+    """
+    Run ONE rabbitmqadmin declare and fail loudly if it did not succeed.
+
+    These declares used to be fire-and-forget: a failed user/vhost/permission create
+    still logged "RabbitMQ init complete", and the service then died much later at
+    first channel open with an opaque AMQP ACCESS_REFUSED that pointed nowhere near
+    the real cause. Now the failure is reported where it happens, naming the exact
+    object that could not be created and quoting rabbitmqadmin's own summary line.
+
+    The full output is still logged at debug for when the summary is not enough.
+    """
+    result = subprocess.run(fn_call + subcommand, shell=True, capture_output=True)
+    if result.returncode == 0:
+        return result
+
+    stdout = _redact(result.stdout.decode('UTF-8', 'replace').strip(), secrets)
+    stderr = _redact(result.stderr.decode('UTF-8', 'replace').strip(), secrets)
+    detail = (_summarize_rabbitmqadmin_error(stderr)
+              or _summarize_rabbitmqadmin_error(stdout)
+              or "(rabbitmqadmin produced no output)")
+    msg = (f"RabbitMQ init failed while {doing}. rabbitmqadmin exited "
+           f"{result.returncode}: {detail}")
+    logger.critical(msg)
+    logger.debug(f"Full rabbitmqadmin output for the failure above --- "
+                 f"stdout: {stdout or '(empty)'} --- stderr: {stderr or '(empty)'}")
+    raise RuntimeError(msg)
+
+
 def rabbitmq_init():
     """
     Initial site init for RabbitMQ using the RabbitMQ utility.
@@ -146,14 +205,39 @@ def rabbitmq_init():
             # Site DB Name
             site_db_name = f"pods_{site}"
 
-            # Initializing site user account.
-            subprocess.run(fn_call + f'declare user name={site_rabbitmq_user} password={site_rabbitmq_pass} tags=None', shell=True) # create user/pass
+            # Every declare below is checked — see _rabbitmqadmin_declare. Both passwords
+            # are passed as `secrets` so a rabbitmqadmin error can't echo them into a log.
+            secrets = (admin_rabbitmq_pass, site_rabbitmq_pass)
+
+            # Initializing site user account. tags= is deliberately EMPTY: these are plain
+            # AMQP users with no management-UI rights. It used to read `tags=None`, which
+            # rabbitmqadmin passed through literally — every site user ended up carrying a
+            # tag named "None" (verified on the live broker). Harmless (rabbit only honors
+            # management/policymaker/monitoring/administrator) but wrong; declare is an
+            # upsert, so existing users get the stray tag cleared on the next init.
+            _rabbitmqadmin_declare(
+                fn_call,
+                f'declare user name={site_rabbitmq_user} password={site_rabbitmq_pass} tags=',
+                f"creating user '{site_rabbitmq_user}' for site '{site}'",
+                secrets)
 
             # Creating site vhost. Granting permissions to site user and admin.
             logger.debug(f"Creating vhost named '{site_db_name}' for site - {site}. {site_rabbitmq_user} and {admin_rabbitmq_user} users are being granted read/write.")
-            subprocess.run(fn_call + f'declare vhost name={site_db_name}', shell=True) # create vhost
-            subprocess.run(fn_call + f'declare permission vhost={site_db_name} user={site_rabbitmq_user} configure=.* write=.* read=.*', shell=True) # site user perm
-            subprocess.run(fn_call + f'declare permission vhost={site_db_name} user={admin_rabbitmq_user} configure=.* write=.* read=.*', shell=True) # admin perm
+            _rabbitmqadmin_declare(
+                fn_call,
+                f'declare vhost name={site_db_name}',
+                f"creating vhost '{site_db_name}' for site '{site}'",
+                secrets)
+            _rabbitmqadmin_declare(
+                fn_call,
+                f'declare permission vhost={site_db_name} user={site_rabbitmq_user} configure=.* write=.* read=.*',
+                f"granting site user '{site_rabbitmq_user}' permissions on vhost '{site_db_name}'",
+                secrets)
+            _rabbitmqadmin_declare(
+                fn_call,
+                f'declare permission vhost={site_db_name} user={admin_rabbitmq_user} configure=.* write=.* read=.*',
+                f"granting admin user '{admin_rabbitmq_user}' permissions on vhost '{site_db_name}'",
+                secrets)
             logger.debug(f"RabbitMQ init complete for site: {site}.")
             print(f"RabbitMQ init complete for site: {site}.")
     except Exception as e:
