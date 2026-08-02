@@ -7,6 +7,7 @@ from models_misc import SetPermission
 from channels import CommandChannel
 from codes import OFF, ON, RESTART, REQUESTED, STOPPED, USER
 import requests
+from urllib.parse import quote
 from tapisservice.tapisfastapi.utils import g, ok
 from tapisservice.config import conf
 from __init__ import t, BadRequestError
@@ -129,43 +130,53 @@ async def upload_to_jupyter(
     Input: multipart form (file), and 'path' (destination in Jupyter).
     """
     logger.info(f"POST /pods/jupyter/{pod_id}/upload - Top of upload_to_jupyter.")
-    # still not working
-    return JSONResponse(status_code=200, content={"message": "Not implemented yet."})
 
     pod = Pod.db_get_with_pk(pod_id, tenant=g.request_tenant_id, site=g.site_id)
-
-    # Check permissions and status
     if not pod or getattr(pod, "status_requested", None) != "ON":
         raise ResourceError("Can't find suitable running Jupyter pod for user.", 404)
-    logger.debug(f"jupyter upload input path: {path}")
+
+    # USER level on the pod — writing executable notebooks into a pod must not
+    # ride on READ (or on nothing, as the first draft had it).
+    if not check_permissions(user=g.username, level=USER, object=pod,
+                             object_type="pod", roles=getattr(g, 'roles', None),
+                             tenant=g.request_tenant_id):
+        raise PermissionsException(f"Not authorized to upload to pod {pod_id}.")
 
     # Get networking.url for upload
     networking = getattr(pod, "networking", {})
     default_network = networking.get('default', None)
     if not default_network:
         raise ResourceError("No default networking information found for the pod.", 500)
-    logger.debug(f"default_network: {default_network}")
     jupyter_url = default_network.get("url") if isinstance(default_network, dict) else getattr(default_network, "url", None)
     if not jupyter_url:
         raise ResourceError("No URL found in pod networking information.", 500)
 
     logger.debug(f"jupyter upload input path: {path}")
-    upload_url = f"https://{jupyter_url}/api/contents/{path}"
+    # The destination is user input interpolated into a URL path: refuse '..'
+    # segments (the server would normalize them right out of /api/contents/)
+    # and percent-encode each segment so '?', '#', etc. stay literal.
+    segments = [s for s in path.split("/") if s not in ("", ".")]
+    if ".." in segments:
+        raise ResourceError("Upload path may not contain '..' segments.", 400)
+    upload_url = f"https://{jupyter_url}/api/contents/" + "/".join(quote(s, safe="") for s in segments)
     file_bytes = await file.read()
+    try:
+        content = file_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        raise ResourceError("Uploaded file must be UTF-8 text (notebook JSON).", 400)
     data = {
-        "content": file_bytes.decode("utf-8"),
+        "content": content,
         "type": "notebook",
         "format": "text"
     }
-    # Forward x-tapis-token header if present
+    # Forward x-tapis-token header if present. The token itself is never logged.
     headers = {}
     tapis_token = request.headers.get("x-tapis-token")
     if tapis_token:
         headers["x-tapis-token"] = tapis_token
 
-    logger.debug(f"request headers: {request.headers}; x-tapis-token: {tapis_token}; headers: {headers}")
     try:
-        resp = requests.put(upload_url, json=data, headers=headers)
+        resp = requests.put(upload_url, json=data, headers=headers, timeout=(3.05, 30))
         resp.raise_for_status()
     except Exception as e:
         logger.error(f"Error uploading file to Jupyter: {e}")

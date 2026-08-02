@@ -52,6 +52,7 @@ The edge release. Pods learned to leave the cluster.
 
 ### Bug fixes:
 - Outbound auth calls carry timeouts — the token-validation call runs in the per-request proxy auth path, and a hung tenant host could previously pin API workers indefinitely on unauthenticated traffic.
+- The Jupyter upload endpoint actually works now — the handler had been short-circuited to a 200 that said "Not implemented yet". Re-enabled with the guards the draft was missing: USER-level permission on the pod, a percent-encoded destination path with `..` segments refused, an upload timeout, and the caller's token no longer written to the debug log.
 - Permission guards return proper 4xx codes instead of bare errors that mapped to 500.
 - Client errors return proper 4xx instead of 500 across pod, volume, snapshot, and template guards — the error handler only mapped Tapis errors, so bare raises leaked as server errors.
 - The Traefik template can no longer render a bare `tcp.middlewares:` — the resulting YAML null made Traefik reject the entire dynamic config, 404ing every route on the site.
