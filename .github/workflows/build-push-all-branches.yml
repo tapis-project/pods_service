@@ -33,6 +33,9 @@ jobs:
         run: |
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             echo "tag_name=$(echo ${GITHUB_REF#refs/tags/v})" >> $GITHUB_OUTPUT
+          elif [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
+            # PR refs are refs/pull/<N>/merge — slashes are invalid in a docker tag
+            echo "tag_name=pr-$(echo "${GITHUB_REF}" | cut -d/ -f3)" >> $GITHUB_OUTPUT
           else
             echo "tag_name=$(echo ${GITHUB_REF#refs/heads/} | sed 's/prod/latest/g')" >> $GITHUB_OUTPUT
           fi
@@ -52,5 +55,7 @@ jobs:
       - name: Build & push tagged Docker backend image
         uses: docker/build-push-action@v3
         with:
-          push: true
+          # PR runs build-only — the image gate is the build succeeding, nothing
+          # is published until the change actually lands on a real branch.
+          push: ${{ github.event_name != 'pull_request' }}
           tags: tapis/pods-api:${{ steps.get_tag_name.outputs.tag_name }}
