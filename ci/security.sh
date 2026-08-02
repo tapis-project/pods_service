@@ -28,7 +28,7 @@ if have gitleaks; then
   # Allowlist for placeholders/fixtures lives in .gitleaks.toml (repo root).
   run "no secrets in tree" gitleaks detect --no-git --no-banner --redact --exit-code 1
 else
-  note "gitleaks not installed — SKIPPED (install to enable; HARD gate once present)"
+  note "gitleaks not installed — SKIPPED (HARD gate once present; full parity: make ci-scan)"
 fi
 
 section "3b — semgrep: audit-derived rules"
@@ -46,7 +46,7 @@ if have semgrep; then
       --config ci/semgrep/pods.yml "${base_args[@]}" . \
       || note "advisory warnings above (not gating)"
 else
-  note "semgrep not installed — SKIPPED (install to enable)"
+  note "semgrep not installed — SKIPPED (full parity: make ci-scan)"
 fi
 
 section "3c — semgrep community packs (advisory)"
@@ -54,14 +54,14 @@ if have semgrep; then
   semgrep --disable-version-check --config p/python --config p/secrets . \
     || note "community pack findings above (advisory — not gating yet)"
 else
-  note "semgrep not installed — SKIPPED"
+  note "semgrep not installed — SKIPPED (full parity: make ci-scan)"
 fi
 
 section "3d — dependency CVEs (advisory)"
 if [ -f requirements.txt ] && have pip-audit; then
   pip-audit -r requirements.txt || note "dependency advisories above (advisory)"
 else
-  note "pip-audit or requirements.txt absent — SKIPPED"
+  note "pip-audit or requirements.txt absent — SKIPPED (full parity: make ci-scan)"
 fi
 
 finish
