@@ -26,11 +26,9 @@ python-multipart
 pika
 bcrypt # gate access-token password hashing (already present transitively via paramiko)
 
-# Misc
-pylint
-
-# Dev
-jupyterlab==4.1
+# Dev-only tooling (jupyterlab, pylint) lives in requirements-dev.txt — installed
+# only in the devtools image stage (docker build --target devtools), never in the
+# runtime image. jupyterlab alone carried 27 pip-audit CVE advisories in here.
 
 # Tests
 pytest

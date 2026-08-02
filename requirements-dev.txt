@@ -1,0 +1,8 @@
+# Dev-only tooling — NOT installed in the runtime tapis/pods-api image.
+# Lands in the devtools image stage: docker build --target devtools
+# (CI publishes it as tapis/pods-api:dev-devtools on dev pushes), or locally:
+#   pip install -r requirements-dev.txt
+# jupyterlab is here because it shipped 27 pip-audit CVE advisories into the
+# runtime image while never being imported by service code.
+jupyterlab==4.5.7
+pylint

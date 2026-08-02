@@ -1,8 +1,13 @@
 # Core image for pods
 # Image: tapis/pods-api
+#
+# Multi-stage: api (runtime) → devtools (api + requirements-dev.txt) → final.
+# `final` is an alias of `api` so a plain `docker build` / `make build` (no
+# --target) still produces the slim runtime image; CI builds --target devtools
+# separately and publishes it as tapis/pods-api:dev-devtools on dev pushes.
 
 # Create base image
-FROM python:3.10
+FROM python:3.10 AS api
 RUN useradd tapis -u 4872
 WORKDIR /home/tapis/
 
@@ -60,3 +65,14 @@ RUN chown -R tapis:tapis /home/tapis
 USER tapis
 
 CMD ["/home/tapis/entry.sh"]
+
+# Dev-tools variant: the api image plus requirements-dev.txt (jupyterlab, …).
+# Never deployed by default — for in-container notebook/demo work on dev.
+FROM api AS devtools
+USER root
+COPY --chown=tapis:tapis requirements-dev.txt /home/tapis/
+RUN pip3 install -r /home/tapis/requirements-dev.txt
+USER tapis
+
+# Default target — MUST stay last so target-less builds get the runtime image.
+FROM api AS final

@@ -48,6 +48,7 @@ The edge release. Pods learned to leave the cluster.
 - `docs/node_security_model.md` — the endpoint access matrix, the two-boundary credential model, what a stolen credential grants, and the bounds on what central can do to a well-behaved edge.
 - **CI gate** — a fail-fast waterfall (syntax sweep, cluster-free tests, secret scan plus audit-derived rules) that runs identically on GitHub Actions, Gitea, or a laptop. Every security fix above became a permanent rule, so the class is caught forever.
 - **One CI pipeline** — the separate Docker build workflow folded in behind the gates: every PR proves the image still builds (but never publishes), and a real branch publishes to Docker Hub only after the syntax, test, and security gates pass. The two workflows used to race, so a commit with failing tests could still ship a dev image. Locally, `make ci-scan` runs the same gates with the scanners armed, and plain `make ci` says out loud when a scanner was skipped.
+- **Slimmer runtime image, dev tools on the side** — jupyterlab and pylint move out of the runtime image into a `devtools` build stage (`tapis/pods-api:dev-devtools`, published on dev pushes). jupyterlab alone accounted for 27 known-CVE advisories in the image without ever being imported by service code; existing `docker build`/`make build` invocations still produce the slim image unchanged.
 
 ### Bug fixes:
 - Permission guards return proper 4xx codes instead of bare errors that mapped to 500.
