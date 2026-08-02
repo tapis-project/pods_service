@@ -814,7 +814,13 @@ def scan_watches(state):
             w.pop("partial", None)
         else:
             interval = entry.get("interval_s") or WATCH_INTERVAL_DEFAULT_S
-            overdue = time.monotonic() - w["last_walk_mono"] - interval
+            if not w["last_walk_mono"]:
+                # never walked — always due. monotonic() is ~uptime, so on a
+                # host younger than `interval` the plain subtraction stays
+                # negative and the first walk would wait out the clock.
+                overdue = float("inf")
+            else:
+                overdue = time.monotonic() - w["last_walk_mono"] - interval
             if overdue >= 0:
                 walk_candidates.append((overdue, path))
     for path in [p for p in list(WATCH_STATE) if p not in configured]:
