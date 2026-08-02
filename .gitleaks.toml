@@ -1,0 +1,21 @@
+# Gitleaks config for the CI security gate (ci/security.sh — tree scan).
+# [extend] keeps ALL default rules; entries here only allowlist known non-secrets.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Intentional placeholders, test fixtures, and local-only untracked files"
+paths = [
+  # placeholder k8s manifest — every value is a changeme; the real secrets.yml
+  # under deployment/ is untracked and must stay that way
+  '''deploymentTemplate/secrets\.yml''',
+  # fake fixture token used by the node-routes tests
+  '''tests/test_node_routes\.py''',
+  # local-only untracked files (never present in a CI checkout; listed so the
+  # gate also runs clean on a dev box — if either ever becomes tracked, the
+  # entry must be REMOVED, not kept)
+  '''deployment/secrets\.yml''',
+  '''mcp/\.env''',
+  # compiled bytecode of the fixture tests above
+  '''__pycache__''',
+]
