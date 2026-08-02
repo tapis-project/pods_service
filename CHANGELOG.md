@@ -155,6 +155,7 @@ The edge release. Pods learned to leave the cluster.
 - Image allowlist writes require admin mode — previously any authenticated user could allowlist an arbitrary container image or delete one other tenants depended on.
 - Traefik config renders are validated before being pushed and fail closed, keeping the last known-good config. A stray quote in one pod's networking field could previously 404 every route on the site.
 - Blocked `sub_path` traversal in volume config writes, with both a field validator and a containment guard at the write sink. `service/` now contains zero `eval()` calls.
+- RabbitMQ init declares fail loudly instead of silently. A failed user, vhost, or permission create used to log "init complete" and surface much later as an opaque AMQP auth error; it now names the object that failed, with passwords scrubbed from the message.
 
 
 ## 26Q2.1
