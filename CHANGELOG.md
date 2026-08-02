@@ -142,6 +142,7 @@ The edge release. Pods learned to leave the cluster.
 - Agents can share their dialable addresses (tailnet and LAN) so publishing a port offers one-click suggestions instead of a hand-typed host. Off by default — addresses are new disclosure, so an operator or node admin opts in.
 - Node security hardening: publishing rejects private, loopback, link-local, and cloud-metadata addresses for non-admins and re-checks at dial time; agent-supplied checkin blobs are size-capped; the action ledger is ring-capped.
 - `docs/node_security_model.md` — the endpoint access matrix, the two-boundary credential model, what a stolen credential grants, and the bounds on what central can do to a well-behaved edge.
+- **CI gate** — a fail-fast waterfall (syntax sweep, cluster-free tests, secret scan plus audit-derived rules) that runs identically on GitHub Actions, Gitea, or a laptop. Every security fix above became a permanent rule, so the class is caught forever.
 
 ### Bug fixes:
 - Permission guards return proper 4xx codes instead of bare errors that mapped to 500.

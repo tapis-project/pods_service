@@ -1,0 +1,75 @@
+# Custom semgrep rules — each encodes a finding from the 2026 security audits so
+# it can never silently come back. ERROR = regression gate (codebase is clean of
+# it today, so any hit is NEW/reintroduced). WARNING = advisory (known-open work
+# tracked in PRE_EDGE_SECURITY_AUDIT_2026-08-01.md; flags spread, doesn't block).
+#
+# Gate NEW findings only: run with --baseline-commit=<dev> so pre-existing
+# WARNINGs don't fail the build but any added instance does. See ci/security.sh.
+rules:
+  # --- ERROR: the class is eradicated; keep it that way ---
+  - id: pods-no-eval
+    patterns:
+      - pattern: eval(...)
+    message: >
+      eval() is banned. It caused an authenticated RCE via a URL path param
+      (db_get_where). Use getattr()/operator methods. service/ is eval()-free.
+    severity: ERROR
+    languages: [python]
+
+  - id: pods-no-fstring-into-text-sql
+    patterns:
+      - pattern: text(f"...")
+    message: >
+      No f-string-built SQL in the request/service path. Use parameterized
+      statements / .bindparams(). (alembic/ is excluded: DDL like CREATE SCHEMA
+      "{tenant}" interpolates trusted config-derived identifiers, which cannot be
+      bound — not user input, not request-reachable.)
+    severity: ERROR
+    languages: [python]
+    paths:
+      exclude: ['alembic/']
+
+  - id: pods-path-join-then-open
+    patterns:
+      - pattern: os.path.join($BASE, $USER)
+    message: >
+      os.path.join DROPS the base on an absolute second arg, and normpath keeps
+      '..' — this was the config sub_path arbitrary-write. Use a containment
+      check (volume_utils._contained_path) that resolves under base and refuses
+      escapes.
+    severity: WARNING
+    languages: [python]
+
+  # --- WARNING: known-open, advisory (baseline suppresses existing hits) ---
+  - id: pods-cookie-needs-flags
+    patterns:
+      - pattern: $RESP.set_cookie(...)
+      - pattern-not: $RESP.set_cookie(..., httponly=$H, samesite=$S, ...)
+    message: >
+      Cookies must set httponly + samesite. The Tapis JWT cookie in
+      tapis_auth_utils sets neither (deferred OAuth/cookie pass). Any NEW cookie
+      must carry both.
+    severity: WARNING
+    languages: [python]
+
+  - id: pods-mutating-route-codes-none
+    patterns:
+      - pattern-regex: '\["/pods/[^"]+",\s*"(POST|PUT|DELETE)",\s*codes\.NONE\]'
+    message: >
+      Mutating route declared codes.NONE in the auth allowlist. If it has no
+      in-handler admin/permission gate this is an authz hole (image-allowlist
+      finding). Confirm the handler enforces permission.
+    severity: WARNING
+    languages: [generic]
+    paths:
+      include: ['*.py']
+
+  - id: pods-requests-no-timeout
+    patterns:
+      - pattern: requests.$M(...)
+      - pattern-not: requests.$M(..., timeout=$T, ...)
+    message: >
+      Outbound requests.* needs an explicit timeout= (a hung host blocks a
+      worker; reachable pre-auth in the forwardAuth path).
+    severity: WARNING
+    languages: [python]

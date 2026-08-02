@@ -25,7 +25,7 @@ LGRAY=\033[0;37m
 NC=\033[0m
 
 .ONESHELL: down
-.PHONY: down clean help
+.PHONY: down clean help ci ci-verbose ci-gate ci-llm ci-full review-sweep review-status commit-audit fmt lint test-local
 
 # TAG to use for service image
 # options: "dev" | "whatever"
@@ -68,16 +68,15 @@ export DEV_TOOLS := false
 
 
 
-# Got from: https://stackoverflow.com/a/59087509
+# Grouped, self-aligning help. Sections are `#@ Name`; entries are `#: desc` on
+# the line above a target. Pure awk with %-15s padding — deliberately NOT
+# `column -s $'\t'`, which dash turns into a split on the letter 't'.
+#@ Help
+#: Show this help (grouped command list)
 help:
-	@awk ' \
-		BEGIN { GREEN = "\033[0;32m"; NC = "\033[0m"; } \
-		/^#:/ { desc=$$0; getline; if ($$0 ~ /^[a-zA-Z0-9_-]+:/) { \
-			sub(/^#:[ ]*/, "", desc); \
-			sub(/:.*/, "", $$0); \
-			printf "%s%s%s\t%s\n", GREEN, $$0, NC, desc; \
-		}}' $(MAKEFILE_LIST) | column -s $$'\t' -t
+	@awk 'BEGIN{g="\033[0;32m";b="\033[1m";dm="\033[2m";n="\033[0m"} /^#@ /{sub(/^#@ /,"");printf "\n%s%s%s\n",b,$$0,n;next} /^#> /{h=$$0;sub(/^#> /,"",h);printf "    %s%s%s\n",dm,h,n;next} /^#: /{d=$$0;sub(/^#: /,"",d);getline; if($$0 ~ /^[a-zA-Z0-9_%-]+:/){t=$$0;sub(/:.*/,"",t);printf "  %s%-15s%s %s\n",g,t,n,d}}' $(MAKEFILE_LIST)
 # Gets all remote images and starts pods in daemon mode
+#@ Deploy
 #: Deploy service
 up: vars build
 	@printf "Makefile: $(GREEN)up$(NC)\n"
@@ -129,7 +128,8 @@ init-data:
 
 
 # Runs pytest in the pods-api container
-#: Run tests in pods-api container (usage: make test or make test-<filename>)
+#@ Tests  (full suite runs in-cluster — need `make up`)
+#: Run ALL tests in the pods-api container — e.g. `make test`
 test:
 	@printf "Makefile: $(GREEN)test$(NC)\n"
 	@printf "  📝  : Running all tests\n"
@@ -138,6 +138,7 @@ test:
 	@printf "\n"
 
 # Pattern rule for running specific test files
+#: Run ONE test file in-cluster — e.g. `make test-test_agent_watch.py`
 test-%:
 	@printf "Makefile: $(GREEN)test-$*$(NC)\n"
 	@printf "  📝  : Running tests/$*\n"
@@ -145,8 +146,61 @@ test-%:
 	kubectl exec -it deploy/pods-api -- pytest tests/$* --disable-pytest-warnings
 	@printf "\n"
 
+#: Fast unit tests — cluster-free suite, no `make up` needed (CI gate 2 on its own)
+test-local:
+	@bash ci/unit.sh
+
+#@ CI — local gates (no cluster, no deps)
+#: Run the CI Checks locally, narrated like a GitHub Actions run (no runner/cluster needed)
+ci:
+	@bash ci/act.sh
+
+#: Same, but also print each gate's full output (expanded step logs)
+ci-verbose:
+	@CI_SHOW=1 bash ci/act.sh
+
+#: Run a single CI gate — make ci-gate GATE=compile|unit|security
+ci-gate:
+	@bash ci/$(GATE).sh
+
+#@ LLM review (local, optional — reviewer not shipped in the pushed CI)
+#> configure: LLM_BASE_URL=<litellm>/v1  LLM_MODELS=openai/MiniMax-M2.7,qwen3-32b  (tapis_auth pods: LLM_AUTH_HEADER=X-Tapis-Token LLM_AUTH_PREFIX=)
+#> scope:     whole branch vs origin/dev (default) · one commit: LLM_DIFF_CMD='jj diff -r <rev> --git' · feature sweep: make review-sweep FEATURE=auth
+#> sweep:     whole-file review of a subsystem (features in ci/review/features.txt) · recent-only: LLM_SWEEP_RECENT_DAYS=7
+#> status:    make review-status — what's been reviewed, and what's STALE (>LLM_STALE_DAYS old or files changed since)
+#> output:    ci/reviews/ (gitignored) — per-model report + LEDGER + COMPARE + REQUEST (sizes/tokens/waterfall) + coverage.json
+#: LLM adversarial review — advisory (local-only; needs LLM_BASE_URL, else skips)
+ci-llm:
+	@test -f ci/llm_review.py && python3 ci/llm_review.py || echo "  · LLM review: ci/llm_review.py not present in this checkout (local-only tool)"
+
+#: LLM review of one feature area — make review-sweep FEATURE=auth (see ci/review/features.txt)
+review-sweep:
+	@test -f ci/llm_review.py && LLM_SWEEP=$(FEATURE) python3 ci/llm_review.py || echo "  · LLM review: ci/llm_review.py not present (local-only tool)"
+
+#: Review freshness — what's been reviewed and what's stale (no LLM call)
+review-status:
+	@test -f ci/llm_review.py && LLM_STATUS=1 python3 ci/llm_review.py || echo "  · LLM review: ci/llm_review.py not present (local-only tool)"
+
+#: Pre-push commit audit (order/scoping/tests) → ci/reviews/COMMIT_AUDIT.md (no LLM call)
+commit-audit:
+	@mkdir -p ci/reviews && test -f ci/review/commit_audit.py && python3 ci/review/commit_audit.py | tee ci/reviews/COMMIT_AUDIT.md || echo "  · commit_audit.py not present (local-only tool)"
+
+#: The 3 deterministic gates THEN the LLM review (advisory 4th step)
+ci-full: ci ci-llm
+
+#@ Lint / format (ruff — OFF by default; flip RUFF=1 when the tree is clean)
+#> ruff = one binary for format (black-compatible) + lint. Config: ruff.toml. Not yet gating (ci/lint.sh skips unless RUFF=1).
+#: Apply ruff formatting to the tree (writes changes)
+fmt:
+	@command -v ruff >/dev/null 2>&1 && ruff format . || echo "  · ruff not installed (pip install ruff, or nix run nixpkgs#ruff)"
+
+#: Lint + format check (ruff) — runs ci/lint.sh with RUFF=1
+lint:
+	@RUFF=1 bash ci/lint.sh
+
 
 # Builds core locally and sets to correct tag. This should take priority over DockerHub images
+#@ Build & images
 #: Build core image
 build: vars
 	@printf "Makefile: $(GREEN)build$(NC)\n"
@@ -176,6 +230,7 @@ pull:
 
 
 # Ends all active k8 containers needed for pods
+#@ Teardown
 #: Delete service
 down:
 	@printf "Makefile: $(GREEN)down$(NC)\n"
@@ -207,6 +262,7 @@ clean: down
 
 
 # Test setting of environment variables
+#@ Info
 #: Lists vars
 vars:
 	@printf "Makefile: $(GREEN)vars$(NC)\n"
@@ -257,6 +313,7 @@ endif
 export TAPIS_TS_DIR ?= ../tapis-typescript
 
 # alembic/versions is live-mounted when DEV_TOOLS=true; new .py files appear instantly.
+#@ Database & spec
 #: Apply Alembic migrations (alembic upgrade head) in the pods-api container (needs make up).
 migrate:
 	@printf "Makefile: $(GREEN)migrate$(NC)\n"
