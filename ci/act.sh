@@ -60,6 +60,12 @@ else
 fi
 
 rule
+# The security gate degrades gracefully: absent scanners are SKIPPED inside the
+# gate, and a quiet green run never shows those notes — say it here, visibly,
+# so "make ci was green" is never mistaken for the full Actions-parity run.
+MISSING=""
+for s in gitleaks semgrep pip-audit; do command -v "$s" >/dev/null 2>&1 || MISSING="$MISSING $s"; done
+[ -n "$MISSING" ] && printf "  ${Y}⚠ scanners not on PATH:%s${NC} ${DIM}— security gate ran PARTIAL. Full parity: make ci-scan${NC}\n" "$MISSING"
 DT=$(( $(now) - RUN_START ))
 if [ ${#FAILED_JOBS[@]} -eq 0 ] && [ $COMPILE_RC -eq 0 ]; then
   printf "  ${G}${B}✓ All jobs passed${NC} ${DIM}(%ss total)${NC}\n\n" "$DT"; exit 0

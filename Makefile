@@ -25,7 +25,7 @@ LGRAY=\033[0;37m
 NC=\033[0m
 
 .ONESHELL: down
-.PHONY: down clean help ci ci-verbose ci-gate ci-llm ci-full review-sweep review-status commit-audit fmt lint test-local
+.PHONY: down clean help ci ci-verbose ci-gate ci-scan ci-llm ci-full review-sweep review-status commit-audit fmt lint test-local
 
 # TAG to use for service image
 # options: "dev" | "whatever"
@@ -162,6 +162,11 @@ ci-verbose:
 #: Run a single CI gate — make ci-gate GATE=compile|unit|security
 ci-gate:
 	@bash ci/$(GATE).sh
+
+#: Full Actions parity — same gates with the scanners ARMED via nix (gitleaks/semgrep/pip-audit + semgrep BASELINE)
+ci-scan:
+	@command -v nix-shell >/dev/null 2>&1 || { echo "  · nix-shell not found — put gitleaks/semgrep/pip-audit on PATH and run: BASELINE=origin/dev make ci"; exit 1; }
+	@BASELINE=origin/dev nix-shell -p gitleaks semgrep pip-audit --run "bash ci/act.sh"
 
 #@ LLM review (local, optional — reviewer not shipped in the pushed CI)
 #> configure: LLM_BASE_URL=<litellm>/v1  LLM_MODELS=openai/MiniMax-M2.7,qwen3-32b  (tapis_auth pods: LLM_AUTH_HEADER=X-Tapis-Token LLM_AUTH_PREFIX=)
