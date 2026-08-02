@@ -145,6 +145,10 @@ def get_token_tenant_id(token: str) -> str:
     Returns the tenant_id string or None if extraction fails.
     """
     try:
+        # Unverified peek is contained: the extracted tenant_id must resolve
+        # through t.tenant_cache (a fixed registry — no attacker-steered URLs),
+        # and the token is then actually validated by the userinfo call.
+        # nosemgrep: python.jwt.security.unverified-jwt-decode.unverified-jwt-decode
         claims = jwt.decode(token, options={"verify_signature": False}, algorithms=["RS256"])
         return claims.get('tapis/tenant_id')
     except Exception as e:
@@ -183,6 +187,8 @@ def validate_token(request: Request, token: str = None):
     try:
         # This runs inside the traefik forwardAuth path (pre-auth, every proxied
         # request) — without a timeout, one hung tenant host pins API workers.
+        # Both url branches above force https (tenant_cache base_url / replace).
+        # nosemgrep: python.lang.security.audit.insecure-transport.requests.request-with-http.request-with-http
         rsp = requests.get(url, headers=headers, timeout=(3.05, 10))
         rsp.raise_for_status()
         username = rsp.json()['result'].get('username')

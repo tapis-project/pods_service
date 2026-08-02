@@ -1540,6 +1540,9 @@ async def _gate_do_redeem(pod_id_net: str, request: Request, secret: str, return
     cookie_kwargs = {"secure": True, "httponly": True, "samesite": "lax", "max_age": max_age}
     if cookie_domain:
         cookie_kwargs["domain"] = cookie_domain
+    # secure/httponly/samesite all set — they live in cookie_kwargs above,
+    # which the rule can't see through.
+    # nosemgrep: ci.semgrep.pods-cookie-needs-flags
     response.set_cookie(_gate_cookie_name(pod_id), cookie_value or secret, **cookie_kwargs)
     return response
 

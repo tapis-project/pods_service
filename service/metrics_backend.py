@@ -330,6 +330,9 @@ class PromQLProvider(MetricsProvider):
         self.query_range_url = query_url + "_range"
         self.k8s_namespace = k8s_namespace
         self.headers = headers or {}
+        # Session construction has no timeout by design — every actual call
+        # in _http_query/_http_query_range passes timeout=(CONNECT, READ).
+        # nosemgrep: ci.semgrep.pods-requests-no-timeout
         self.session = session or requests.Session()
 
     # -- HTTP ---------------------------------------------------------------
