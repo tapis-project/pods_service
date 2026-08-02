@@ -20,7 +20,13 @@ BASELINE="${BASELINE:-}"
 
 section "3a — secret scan (gitleaks)"
 if have gitleaks; then
-  run "no secrets in tree" gitleaks detect --no-banner --redact --exit-code 1
+  # TREE scan (--no-git), deliberately not history: old rotated/burned secrets
+  # are baked into public git history forever, so a history scan can never go
+  # green — this gate guards the checkout instead: no secret may EXIST in the
+  # tree. Known gap: a secret committed and removed within a single PR escapes;
+  # history hygiene is the roadmap's rotation work, not a per-PR gate.
+  # Allowlist for placeholders/fixtures lives in .gitleaks.toml (repo root).
+  run "no secrets in tree" gitleaks detect --no-git --no-banner --redact --exit-code 1
 else
   note "gitleaks not installed — SKIPPED (install to enable; HARD gate once present)"
 fi
