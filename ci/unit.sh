@@ -35,8 +35,9 @@ section "cluster-free unit tests"
 # flakes-only with no <nixpkgs>, we switch this to `nix shell nixpkgs#...` — a
 # one-line change; we'll confirm which at demo time.
 rc=0
+note "python: $(python3 --version 2>&1)"
 if python3 -c "import pytest" 2>/dev/null; then
-  note "using ambient pytest (nothing created)"
+  note "using ambient pytest (nothing created) — $(python3 -m pytest --version 2>&1 | head -1)"
   python3 -m pytest "${PURE_TESTS[@]}" -q --no-header; rc=$?
 elif command -v nix >/dev/null 2>&1; then
   note "no ambient pytest — using an ephemeral \`nix shell\` (flakes) for pytest (no venv, nothing to clean up)"
@@ -50,10 +51,13 @@ else
   trap '[ -n "$VENV_ROOT" ] && [ -d "$VENV_ROOT" ] && { rm -rf "$VENV_ROOT"; printf "  \033[2m· venv REMOVED: %s (thrown away)\033[0m\n" "$VENV_ROOT"; }' EXIT
   VENV="$VENV_ROOT/ci-venv"
   note "venv CREATED: $VENV_ROOT  (no ambient pytest and no nix; in /tmp, never the repo; auto-removed on exit)"
-  if python3 -m venv "$VENV" 2>/dev/null && "$VENV/bin/pip" install --quiet pytest 2>/dev/null; then
+  # stderr intentionally NOT swallowed — when this path fails (as the first live
+  # Actions run may have), the actual venv/pip error must reach the log.
+  if python3 -m venv "$VENV" && "$VENV/bin/pip" install --quiet pytest; then
+    note "$("$VENV/bin/python" -m pytest --version 2>&1 | head -1)"
     "$VENV/bin/python" -m pytest "${PURE_TESTS[@]}" -q --no-header; rc=$?
   else
-    fail "could not obtain pytest (need pytest on PATH, nix-shell, or python3 -m venv)"; finish
+    fail "could not obtain pytest (venv/pip error above; need pytest on PATH, nix-shell, or python3 -m venv)"; finish
   fi
 fi
 
