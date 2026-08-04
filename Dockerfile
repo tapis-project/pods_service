@@ -7,7 +7,7 @@
 # separately and publishes it as tapis/pods-api:dev-devtools on dev pushes.
 
 # Create base image
-FROM python:3.10 AS api
+FROM python:3.12 AS api
 RUN useradd tapis -u 4872
 WORKDIR /home/tapis/
 
@@ -35,7 +35,7 @@ RUN touch /home/tapis/tapisservice.log && chown tapis:tapis /home/tapis/tapisser
 # Get config.json ready for mount
 RUN touch /home/tapis/config.json && chown tapis:tapis /home/tapis/config.json
 # We overwrite sqlmodel package because it's buggy, but we still want the features.
-#COPY SQLMODEL/main.py /usr/local/lib/python3.10/site-packages/sqlmodel/main.py
+#COPY SQLMODEL/main.py /usr/local/lib/python3.12/site-packages/sqlmodel/main.py
 # Copy files
 COPY --chown=tapis:tapis alembic /home/tapis/alembic
 COPY --chown=tapis:tapis tests /home/tapis/tests

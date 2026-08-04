@@ -7,8 +7,7 @@ openapi_spec_validator==0.5.4
 
 # Service API
 pydantic==2.11.4
-fastapi==0.115.12
-#fastapi==0.103.2
+fastapi==0.141.1 # no starlette upper bound from here on — starlette resolves to its 1.3.x line
 python-multipart
 sqlmodel==0.0.24
 uvicorn
@@ -17,8 +16,8 @@ uvicorn
 zstandard # node telemetry ingest Content-Encoding: zstd (gzip is the stdlib fallback)
 sqlalchemy==2.0.41
 alembic==1.15.2
-psycopg2==2.9.9
-kubernetes==28.1.0
+psycopg2==2.9.12 # 2.9.9 cannot build on python 3.13+; 2.9.12 builds on 3.10 and 3.13 both
+kubernetes==36.0.3 # 28.x capped urllib3<2, which dragged tapipy back to 1.9.0 — this pin was the whole CVE chain
 neo4j-driver
 rabbitpy
 channelpy

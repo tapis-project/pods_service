@@ -27,7 +27,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: { python-version: '3.11' }
+        with: { python-version: '3.12' }
       - name: Gate 1 — syntax sweep
         run: bash ci/compile.sh
 
@@ -37,7 +37,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: { python-version: '3.11' }
+        with: { python-version: '3.12' }
       - name: Gate 2 — cluster-free unit tests
         run: bash ci/unit.sh
 
@@ -48,7 +48,7 @@ jobs:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }   # full history so gitleaks + semgrep baseline work
       - uses: actions/setup-python@v5
-        with: { python-version: '3.11' }
+        with: { python-version: '3.12' }
       - name: Install scanners
         run: |
           python -m pip install --quiet semgrep pip-audit
