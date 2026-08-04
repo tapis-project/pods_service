@@ -829,6 +829,8 @@ def sync_traefik_traffic_logs():
 
 def main():
     # Try and run check_db_pods. Will try for 60 seconds until health is declared "broken".
+    from log_redaction import install_redaction_filter
+    install_redaction_filter()
     logger.info("Top of health. Checking if db's are initialized.")
     idx = 0
     while idx < 12:

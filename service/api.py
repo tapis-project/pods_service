@@ -189,3 +189,7 @@ api.include_router(router_pods)
 api.include_router(router_stacks)
 api.include_router(router_pods_podsid)
 api.include_router(router_pods_podsid_func)
+
+# Backstop: mask any JWT-shaped blob that still reaches a log handler (R1).
+from log_redaction import install_redaction_filter
+install_redaction_filter()
