@@ -71,20 +71,21 @@ finally:
 # sys.modules mock above is a no-op for it and stack_utils.Pod stays bound to the real Pod —
 # validate_stack_fields then hits the real DB (pg_store['s']['t'] -> KeyError). Rebind the
 # already-imported module's Pod to the fake so db_get_with_pk reads the in-test registry.
-# IMPORTANT: stack_utils is a *shared* module in the pytest process. If we leave it bound to the
-# fake, every later test file whose pod-create path calls stack_utils.validate_stack_fields gets
-# the fake (real pods read as "not found" -> bogus "dependency does not exist" -> from-template
-# rolls back). So restore the *real* Pod on module teardown, keeping the suite order-independent.
-# (We resolve the real Pod lazily at teardown, not now: under a stacks-first import order
-# stack_utils is itself imported under the mock, so its current .Pod is already the fake.)
-stack_utils.Pod = _FakePod
+# IMPORTANT: stack_utils is a *shared* module in the pytest process, and pytest imports every
+# test file at COLLECTION time, before any test runs. A module-level rebind here would poison
+# stack_utils for every file that sorts BEFORE this one too (test_snapshots,
+# test_stack_template_tags: their pod DELETEs crash with ArgumentError on _FakePod). So the
+# rebind lives in the autouse fixture below — fake only while THIS module's tests run.
+# (Teardown resolves the real Pod lazily: under a stacks-first import order stack_utils is
+# itself imported under the mock, so its .Pod is already the fake before setup runs.)
 
 
 @pytest.fixture(scope="module", autouse=True)
-def _restore_stack_utils_pod():
-    """Undo the module-global Pod rebind once this file's tests finish, so other test files
-    (which sort after this one in `pytest tests/*.py`) see the real Pod again. By teardown any
+def _fake_stack_utils_pod():
+    """Bind the fake Pod for this module's tests only, then restore the real one so files
+    sorting before AND after this one in `pytest tests/*.py` see the real Pod. By teardown any
     multi-file run has imported the real `api` (hence real models_pods.Pod) at collection time."""
+    stack_utils.Pod = _FakePod
     yield
     try:
         import importlib

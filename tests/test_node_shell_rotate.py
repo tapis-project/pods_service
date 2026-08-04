@@ -25,7 +25,7 @@ AGENT = {"token": None, "tenant": None}
 
 
 def agent_headers(token=None):
-    return {"X-Pods-Node-Token": token or AGENT["token"], "X-Pods-Tenant": AGENT["tenant"]}
+    return {"X-Pods-Node-Token": token or AGENT["token"], "X-Pods-Tenant": AGENT["tenant"], "Content-Type": "application/json"}
 
 
 def report_shell_capability(allowed):
@@ -49,7 +49,7 @@ def test_node(headers):
     join = basic_response_checks(client.post(
         f"/pods/nodes/{NODE_ID}/join",
         data=json.dumps({"claim_token": result["claim_token"]}),
-        headers={"X-Pods-Tenant": AGENT["tenant"]}))
+        headers={"X-Pods-Tenant": AGENT["tenant"], "Content-Type": "application/json"}))
     AGENT["token"] = join["node_token"]
     yield
     client.delete(f"/pods/nodes/{NODE_ID}", headers=headers)

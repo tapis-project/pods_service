@@ -240,7 +240,16 @@ class TestBuildK8Probe:
         assert result.period_seconds == 15
         assert result.timeout_seconds == 3
         assert result.failure_threshold == 5
-        assert result.success_threshold == 2
+        # k8s rejects success_threshold != 1 for liveness/startup probes, so the
+        # builder forces 1 unless is_readiness=True — only readiness may propagate it.
+        assert result.success_threshold == 1
+
+    def test_success_threshold_propagates_for_readiness_only(self):
+        from models_base import HealthcheckProbe
+        from kubernetes_utils import _build_k8_probe
+        probe = HealthcheckProbe(http_get_path='/health', http_get_port=5000, success_threshold=2)
+        assert _build_k8_probe(probe, is_readiness=True).success_threshold == 2
+        assert _build_k8_probe(probe, is_readiness=False).success_threshold == 1
 
     def test_no_action_raises_value_error(self):
         from models_base import HealthcheckProbe

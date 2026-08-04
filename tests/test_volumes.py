@@ -3,7 +3,7 @@ import sys
 import json
 import time
 import pytest
-from tests.test_utils import headers, response_format, basic_response_checks, delete_pods, t
+from tests.test_utils import headers, response_format, basic_response_checks, delete_pods, multipart_headers, t
 
 # Allows us to import pods's modules.
 sys.path.append('/home/tapis/service')
@@ -145,7 +145,7 @@ def test_upload_to_volume(headers):
     #                                   file = data_blob,
     #                                   _x_tapis_tenant='dev',
     #                                   _x_tapis_user='_pods_testuser_admin')
-    rsp = client.post(f"/pods/volumes/{test_volume_1}/upload/config.json", files={"file": open('config.json', 'rb')}, headers=headers)
+    rsp = client.post(f"/pods/volumes/{test_volume_1}/upload/config.json", files={"file": open('config.json', 'rb')}, headers=multipart_headers(headers))
     result = basic_response_checks(rsp)
 
 def test_update_volume(headers):

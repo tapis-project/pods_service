@@ -109,8 +109,16 @@ def get_tapis_token_headers(user, alt_tenant=None):
                                       _tapis_set_x_headers_from_service=True)
     if not token_res.access_token or not token_res.access_token.access_token:
         raise KeyError(f"Did not get access token; token response: {token_res}")
-    header_dat = {"X-Tapis-Token": token_res.access_token.access_token}
+    # Content-Type required: tests post bodies with data=json.dumps(...), which sets
+    # no content-type, and fastapi 0.141+ no longer parses untyped bodies as JSON.
+    header_dat = {"X-Tapis-Token": token_res.access_token.access_token,
+                  "Content-Type": "application/json"}
     return header_dat
+
+def multipart_headers(headers):
+    # For files= uploads: the fixture's Content-Type: application/json would override
+    # requests' multipart boundary header, so strip it and let requests set it.
+    return {k: v for k, v in headers.items() if k.lower() != 'content-type'}
 
 @pytest.fixture(scope='session', autouse=True)
 def wait_for_rabbit():

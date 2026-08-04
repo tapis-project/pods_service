@@ -23,7 +23,7 @@ AGENT = {"token": None, "tenant": None}
 
 
 def agent_headers():
-    return {"X-Pods-Node-Token": AGENT["token"], "X-Pods-Tenant": AGENT["tenant"]}
+    return {"X-Pods-Node-Token": AGENT["token"], "X-Pods-Tenant": AGENT["tenant"], "Content-Type": "application/json"}
 
 
 def make_claimed_node(headers, node_id=NODE_ID):
@@ -36,7 +36,7 @@ def make_claimed_node(headers, node_id=NODE_ID):
     join = basic_response_checks(client.post(
         f"/pods/nodes/{node_id}/join",
         data=json.dumps({"claim_token": result["claim_token"]}),
-        headers={"X-Pods-Tenant": AGENT["tenant"]}))
+        headers={"X-Pods-Tenant": AGENT["tenant"], "Content-Type": "application/json"}))
     AGENT["token"] = join["node_token"]
 
 

@@ -25,7 +25,7 @@ LGRAY=\033[0;37m
 NC=\033[0m
 
 .ONESHELL: down
-.PHONY: down clean help ci ci-verbose ci-gate ci-scan ci-llm ci-full review-sweep review-status commit-audit fmt lint test-local
+.PHONY: down clean help ci ci-verbose ci-gate ci-scan check check-verbose ci-llm ci-full review-sweep review-status commit-audit fmt lint test-local
 
 # TAG to use for service image
 # options: "dev" | "whatever"
@@ -127,6 +127,7 @@ ifeq ($(DEV_TOOLS),true)
 # then run the read-only check. Non-fatal: never fails `make up`.
 	@printf "  🔍 : Waiting for pods-api to be ready, then checking for migration drift...\n"
 	@kubectl rollout status deploy/pods-api --timeout=120s >/dev/null 2>&1 || true
+	@printf "\n"
 	@$(MAKE) -C $(CURDIR) --no-print-directory check || true
 endif
 
@@ -138,12 +139,14 @@ init-data:
 
 # Runs pytest in the pods-api container
 #@ Tests  (full suite runs in-cluster — need `make up`)
+# resource_set=tapipy: the test default 'local' parses spec ymls via openapi_core,
+# which is broken on python 3.12 (tapipy pins openapi_core==0.16.0); pickled specs work.
 #: Run ALL tests in the pods-api container — e.g. `make test`
 test:
 	@printf "Makefile: $(GREEN)test$(NC)\n"
 	@printf "  📝  : Running all tests\n"
 	@printf "\n"
-	kubectl exec -it deploy/pods-api -- pytest tests/*.py --disable-pytest-warnings
+	kubectl exec -it deploy/pods-api -- env resource_set=tapipy pytest tests/*.py --disable-pytest-warnings
 	@printf "\n"
 
 # Pattern rule for running specific test files
@@ -152,7 +155,7 @@ test-%:
 	@printf "Makefile: $(GREEN)test-$*$(NC)\n"
 	@printf "  📝  : Running tests/$*\n"
 	@printf "\n"
-	kubectl exec -it deploy/pods-api -- pytest tests/$* --disable-pytest-warnings
+	kubectl exec -it deploy/pods-api -- env resource_set=tapipy pytest tests/$* --disable-pytest-warnings
 	@printf "\n"
 
 #: Fast unit tests — cluster-free suite, no `make up` needed (CI gate 2 on its own)
@@ -341,7 +344,44 @@ migrate:
 check:
 	@printf "Makefile: $(GREEN)check$(NC)\n"
 	@printf "  🔍 : alembic check in pods-api container.\n"
-	kubectl exec deploy/pods-api -- bash -c "cd /home/tapis && alembic check 2>&1 | grep -E 'No new upgrade|New upgrade operations detected' || true"
+# The container logs at DEBUG and alembic's env.py imports the service, so the
+# raw output is a wall of log lines (sometimes with no line breaks at all).
+# grep -o extracts ONLY the verdict, so this stays one readable line either way.
+# Two races make the verdict come back empty right after `make up`:
+# (1) `kubectl exec deploy/` can land on the OLD Terminating pod mid-rolling-update —
+#     rollout-complete only means the new pod is ready — so target the newest pod;
+# (2) the api pod has NO readinessProbe, so "ready" fires while entry.sh is still working
+#     through openapi-writer → stores.py (which runs `alembic upgrade head`) → uvicorn,
+#     a 30-60s boot during which alembic says 'Target database is not up to date'.
+# Poll up to 90s, re-resolving the newest pod each try; stable pods hit on try 1.
+	@pod=$$(kubectl get pods -l app=pods-api --sort-by=.metadata.creationTimestamp -o name | tail -1); \
+	out=""; \
+	for try in $$(seq 1 18); do \
+	  out=$$(kubectl exec $$pod -- bash -c "cd /home/tapis && alembic check 2>&1" 2>/dev/null \
+	    | tr '\r' '\n' \
+	    | grep -oE 'No new upgrade operations detected|New upgrade operations detected' | tail -1); \
+	  [ -n "$$out" ] && break; \
+	  [ $$try = 1 ] && printf "  ⏳ : api still booting (migrations, service import) — waiting up to 90s...\n"; \
+	  sleep 5; \
+	  pod=$$(kubectl get pods -l app=pods-api --sort-by=.metadata.creationTimestamp -o name | tail -1); \
+	done; \
+	if [ -z "$$out" ]; then \
+	  printf "  $(YELLOW)⚠$(NC)  : could not read the alembic verdict — see $(LCYAN)make check-verbose$(NC)\n"; \
+	elif [ "$$out" = "No new upgrade operations detected" ]; then \
+	  printf "  $(LGREEN)✓$(NC)  : schema matches the models (no drift)\n"; \
+	else \
+	  printf "  $(YELLOW)⚠$(NC)  : %s\n" "$$out"; \
+	  printf "      $(LCYAN)make check-verbose$(NC) shows the diff. Some drift is KNOWN and pre-existing:\n"; \
+	  printf "      indexes and TEXT columns created by hand-written migrations that the models\n"; \
+	  printf "      never declared, so $(YELLOW)autorevision would propose DROPPING them$(NC).\n"; \
+	  printf "      Always read a generated revision before applying it.\n"; \
+	fi
+	@printf "\n"
+
+#: Raw alembic check output (unfiltered — for when `make check` can't read a verdict)
+check-verbose:
+	@printf "Makefile: $(GREEN)check-verbose$(NC)\n"
+	kubectl exec deploy/pods-api -- bash -c "cd /home/tapis && alembic check 2>&1" || true
 	@printf "\n"
 
 # Usage: make autorevision msg="add foo column". Review the generated file before committing.

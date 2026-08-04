@@ -30,7 +30,7 @@ AGENT = {"token": None, "tenant": None}
 
 
 def agent_headers():
-    return {"X-Pods-Node-Token": AGENT["token"], "X-Pods-Tenant": AGENT["tenant"]}
+    return {"X-Pods-Node-Token": AGENT["token"], "X-Pods-Tenant": AGENT["tenant"], "Content-Type": "application/json"}
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -50,7 +50,7 @@ def test_node(headers):
     join_rsp = client.post(
         f"/pods/nodes/{NODE_ID}/join",
         data=json.dumps({"claim_token": claim_token, "agent_version": "test-0.0"}),
-        headers={"X-Pods-Tenant": AGENT["tenant"]})
+        headers={"X-Pods-Tenant": AGENT["tenant"], "Content-Type": "application/json"})
     join_result = basic_response_checks(join_rsp)
     AGENT["token"] = join_result["node_token"]
     yield
@@ -111,7 +111,7 @@ def test_ingest_logs_requires_agent_token():
     rsp = client.post(
         f"/pods/nodes/{NODE_ID}/logs",
         data=json.dumps({"entries": [{"line": "sneaky"}]}),
-        headers={"X-Pods-Tenant": AGENT["tenant"], "X-Pods-Node-Token": "pna_wrong"})
+        headers={"X-Pods-Tenant": AGENT["tenant"], "X-Pods-Node-Token": "pna_wrong", "Content-Type": "application/json"})
     assert rsp.status_code == 403
 
 
