@@ -7,6 +7,7 @@ from tapisservice.logs import get_logger
 from tapisservice.tapisfastapi.utils import g
 from tapisservice.config import conf
 
+from sqlalchemy import Index
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy import or_
 from sqlmodel import Field, SQLModel, select, JSON, Column, String, delete, func, text
@@ -56,6 +57,10 @@ TapisTrafficLogBaseFull = create_model(
 
 class TrafficLog(TapisTrafficLogBaseFull, table=True, validate=True):
     __tablename__ = "traffic_logs"
+    # Declared to match the migration that created it — see PodLogRun for why.
+    __table_args__ = (
+        Index("ix_traffic_logs_pod_tenant_ts", "pod_id", "tenant_id", "ts"),
+    )
 
     @validator('tenant_id')
     def set_tenant_id(cls, v):
