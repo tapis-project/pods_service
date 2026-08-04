@@ -242,3 +242,30 @@ def test_internal_backend_guard_rejects_cluster_internal_hosts():
                 "172.16.4.4", "100.64.1.1", "metadata.google.internal", "foo.internal"):
         assert _backend_host_is_internal(bad) is True, f"{bad!r} should be treated as internal"
     assert _backend_host_is_internal("8.8.8.8") is False
+
+
+# ── login_server allowlist (R2) ──────────────────────────────────────────────
+# Join sends the headscale ADMIN key (TS_API_KEY) as a bearer to login_server,
+# so it must be exact-matched against operator-controlled values.
+
+def test_login_server_default_allowed():
+    import api_nodes
+    api_nodes._check_login_server(api_nodes.DEFAULT_LOGIN_SERVER)
+    api_nodes._check_login_server(api_nodes.DEFAULT_LOGIN_SERVER + "/")  # slash-normalized
+
+
+def test_login_server_unknown_rejected_400():
+    import api_nodes
+    with pytest.raises(Exception) as ei:
+        api_nodes._check_login_server("https://evil.example.com")
+    assert getattr(ei.value, "code", None) == 400
+    assert "not an allowed control plane" in str(ei.value)
+
+
+def test_login_server_allowlist_extension(monkeypatch):
+    import api_nodes
+    monkeypatch.setattr(api_nodes, "LOGIN_SERVER_ALLOWLIST", "https://extra.example.com, https://two.example.com")
+    api_nodes._check_login_server("https://extra.example.com/")
+    api_nodes._check_login_server("https://two.example.com")
+    with pytest.raises(Exception):
+        api_nodes._check_login_server("https://three.example.com")
