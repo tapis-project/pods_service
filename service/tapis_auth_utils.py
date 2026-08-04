@@ -248,15 +248,26 @@ def build_auth_response_headers(auth_cfg: dict, tenant_id: str, site_id: str, us
 # caller's field namespace (e.g. "networking.tapis_auth_return_path").
 # ---------------------------------------------------------------------------
 
+# RFC 7230 header-name token — no spaces or control chars, so a stored header
+# can never smuggle CR/LF into the forwardAuth response (header injection).
+_HEADER_NAME_RE = re.compile(r"[A-Za-z0-9!#$%&'*+.^_`|~\-]+")
+
+
 def validate_tapis_auth_response_headers(v, prefix: str = "networking"):
     if v:
         if not isinstance(v, dict):
             raise TypeError(f"{prefix}.tapis_auth_response_headers must be dict. Got '{type(v).__name__}'.")
+        if len(v) > 32:
+            raise ValueError(f"{prefix}.tapis_auth_response_headers supports at most 32 headers. Got {len(v)}.")
         for header_name, header_val in v.items():
             if not isinstance(header_name, str):
                 raise TypeError(f"{prefix}.tapis_auth_response_headers key type must be str. Got '{type(header_name).__name__}', key: '{header_name}'.")
             if not isinstance(header_val, str):
                 raise TypeError(f"{prefix}.tapis_auth_response_headers val type must be str. Got '{type(header_val).__name__}', value: '{header_val}'.")
+            if not _HEADER_NAME_RE.fullmatch(header_name) or len(header_name) > 128:
+                raise ValueError(f"{prefix}.tapis_auth_response_headers name '{header_name[:64]}' must be an RFC 7230 token (letters/digits/-_. etc, no spaces or control characters), max 128 chars.")
+            if any(c in header_val for c in ("\r", "\n", "\x00")) or len(header_val) > 1024:
+                raise ValueError(f"{prefix}.tapis_auth_response_headers value for '{header_name}' may not contain CR/LF/NUL and must be at most 1024 chars.")
     return v
 
 

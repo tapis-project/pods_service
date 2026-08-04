@@ -53,6 +53,8 @@ The edge release. Pods learned to leave the cluster.
 - **Slimmer runtime image, dev tools on the side** — jupyterlab and pylint move out of the runtime image into a `devtools` build stage (`tapis/pods-api:dev-devtools`, published on dev pushes). jupyterlab alone accounted for 27 known-CVE advisories in the image without ever being imported by service code; existing `docker build`/`make build` invocations still produce the slim image unchanged.
 
 ### Bug fixes:
+- Two latent crashes fixed: setting a single `resources.<field>` override from a template hit an undefined variable, and the admin guard on `**` template permissions raised a NameError instead of a 403.
+- `tapis_auth_response_headers` values are checked for CR/LF/NUL and header names must be valid tokens, so a stored header can't inject extra response headers.
 - Live Tapis JWTs no longer land in service logs — auth-path log lines mask credential values, tapipy debug echo is off, and a process-wide filter masks any JWT-shaped string that still reaches a log handler.
 - Node `login_server` is validated against an https allowlist — that URL receives the headscale admin key during join, so it can no longer name an arbitrary server.
 - Outbound auth calls carry timeouts — the token-validation call runs in the per-request proxy auth path, and a hung tenant host could previously pin API workers indefinitely on unauthenticated traffic.
