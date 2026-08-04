@@ -52,12 +52,20 @@ spec:
         - name: MAKEFILE_SERVICE_NAME-config
           mountPath: /home/tapis/config.json
           subPath: config.json
+        # spawner writes tapisvolume config_content files at pod start
+        # (kubernetes_templates.py files_write_content) — same mount api.yml has.
+        - name: MAKEFILE_SERVICE_NAME-nfs-vol
+          mountPath: "/podsnfs"
 #DEV        - name: dev-service
 #DEV          mountPath: /home/tapis/service
       volumes:
       - name: MAKEFILE_SERVICE_NAME-config
-        configMap: 
-          name: MAKEFILE_SERVICE_NAME-config 
+        configMap:
+          name: MAKEFILE_SERVICE_NAME-config
+      - name: MAKEFILE_SERVICE_NAME-nfs-vol
+        nfs:
+          server: MAKEFILE_STATIC_NFS_IP
+          path: /
 #DEV      - name: dev-service
 #DEV        hostPath:
 #DEV          path: /pods_service/service #NOTE FOR MINIKUBE: Minikube is a vm, you have to minikube mount for hostpath to work

@@ -97,7 +97,12 @@ spec:
           path: /
 
 #### Regarding the minkube mount thing note below:
-#### minikube mount --uid=4872 --gid=4872 --msize=2048576000 --port 22423 /home/user/pods_service:/pods_service
+#### minikube mount --uid=4872 --gid=4872 --msize=262144 --port 22423 /home/user/pods_service:/pods_service
+#### msize: keep it small. The kernel caps 9p msize at 1MiB anyway, and every directory
+#### read allocates a CONTIGUOUS kernel buffer of that size — under memory fragmentation
+#### those order-8 allocations fail intermittently as OSError [Errno 12] on scandir over
+#### the mount (pytest collection, uvicorn reload respawns). 256KiB is robust; unblock a
+#### stuck VM with: minikube ssh -- "sudo sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches; echo 1 > /proc/sys/vm/compact_memory'"
 #DEV      - name: dev-service
 #DEV        hostPath:
 #DEV          path: /pods_service/service #NOTE FOR MINIKUBE: Minikube is a vm, you have to minikube mount for hostpath to work

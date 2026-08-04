@@ -53,6 +53,11 @@ The edge release. Pods learned to leave the cluster.
 - **Slimmer runtime image, dev tools on the side** — jupyterlab and pylint move out of the runtime image into a `devtools` build stage (`tapis/pods-api:dev-devtools`, published on dev pushes). jupyterlab alone accounted for 27 known-CVE advisories in the image without ever being imported by service code; existing `docker build`/`make build` invocations still produce the slim image unchanged.
 
 ### Bug fixes:
+- `config_content` on a tapisvolume actually reaches the pod now — the spawner writes the file at pod start, but its deployment never mounted the NFS share, so every write failed (logged, then swallowed) and pods started without their config.
+- A request body sent without `Content-Type: application/json` gets a 400 that says exactly that — newer fastapi stopped guessing at untyped bodies, and the stock validation message never mentioned the header.
+- The in-cluster test suite recovered from the image modernization (391 failures + 68 collection errors → green): python 3.12 broke tapipy's `local` spec loading (`make test` now pins `resource_set=tapipy`), test bodies needed explicit content types, and two latent test bugs surfaced — a monkeypatch that leaked across modules at collection time, and a liveness-probe expectation Kubernetes forbids.
+- Dev reload restarts no longer hang draining held agent long-polls — a 3s graceful-shutdown cap rides the reload flag; prod keeps uvicorn's default grace.
+- `make up`'s migration-drift check reads its verdict reliably — it used to exec the old terminating pod mid-rollout, or race the probe-less api boot while migrations were still applying.
 - Two latent crashes fixed: setting a single `resources.<field>` override from a template hit an undefined variable, and the admin guard on `**` template permissions raised a NameError instead of a 403.
 - `tapis_auth_response_headers` values are checked for CR/LF/NUL and header names must be valid tokens, so a stored header can't inject extra response headers.
 - Live Tapis JWTs no longer land in service logs — auth-path log lines mask credential values, tapipy debug echo is off, and a process-wide filter masks any JWT-shaped string that still reaches a log handler.
