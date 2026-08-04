@@ -29,7 +29,7 @@ FIXTURE_SHA = hashlib.sha256(FIXTURE_SRC).hexdigest()
 
 
 def agent_headers():
-    return {"X-Pods-Node-Token": AGENT["token"], "X-Pods-Tenant": AGENT["tenant"]}
+    return {"X-Pods-Node-Token": AGENT["token"], "X-Pods-Tenant": AGENT["tenant"], "Content-Type": "application/json"}
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -48,7 +48,7 @@ def test_node(headers):
     join = basic_response_checks(client.post(
         f"/pods/nodes/{NODE_ID}/join",
         data=json.dumps({"claim_token": result["claim_token"]}),
-        headers={"X-Pods-Tenant": AGENT["tenant"]}))
+        headers={"X-Pods-Tenant": AGENT["tenant"], "Content-Type": "application/json"}))
     AGENT["token"] = join["node_token"]
     yield
     client.delete(f"/pods/nodes/{NODE_ID}", headers=headers)

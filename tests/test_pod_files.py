@@ -19,7 +19,7 @@ import sys
 import json
 import time
 import pytest
-from tests.test_utils import headers, response_format, basic_response_checks
+from tests.test_utils import headers, response_format, basic_response_checks, multipart_headers
 
 sys.path.append('/home/tapis/service')
 from api import api
@@ -199,7 +199,7 @@ class TestUploadToPod:
             f"/pods/{test_pod_1}/upload_to_pod",
             files=files,
             data=data,
-            headers=headers
+            headers=multipart_headers(headers)
         )
         result = basic_response_checks(rsp)
         
@@ -231,7 +231,7 @@ class TestUploadToPod:
             f"/pods/{test_pod_1}/upload_to_pod",
             files=files,
             data=data,
-            headers=headers
+            headers=multipart_headers(headers)
         )
         result = basic_response_checks(rsp)
         assert 'uploaded' in result
@@ -249,7 +249,7 @@ class TestUploadToPod:
             f"/pods/{test_pod_1}/upload_to_pod",
             files=files,
             data=data,
-            headers=headers
+            headers=multipart_headers(headers)
         )
         # This might fail if the directory doesn't exist - behavior depends on implementation
         assert rsp.status_code in [200, 201, 400, 500]
@@ -366,7 +366,7 @@ class TestFileOperationsErrors:
             "/pods/nonexistent_pod_xyz123/upload_to_pod",
             files=files,
             data=data,
-            headers=headers
+            headers=multipart_headers(headers)
         )
         
         assert rsp.status_code in [400, 403, 404]
@@ -414,7 +414,7 @@ class TestLargeFileOperations:
             f"/pods/{test_pod_1}/upload_to_pod",
             files=files,
             data=data,
-            headers=headers
+            headers=multipart_headers(headers)
         )
         result = basic_response_checks(rsp)
         assert 'uploaded' in result
@@ -444,7 +444,7 @@ class TestLargeFileOperations:
             f"/pods/{test_pod_1}/upload_to_pod",
             files=files,
             data=data,
-            headers=headers
+            headers=multipart_headers(headers)
         )
         result = basic_response_checks(rsp)
         assert 'uploaded' in result
@@ -468,7 +468,7 @@ class TestFileIntegrity:
             f"/pods/{test_pod_1}/upload_to_pod",
             files=files,
             data=data,
-            headers=headers
+            headers=multipart_headers(headers)
         )
         basic_response_checks(rsp)
         
@@ -495,7 +495,7 @@ class TestFileIntegrity:
             f"/pods/{test_pod_1}/upload_to_pod",
             files=files,
             data=data,
-            headers=headers
+            headers=multipart_headers(headers)
         )
         basic_response_checks(rsp)
         
