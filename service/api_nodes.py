@@ -86,6 +86,26 @@ router = APIRouter()
 CLAIM_TTL_HOURS = int(os.environ.get("NODES_CLAIM_TTL_HOURS", "4"))
 COMMANDS_POLL_AFTER_SECONDS = int(os.environ.get("NODES_COMMANDS_POLL_AFTER", "25"))
 DEFAULT_LOGIN_SERVER = os.environ.get("TS_LOGIN_SERVER", "https://headscale.pods.tacc.develop.tapis.io")
+# Extra permitted login servers, comma-separated. The default is always allowed.
+LOGIN_SERVER_ALLOWLIST = os.environ.get("TS_LOGIN_SERVER_ALLOWLIST", "")
+
+
+def _check_login_server(value: str):
+    """Exact-match against the operator-controlled allowlist. Join sends the
+    headscale ADMIN key (TS_API_KEY) as a bearer to this URL, so it must never
+    be attacker-nameable (R2). Checked at create AND at every use, so legacy
+    rows with a bad value fail loudly instead of leaking the key. Allowlisted
+    values are operator-approved by definition — a non-https entry (local dev
+    headscale) warns rather than blocks."""
+    v = (value or "").rstrip("/")
+    allowed = {s.strip().rstrip("/") for s in LOGIN_SERVER_ALLOWLIST.split(",") if s.strip()}
+    allowed.add(DEFAULT_LOGIN_SERVER.rstrip("/"))
+    if v not in allowed:
+        raise ResourceError(
+            f"login_server '{value}' is not an allowed control plane. Allowed: "
+            f"{sorted(allowed)} (extend via TS_LOGIN_SERVER_ALLOWLIST).", 400)
+    if not v.startswith("https://"):
+        logger.warning(f"login_server '{v}' is not https — the headscale admin key rides this connection in the clear.")
 
 # Telemetry quotas/retention (Phase 3) — per-node hard caps enforced at ingest so one
 # hot edge can never flood central (transport discipline #4). Caps are advertised in
@@ -200,7 +220,9 @@ def _central_base_url(request: Request) -> str:
 
 
 def _login_server_for(node: Node) -> str:
-    return node.login_server or DEFAULT_LOGIN_SERVER
+    ls = node.login_server or DEFAULT_LOGIN_SERVER
+    _check_login_server(ls)
+    return ls
 
 
 def _agent_endpoints(request: Request, node: Node) -> dict:
@@ -374,11 +396,9 @@ async def create_node(new_node: NewNode, request: Request):
     #   1. There are no /nodes/{id}/permissions endpoints yet, so a node is creator-only
     #      and cannot be shared — an open create gives a regular user surface they cannot
     #      actually use with anyone else.
-    #   2. NewNode carries login_server, and join sends the headscale ADMIN api key
-    #      (TS_API_KEY) as a bearer to whatever control plane that field names. Until
-    #      login_server is validated against an allowlist, an open create would let any
-    #      authenticated user point central at a server they control and collect that key.
-    #      Inert while TS_API_KEY is unset, live the moment the headnet cutover sets one.
+    #   2. NewNode carries login_server — the URL join sends the headscale ADMIN api
+    #      key to. It is now allowlist-validated (_check_login_server), so the key-
+    #      exfiltration angle is closed even once creation reopens (R28).
     # The route stays codes.NONE because no object exists yet for an object-level check.
     # Roadmap: admin mints a node ON BEHALF OF a user (owner field + claim token handed
     # over), which is what should replace this gate — not handing out admin.
@@ -387,6 +407,9 @@ async def create_node(new_node: NewNode, request: Request):
             "Creating nodes currently requires admin. Ask an admin to create the node "
             "and hand you its claim token — the join command is all an operator needs.",
             403)
+
+    if new_node.login_server:
+        _check_login_server(new_node.login_server)
 
     node = Node(**new_node.dict())
 
