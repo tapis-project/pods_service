@@ -44,6 +44,7 @@ from tapis_auth_utils import (
 CHUNK_TIMEOUT = 60  # seconds per chunk
 CHUNK_SIZE = 2 * 1024 * 1024  # 2MB chunkscv
 
+from log_redaction import scrub_headers, scrub_cookies
 from tapisservice.logs import get_logger
 logger = get_logger(__name__)
 
@@ -1244,7 +1245,7 @@ async def pod_auth(pod_id_net, request: Request):
      - for example we have to pass username, but many apps require @email.bit, so user must be able to append to user.
      - tapis_auth_response_headers: {"X-Tapis-Username": "<<tapisusername>>@tapis.io", "FROM": "pods auth endpoint from <<tenant>>.<<site>>", "OAUTH2_USERNAME_KEY": "username"}
     """
-    logger.debug(f"GET /pods/{pod_id_net}/auth - pod-auth, headers: {request.headers}, request.cookies: {request.cookies}, request_tenant_id: {g.request_tenant_id}, site_id: {g.site_id}")
+    logger.debug(f"GET /pods/{pod_id_net}/auth - pod-auth, headers: {scrub_headers(request.headers)}, request.cookies: {scrub_cookies(request.cookies)}, request_tenant_id: {g.request_tenant_id}, site_id: {g.site_id}")
     entity = _pod_auth_entity(pod_id_net)
     return run_tapis_auth_check(request, entity)
 
@@ -1256,7 +1257,7 @@ async def pod_auth(pod_id_net, request: Request):
     operation_id="pod_auth_callback",
     response_model=PodResponse)
 def callback(pod_id_net, request: Request):
-    logger.info(f"GET /pods/{pod_id_net}/auth/callback - pod_auth_callback, headers: {request.headers}, request.cookies: {request.cookies}")
+    logger.info(f"GET /pods/{pod_id_net}/auth/callback - pod_auth_callback, headers: {scrub_headers(request.headers)}, request.cookies: {scrub_cookies(request.cookies)}")
     entity = _pod_auth_entity(pod_id_net)
     return run_tapis_auth_callback(request, entity)
 

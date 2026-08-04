@@ -32,6 +32,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from codes import READ, USER, ADMIN, PermissionLevel
 from tapisservice.tapisfastapi.utils import g, ok
 from tapisservice.config import conf
+from log_redaction import scrub_headers, scrub_cookies
 from tapisservice.logs import get_logger
 from __init__ import t, BadRequestError
 
@@ -162,7 +163,7 @@ def validate_token(request: Request, token: str = None):
     For cross-tenant tokens, the userinfo call is made to the token's tenant, not the request tenant.
     Returns authorized:bool, username:str, roles:List[str]
     """
-    logger.debug(f"Validating token from request: cookies={request.cookies}, headers={request.headers}")
+    logger.debug(f"Validating token from request: cookies={scrub_cookies(request.cookies)}, headers={scrub_headers(request.headers)}")
     token = token or request.cookies.get('X-Tapis-Token') or request.headers.get('X-Tapis-Token') or request.headers.get('x-tapis-token') or request.headers.get('X-TAPIS-TOKEN')
     if not token:
         logger.debug("Token not found in cookies or headers.")
@@ -424,7 +425,7 @@ def run_tapis_auth_check(request: Request, entity: TapisAuthEntity):
     ## humans re-login seamlessly. Tokenless requests always fall through too:
     ## plenty of traffic lands on traefik that is simply meant to fail, and the
     ## OAuth bounce is the expected failure mode there.
-    logger.debug(f"request_info dump: {request.headers}, {request.cookies}, {request.query_params}")
+    logger.debug(f"request_info dump: {scrub_headers(request.headers)}, {scrub_cookies(request.cookies)}, {request.query_params}")
     ## Starlette headers are case-insensitive, so this covers every casing.
     token_attached = bool(
         request.headers.get('X-Tapis-Token')
@@ -448,7 +449,7 @@ def run_tapis_auth_check(request: Request, entity: TapisAuthEntity):
     client_display_name = f"Tapis Pods Service: {entity.label}"
     client_description = f"Tapis Pods Service: {entity.label}"
 
-    logger.debug(f"auth check for {entity.label} - headers: {request.headers}, request.cookies: {request.cookies}, tenant_id: {g.request_tenant_id}, derived_tenant_id: {tapis_tenant}, site_id: {g.site_id}")
+    logger.debug(f"auth check for {entity.label} - headers: {scrub_headers(request.headers)}, request.cookies: {scrub_cookies(request.cookies)}, tenant_id: {g.request_tenant_id}, derived_tenant_id: {tapis_tenant}, site_id: {g.site_id}")
 
     td = None
     # Create tapis client or update tapis client if needed
@@ -461,7 +462,7 @@ def run_tapis_auth_check(request: Request, entity: TapisAuthEntity):
             description = client_description,
             _x_tapis_tenant = tapis_tenant,
             _x_tapis_user = "_tapis_pods",
-            _tapis_debug = True
+            _tapis_debug = False
         )
     except BadRequestError as e: # Exceptions in 3 shouldn't have e.message (only e.args), but this one does.
         logger.debug(f"Got error creating client: {e.message}")
@@ -475,7 +476,7 @@ def run_tapis_auth_check(request: Request, entity: TapisAuthEntity):
                     description = client_description,
                     _x_tapis_tenant = tapis_tenant,
                     _x_tapis_user = "_tapis_pods",
-                    _tapis_debug = True
+                    _tapis_debug = False
                 )
                 success_msg = f"Client {entity.client_id} updated successfully."
                 logger.info(success_msg)
@@ -512,7 +513,7 @@ def run_tapis_auth_callback(request: Request, entity: TapisAuthEntity):
             client_id = entity.client_id,
             _x_tapis_tenant = tapis_tenant,
             _x_tapis_user = "_tapis_pods",
-            _tapis_debug = True)
+            _tapis_debug = False)
     except Exception as e:
         return JSONResponse(content=f"Error retrieving client: {e}", status_code=500)
 
@@ -530,7 +531,7 @@ def run_tapis_auth_callback(request: Request, entity: TapisAuthEntity):
     try:
         response = requests.post(url, data=data, auth=(entity.client_id, res.client_key), timeout=(3.05, 10))
         response.raise_for_status()
-        logger.debug(f"auth callback for {entity.label} token request response: {response.text}")
+        logger.debug(f"auth callback for {entity.label} token request: HTTP {response.status_code}")
         json_resp = response.json()
         token = json_resp['result']['access_token']['access_token']
     except Exception as e:
