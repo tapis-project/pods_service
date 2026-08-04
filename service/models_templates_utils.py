@@ -418,7 +418,7 @@ def combine_pod_and_template_recursively(input_obj, template_name, seen_template
                     logger.debug(f'end of resources merge {getattr(input_obj, mod_key, {})}')
                 elif mod_key.startswith("resources."):
                     logger.debug(f'merging dotted resources field {mod_key}')
-                    outer_arg, inner_arg = resources.split('.') # resources.gpus
+                    outer_arg, inner_arg = mod_key.split('.', 1) # resources.gpus
                     outer_obj = getattr(input_obj, outer_arg) # resources
                     new_obj_value = template_pod_def[outer_arg][inner_arg]
                     setattr(outer_obj, inner_arg, new_obj_value)

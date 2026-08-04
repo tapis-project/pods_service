@@ -822,3 +822,29 @@ class TestTemplateOverridesScenarios:
         assert result_vm["/outputs"]["source_id"] == "my-outputs"
         assert result_vm["/models"]["source_id"] == "shared-models"  # unchanged
         assert result_sm["S3_ACCESS_KEY"] == "${secret:my-s3-access}"
+
+
+# ============================================================================
+# TEST: Dotted resources.<field> override (regression: NameError pre-fix)
+# ============================================================================
+
+class TestDottedResourcesOverride:
+    """A template whose pod_definition carries a dotted 'resources.<field>' key
+    (the shape save-as-template writes for single-field overrides) must merge
+    that field — the pre-fix code hit an undefined variable and crashed."""
+
+    def test_dotted_resources_key_applies_without_crashing(self):
+        from models_templates_utils import combine_pod_and_template_recursively
+
+        mock_t_obj = MagicMock()
+        mock_t_obj.tenant_cache = MockTenantCache()
+        res = MockResources(gpus=1).dict()
+        template = make_template(**{"resources": res, "resources.gpus": 1})
+
+        with patch('models_templates_utils.derive_template_info') as mock_derive, \
+             patch('models_templates_utils.t', mock_t_obj):
+            mock_derive.return_value = ("template1:latest@2024-01-01", MockTemplate(), template)
+            pod = MockPod(modified_fields=[])
+            result = combine_pod_and_template_recursively(pod, "template1", tenant="dev", site="tacc")
+            gpus = result.resources.gpus if hasattr(result.resources, "gpus") else result.resources["gpus"]
+            assert gpus == 1

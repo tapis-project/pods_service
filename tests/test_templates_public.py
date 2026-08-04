@@ -302,12 +302,21 @@ def test_regular_user_cannot_set_site_public_permission(regular_headers, headers
     }
     rsp = client.post(f"/pods/templates/{test_template_private}/permissions", data=json.dumps(perm_def), headers=regular_headers)
     
-    # Should fail with 4xx error (could be 403 not authorized, or 400/500 for admin-only check)
-    assert rsp.status_code in [400, 403, 500], f"Expected error status, got {rsp.status_code}"
+    # Clean 4xx rejection required — never a 500 (a crash in the guard path).
+    assert rsp.status_code in [400, 403], f"Expected clean 4xx from the '**' guard, got {rsp.status_code}"
     data = rsp.json()
     error_msg = str(data.get('message', '')).lower()
-    # Accept various error messages: admin-only, not authorized, wildcard restrictions
     assert "admin" in error_msg or "**" in error_msg or "wildcard" in error_msg or "not allowed" in error_msg or "not authorized" in error_msg
+
+
+def test_regular_user_wildcard_via_template_update_is_clean_4xx(regular_headers):
+    """Pin the api_templates_templateid '**' guard specifically: a non-admin
+    sending permissions with '**' through template UPDATE must get a clean
+    4xx — pre-fix this path raised NameError (missing HTTPException import)
+    and surfaced as a 500."""
+    rsp = client.put(f"/pods/templates/{test_template_private}",
+                     data=json.dumps({"permissions": ["**:READ"]}), headers=regular_headers)
+    assert rsp.status_code in [400, 403], f"Expected clean 4xx from the '**' update guard, got {rsp.status_code}"
 
 
 def test_regular_user_cannot_set_tenant_public_permission(regular_headers):

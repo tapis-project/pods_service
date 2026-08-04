@@ -1,5 +1,5 @@
 from typing import Union
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, HTTPException
 from models_templates import Template, TemplateResponse, TemplateDeleteResponse, NewTemplate, UpdateTemplate, TemplateWithDependentsResponse
 from models_templates_tags import TemplateTag
 from models_template_dependencies import (
