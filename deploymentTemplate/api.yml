@@ -17,7 +17,10 @@ spec:
         imagePullPolicy: Never
         image: MAKEFILE_SERVICE_NAME/pods-api:MAKEFILE_TAG
 #DEV        command: ["/bin/sh", "-c"]
-#DEV        args: ["/home/tapis/entry.sh & jupyter lab service --ip=0.0.0.0 --allow-root --no-browser --ServerApp.token=''"]
+#DEV        # jupyter-dev = the isolated devtools venv (see Dockerfile devbase);
+#DEV        # calling plain `jupyter` would only work if dev deps polluted the
+#DEV        # service env, which is exactly what broke tapipy's spec loading.
+#DEV        args: ["/home/tapis/entry.sh & jupyter-dev lab service --ip=0.0.0.0 --allow-root --no-browser --ServerApp.token=''"]
         resources:
           requests:
             cpu: ".4"

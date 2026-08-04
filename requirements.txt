@@ -12,6 +12,12 @@ python-multipart
 sqlmodel==0.0.24
 uvicorn
 
+# Imported directly by service code. Both were previously satisfied only as
+# transitive deps of jupyterlab — moving dev tools to their own venv exposed
+# that (health.py died with ModuleNotFoundError: jinja2).
+jinja2      # traefik/config template rendering (kubernetes_utils, volume_utils)
+pyyaml      # api_misc, traefik config, spec handling
+
 # Databases/APIs
 zstandard # node telemetry ingest Content-Encoding: zstd (gzip is the stdlib fallback)
 sqlalchemy==2.0.41

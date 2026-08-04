@@ -1,13 +1,25 @@
 # Core image for pods
 # Image: tapis/pods-api
 #
-# Multi-stage: api (runtime) → devtools (api + requirements-dev.txt) → final.
-# `final` is an alias of `api` so a plain `docker build` / `make build` (no
-# --target) still produces the slim runtime image; CI builds --target devtools
-# separately and publishes it as tapis/pods-api:dev-devtools on dev pushes.
+# Multi-stage, ordered for cache: base (system + runtime deps) → optional
+# devbase (adds requirements-dev.txt, i.e. jupyter) → final (copies the code).
+#
+# The code COPY is LAST and lives in exactly one place, so:
+#   - editing service/ rebuilds only the cheap code layers; the pip installs
+#     (including jupyter) stay CACHED, and
+#   - the dev image is not a second copy of the build instructions.
+#
+# Slim runtime (default):  docker build .
+# With jupyter (dev):      docker build --build-arg RUNTIME_BASE=devbase .
+# `make build` picks the right one from DEV_TOOLS — DEV_TOOLS=true makes the
+# api pod run `jupyter lab`, which only exists in the devbase layer.
+
+# Which layer the final image builds on: `base` (slim) or `devbase` (+jupyter).
+# Must be declared before the first FROM to be usable in one.
+ARG RUNTIME_BASE=base
 
 # Create base image
-FROM python:3.12 AS api
+FROM python:3.12 AS base
 RUN useradd tapis -u 4872
 WORKDIR /home/tapis/
 
@@ -26,6 +38,27 @@ RUN pip3 install -r /home/tapis/requirements.txt
 # rabbitmqadmin download for rabbit init
 RUN wget https://raw.githubusercontent.com/rabbitmq/rabbitmq-management/v3.8.9/bin/rabbitmqadmin
 RUN chmod +x rabbitmqadmin
+
+# Dev-tools layer: runtime image plus requirements-dev.txt (jupyterlab, …).
+# Sits BELOW the code copy on purpose — a service/ edit must not reinstall it.
+#
+# Installed into its OWN venv, never the service's site-packages: jupyter-server
+# requires jsonschema>=4.18, and a plain `pip install` silently upgraded past the
+# jsonschema==4.17.3 pin, which broke every tapipy resource load ("cannot import
+# name '_legacy_validators'") and made the API look like it had bad credentials.
+# --system-site-packages so notebooks can still import the service's packages;
+# anything jupyter needs at a different version lands in the venv and shadows it
+# ONLY for jupyter.
+FROM base AS devbase
+COPY --chown=tapis:tapis requirements-dev.txt /home/tapis/
+RUN python3 -m venv --system-site-packages /opt/devtools \
+    && /opt/devtools/bin/pip install --quiet --upgrade pip \
+    && /opt/devtools/bin/pip install -r /home/tapis/requirements-dev.txt \
+    && chown -R tapis:tapis /opt/devtools \
+    && ln -sf /opt/devtools/bin/jupyter /usr/local/bin/jupyter-dev
+
+# The image everything actually runs from. RUNTIME_BASE=devbase adds jupyter.
+FROM ${RUNTIME_BASE} AS final
 
 ## FILE INITIALIZATION
 # For jupyter
@@ -66,13 +99,3 @@ USER tapis
 
 CMD ["/home/tapis/entry.sh"]
 
-# Dev-tools variant: the api image plus requirements-dev.txt (jupyterlab, …).
-# Never deployed by default — for in-container notebook/demo work on dev.
-FROM api AS devtools
-USER root
-COPY --chown=tapis:tapis requirements-dev.txt /home/tapis/
-RUN pip3 install -r /home/tapis/requirements-dev.txt
-USER tapis
-
-# Default target — MUST stay last so target-less builds get the runtime image.
-FROM api AS final
