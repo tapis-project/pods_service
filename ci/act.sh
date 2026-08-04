@@ -49,14 +49,14 @@ job() {
 header
 
 # Job 1 — compile. Everything else "needs" it (fail-fast, like the workflow).
-job "compile" "" "Checkout;Set up Python 3.11" ci/compile.sh
+job "compile" "" "Checkout;Set up Python 3.12" ci/compile.sh
 COMPILE_RC=$?
 
 if [ $COMPILE_RC -ne 0 ]; then
   skip "unit" "compile"; skip "security" "compile"
 else
-  job "unit" "compile" "Checkout;Set up Python 3.11" ci/unit.sh || true
-  job "security" "compile" "Checkout (full history);Set up Python 3.11;Install scanners" ci/security.sh || true
+  job "unit" "compile" "Checkout;Set up Python 3.12" ci/unit.sh || true
+  job "security" "compile" "Checkout (full history);Set up Python 3.12;Install scanners" ci/security.sh || true
 fi
 
 rule
