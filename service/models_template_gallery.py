@@ -12,6 +12,7 @@ from typing import Optional
 from datetime import datetime
 
 import sqlalchemy as sa
+from sqlalchemy import Index, Text
 from sqlmodel import SQLModel, Field, select, Column
 
 from stores import pg_store
@@ -21,12 +22,17 @@ logger = get_logger(__name__)
 
 class TemplateGallery(SQLModel, table=True):
     __tablename__ = "templategallery"
+    # Declared to match the migration that created them — see PodLogRun for why.
+    __table_args__ = (
+        Index("ix_templategallery_id", "id", unique=True),
+        Index("ix_templategallery_tpl_tenant", "template_id", "tenant_id"),
+    )
 
     id: Optional[int]     = Field(default=None, primary_key=True)
     template_id: str      = Field(..., index=True)
     tenant_id: str        = Field(..., index=True)
     site_id: str          = Field(...)
-    markdown_note: Optional[str] = Field(None)
+    markdown_note: Optional[str] = Field(None, sa_type=Text)
 
     photo_1:      Optional[bytes] = Field(default=None, sa_column=Column(sa.LargeBinary, nullable=True))
     photo_1_mime: Optional[str]   = Field(None)
@@ -35,7 +41,7 @@ class TemplateGallery(SQLModel, table=True):
     photo_3:      Optional[bytes] = Field(default=None, sa_column=Column(sa.LargeBinary, nullable=True))
     photo_3_mime: Optional[str]   = Field(None)
 
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow, nullable=True)
 
     # ── class methods ───────────────────────────────────────────────
 
