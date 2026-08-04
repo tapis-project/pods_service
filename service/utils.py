@@ -56,6 +56,15 @@ async def error_handler(request: Request, exc):
             error_list = []
             logger.debug(f"Got validation error: {repr(exc)}")
             for error_dict in exc.errors():
+                # 'model_attributes_type' on bare ('body',) has two causes, split by the input:
+                # bytes = fastapi never parsed the body (request lacked/mislabeled the JSON
+                # content type); anything else = valid JSON whose top level isn't an object.
+                if error_dict.get('type') == 'model_attributes_type' and tuple(error_dict.get('loc', ())) == ('body',):
+                    if isinstance(error_dict.get('input'), bytes):
+                        error_list.append("body: could not be parsed as JSON. Send a JSON body with header 'Content-Type: application/json'.")
+                    else:
+                        error_list.append("body: expected a JSON object.")
+                    continue
                 error_list.append(f"{', '.join(str(err) for err in error_dict['loc'])}: {error_dict['msg']}")
             if error_list is None:
                 response = error(msg=f'Unexpected. {repr(exc)}')
