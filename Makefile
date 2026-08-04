@@ -66,6 +66,15 @@ export STATIC_NFS_IP := 10.96.175.175
 # default: "false"
 export DEV_TOOLS := false
 
+# Which image layer to build on. jupyter lives ONLY in the devbase layer (not in
+# the runtime image), and DEV_TOOLS=true makes the api pod run `jupyter lab` —
+# so a dev build must use devbase or the pod logs "jupyter: not found".
+ifeq ($(DEV_TOOLS),true)
+export RUNTIME_BASE := devbase
+else
+export RUNTIME_BASE := base
+endif
+
 
 
 # Grouped, self-aligning help. Sections are `#@ Name`; entries are `#: desc` on
@@ -213,7 +222,7 @@ build: vars
 	@printf "  🌎 : Using daemon: $(LCYAN)minikube$(NC)\n"
 	@printf "  🏃 : Building: This part takes a while if it takes a while.\n"
 	@printf "\n"
-	minikube image build -t $(SERVICE_NAME)/pods-api:$$TAG ./
+	minikube image build --build-opt=build-arg=RUNTIME_BASE=$(RUNTIME_BASE) -t $(SERVICE_NAME)/pods-api:$$TAG ./
 	@printf "\n"
 
 
@@ -224,7 +233,7 @@ build-docker: vars
 	@printf "  🔨 : Running image build.\n"
 	@printf "  🌎 : Using daemon: $(LCYAN)docker$(NC)\n"
 	@printf "\n"
-	docker build -t tapis/pods-api:$$TAG ./
+	docker build --build-arg RUNTIME_BASE=$(RUNTIME_BASE) -t tapis/pods-api:$$TAG ./
 	@printf "\n"
 
 

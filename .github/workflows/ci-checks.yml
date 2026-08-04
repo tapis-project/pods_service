@@ -94,7 +94,6 @@ jobs:
           # PR runs build-only — the image gate is the build succeeding, nothing
           # is published until the change actually lands on a real branch.
           push: ${{ github.event_name != 'pull_request' }}
-          target: final
           tags: tapis/pods-api:${{ steps.get_tag_name.outputs.tag_name }}
 
       - name: Build & push devtools image (dev branch only)
@@ -105,5 +104,5 @@ jobs:
         uses: docker/build-push-action@v3
         with:
           push: true
-          target: devtools
+          build-args: RUNTIME_BASE=devbase
           tags: tapis/pods-api:${{ steps.get_tag_name.outputs.tag_name }}-devtools
