@@ -13,7 +13,9 @@ if [ $PODS_COMPONENT = "api" ]; then
     # Start API. PODS_UVICORN_RELOAD=true (dev only, #DEV-gated in api.yml) adds --reload:
     # with the dev hostPath mount of service/, code edits go live without a pod restart —
     # only migrations/config changes need a redeploy. Note: --reload forces single-process.
-    cd /home/tapis/service; uvicorn api:api --workers ${PODS_UVICORN_WORKERS:-1} --host 0.0.0.0 --port 8000 $([ "$PODS_UVICORN_RELOAD" = "true" ] && echo "--reload")
+    # The 3s graceful-shutdown cap rides only with --reload: a reload restart must not hang
+    # draining held agent long-poll GETs (commands_wait) — prod keeps uvicorn's default grace.
+    cd /home/tapis/service; uvicorn api:api --workers ${PODS_UVICORN_WORKERS:-1} --host 0.0.0.0 --port 8000 $([ "$PODS_UVICORN_RELOAD" = "true" ] && echo "--reload --timeout-graceful-shutdown 3")
     # prod - https://www.uvicorn.org/deployment/
     # gunicorn uvicorn.worker stuff
 elif [ $PODS_COMPONENT = "health" ]; then
